@@ -1,0 +1,73 @@
+name: Question or Help
+description: Ask a question or get help with venfork
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have a question? Need help getting started? We're here to help!
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What would you like to know?
+      placeholder: How do I...?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Provide context about what you're trying to accomplish
+      placeholder: |
+        I'm trying to...
+        My goal is to...
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What I've Tried
+      description: What have you already tried?
+      placeholder: |
+        I've tried...
+        I looked at...
+
+  - type: dropdown
+    id: topic
+    attributes:
+      label: Topic
+      description: What is your question about?
+      options:
+        - Getting started / Setup
+        - Using a specific command
+        - Workflow / Best practices
+        - Git remotes configuration
+        - GitHub integration
+        - Troubleshooting
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant Output
+      description: If applicable, paste output from venfork status or other commands
+      render: shell
+      placeholder: Paste command output here
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission Checks
+      description: Please confirm the following
+      options:
+        - label: I have read the README documentation
+          required: true
+        - label: I have checked existing issues for similar questions
+          required: true

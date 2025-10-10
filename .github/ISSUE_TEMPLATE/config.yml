@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📚 Documentation
+    url: https://github.com/cabljac/venfork#readme
+    about: Read the documentation to learn more about venfork
+  - name: 💬 Discussions
+    url: https://github.com/cabljac/venfork/discussions
+    about: Ask questions and discuss ideas with the community
+  - name: 🐛 Check Existing Issues
+    url: https://github.com/cabljac/venfork/issues
+    about: Search existing issues before creating a new one

@@ -1,0 +1,64 @@
+{
+  "name": "venfork",
+  "version": "0.0.1",
+  "description": "Create and manage private mirrors for vendor development",
+  "type": "module",
+  "bin": {
+    "venfork": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target node",
+    "dev": "bun run ./src/index.ts",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "test:coverage": "bun test --coverage",
+    "setup": "bun install && bun run build",
+    "link": "bun link",
+    "unlink": "bun unlink",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "check": "biome check --write .",
+    "changeset": "changeset",
+    "version": "changeset version && bun install",
+    "release": "bun run build && changeset publish"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "cli",
+    "git",
+    "github",
+    "mirror",
+    "fork",
+    "vendor",
+    "contractor"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cabljac/venfork.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cabljac/venfork/issues"
+  },
+  "homepage": "https://github.com/cabljac/venfork#readme",
+  "dependencies": {
+    "@clack/prompts": "^0.11.0",
+    "execa": "^9.6.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "latest",
+    "@changesets/changelog-github": "^0.5.0",
+    "@changesets/cli": "^2.27.1",
+    "@types/bun": "latest",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
