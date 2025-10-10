@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgd2lkdGg9IjIwMCIgaGVpZ2h0PSIyMDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iY3VycmVudENvbG9yIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+CiAgPCEtLSBGb3JrIGhhbmRsZSAtLT4KICA8bGluZSB4MT0iMTIiIHkxPSIyMiIgeDI9IjEyIiB5Mj0iOCIgLz4KICAKICA8IS0tIEZvcmsgcHJvbmdzIC0tPgogIDxsaW5lIHgxPSI4IiB5MT0iMiIgeDI9IjgiIHkyPSI4IiAvPgogIDxsaW5lIHgxPSIxMiIgeTE9IjIiIHgyPSIxMiIgeTI9IjgiIC8+CiAgPGxpbmUgeDE9IjE2IiB5MT0iMiIgeDI9IjE2IiB5Mj0iOCIgLz4KICAKICA8IS0tIEZvcmsgYmFzZSBjb25uZWN0aW5nIHByb25ncyAtLT4KICA8cGF0aCBkPSJNOCA4IFExMiAxMCAxNiA4IiAvPgo8L3N2Zz4=" alt="Venfork Logo" width="200" />
+  <img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz48IS0tIFVwbG9hZGVkIHRvOiBTVkcgUmVwbywgd3d3LnN2Z3JlcG8uY29tLCBHZW5lcmF0b3I6IFNWRyBSZXBvIE1peGVyIFRvb2xzIC0tPgo8c3ZnIGZpbGw9IiMwMDAwMDAiIHdpZHRoPSI4MDBweCIgaGVpZ2h0PSI4MDBweCIgdmlld0JveD0iMCAwIDM2IDM2IiB2ZXJzaW9uPSIxLjEiICBwcmVzZXJ2ZUFzcGVjdFJhdGlvPSJ4TWlkWU1pZCBtZWV0IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIj4KICAgIDx0aXRsZT5mb3JraW5nLWxpbmU8L3RpdGxlPgogICAgPHBhdGggZD0iTTE4LjM3LDIxLjcxLDEwLjMsMTYuODhhMSwxLDAsMCwxLS40Ny0uODNWNi4yN2wyLjI0LDNBMSwxLDAsMCwwLDEzLjY2LDhsLTQtNS4zM0ExLDEsMCwwLDAsOCwyLjY5TDQsOGExLDEsMCwwLDAsLjIsMS40LDEsMSwwLDAsMCwuNi4yLDEsMSwwLDAsMCwuOC0uMzlsMi4yMy0zdjkuNzhBMywzLDAsMCwwLDkuMjgsMTguNmw4LjA2LDQuODJBMS4zNywxLjM3LDAsMCwxLDE4LDI0LjU5djguODNhMSwxLDAsMCwwLDIsMFYyNC41OUEzLjM3LDMuMzcsMCwwLDAsMTguMzcsMjEuNzFaIi8+PHBhdGggZD0iTTMxLjY2LDhsLTQtNS4zM2ExLDEsMCwwLDAtMS41OSwwTDIyLDhhMSwxLDAsMCwwLC4yLDEuNCwxLDEsMCwwLDAsLjYuMiwxLDEsMCwwLDAsLjgtLjM5bDIuMzItMy4wN3Y5Ljg5YTEsMSwwLDAsMS0uNDcuODNsLS4xMS4wOC00Ljg3LDMuODhhNS41Miw1LjUyLDAsMCwxLDEuMTEsMS42OGw1LTRhMywzLDAsMCwwLDEuMzgtMi41MVY2LjM4bDIuMTUsMi44NUExLDEsMCwxLDAsMzEuNjYsOFoiLz4KICAgIDxyZWN0IHg9IjAiIHk9IjAiIHdpZHRoPSIzNiIgaGVpZ2h0PSIzNiIgZmlsbC1vcGFjaXR5PSIwIi8+Cjwvc3ZnPg==" alt="Venfork Logo" width="200" />
 </p>
 
 # 🔧 Venfork
@@ -13,19 +13,21 @@ Create and manage private mirrors of public GitHub repositories for vendor devel
 
 Venfork helps contractors and vendors who need to work on private forks of public repositories. It creates a **three-repository workflow**:
 
-1. **Private Mirror** (`yourname/project-vendor`) - Where your team works internally
-2. **Public Fork** (`yourname/project`) - Staging area for contributions to upstream
+1. **Private Mirror** (`yourname/project-vendor` or `org/project-vendor`) - Where your team works internally
+2. **Public Fork** (`yourname/project` or `org/project`) - Staging area for contributions to upstream
 3. **Upstream** (`original/project`) - The original repository
+
+> **Note:** Repos can be created under your personal account or under an organization using the `--org` flag.
 
 ### Why Three Repositories?
 
 **The Key Insight:**
-> "Because the private fork is not attached to the public repo, our juniors can work on it and learn there without being seen by our client"
+> "The private mirror is completely disconnected from the public fork, allowing teams to experiment freely before presenting work to the client"
 
 The private mirror is:
 - ✅ Completely disconnected from the public fork
-- ✅ Safe for junior devs to learn, make mistakes, iterate
-- ✅ All internal PRs, reviews, experiments stay private
+- ✅ Safe space to experiment, iterate, and refine work
+- ✅ All internal PRs, reviews, and experiments stay private
 - ✅ Only visible to your team
 
 When you run `venfork stage`, your work becomes visible on the public fork and ready for PR to upstream.
@@ -61,14 +63,17 @@ npx venfork setup <repo-url>
 ## Quick Start
 
 ```bash
-# 1. One-time setup
+# 1. One-time setup (personal account)
 venfork setup git@github.com:awesome/project.git
+
+# Or for organization repos
+venfork setup git@github.com:awesome/project.git --org my-company
 
 cd project-vendor
 
 # 2. Work privately
 git checkout -b feature/new-thing
-# ... make changes, learn, iterate ...
+# ... experiment, iterate, refine ...
 git push origin feature/new-thing
 # Still private! Create internal PR for team review
 
@@ -80,13 +85,13 @@ venfork stage feature/new-thing
 
 ## Commands
 
-### `venfork setup <upstream-url> [name]`
+### `venfork setup <upstream-url> [name] [--org <organization>]`
 
 Creates the complete vendor workflow setup:
 
 **What it creates:**
-- **Private mirror** (`yourname/project-vendor`) - For internal work
-- **Public fork** (`yourname/project`) - For staging to upstream
+- **Private mirror** (`yourname/project-vendor` or `org/project-vendor`) - For internal work
+- **Public fork** (`yourname/project` or `org/project`) - For staging to upstream
 - **Local clone** with three remotes configured:
   - `origin` → private mirror (default push/pull)
   - `public` → public fork (for staging)
@@ -95,14 +100,23 @@ Creates the complete vendor workflow setup:
 **Arguments:**
 - `upstream-url` - GitHub repository URL (SSH or HTTPS)
 - `name` - (Optional) Name for private vendor repo (default: `{repo}-vendor`)
+- `--org <organization>` - (Optional) Create repos under organization instead of personal account
 
 **Examples:**
 ```bash
+# Personal account (default)
 venfork setup git@github.com:vercel/next.js.git
-# Creates: next.js-vendor (private), next.js (public fork)
+# Creates: yourname/next.js-vendor (private), yourname/next.js (public fork)
 
 venfork setup https://github.com/vuejs/vue.git vue-internal
-# Creates: vue-internal (private), vue (public fork)
+# Creates: yourname/vue-internal (private), yourname/vue (public fork)
+
+# Organization account
+venfork setup git@github.com:client/awesome-project.git --org acme-corp
+# Creates: acme-corp/awesome-project-vendor (private), acme-corp/awesome-project (public fork)
+
+venfork setup git@github.com:client/project.git internal-mirror --org my-company
+# Creates: my-company/internal-mirror (private), my-company/project (public fork)
 ```
 
 ### `venfork sync [branch]`
@@ -170,8 +184,11 @@ venfork stage bugfix/issue-123
 ### Initial Setup
 
 ```bash
-# Clone and configure the repos
+# Clone and configure the repos (personal account)
 venfork setup git@github.com:client/awesome-project.git
+
+# Or for organization
+venfork setup git@github.com:client/awesome-project.git --org acme-corp
 
 # Navigate to private mirror
 cd awesome-project-vendor
@@ -181,8 +198,14 @@ venfork status
 
 # Or verify remotes manually
 git remote -v
+# With personal account:
 # origin    git@github.com:you/awesome-project-vendor.git (private)
 # public    git@github.com:you/awesome-project.git (public fork)
+# upstream  git@github.com:client/awesome-project.git (read-only)
+
+# With organization:
+# origin    git@github.com:acme-corp/awesome-project-vendor.git (private)
+# public    git@github.com:acme-corp/awesome-project.git (public fork)
 # upstream  git@github.com:client/awesome-project.git (read-only)
 ```
 
@@ -210,7 +233,7 @@ git push origin feature/user-auth
 
 ```bash
 # Team reviews PR in private repo
-# Junior devs iterate, learn, make mistakes
+# Experiment, iterate, refine approach
 # All feedback and changes stay private
 
 # Once approved internally, merge to main
@@ -245,7 +268,7 @@ venfork stage feature/user-auth
                    │ fork
                    ▼
 ┌─────────────────────────────────────────────┐
-│  Public Fork (you/project)                  │
+│  Public Fork (you/project or org/project)   │
 │  • Visible to everyone                      │
 │  • Staging area for PRs                     │
 │  • Only pushed to via `venfork stage`       │
@@ -255,8 +278,9 @@ venfork stage feature/user-auth
                    ▼
 ┌─────────────────────────────────────────────┐
 │  Private Mirror (you/project-vendor)        │
+│                  (or org/project-vendor)    │
 │  • Only visible to your team                │
-│  • Where juniors learn & iterate            │
+│  • Safe space to experiment & iterate       │
 │  • Internal PRs and reviews                 │
 │  • Your daily work happens here             │
 └─────────────────────────────────────────────┘
@@ -270,9 +294,11 @@ After `venfork setup`, your local repository has three remotes:
 
 | Remote | URL | Purpose |
 |--------|-----|---------|
-| `origin` | `you/project-vendor` | Private work (default) |
-| `public` | `you/project` | Stage for upstream |
+| `origin` | `you/project-vendor` (or `org/project-vendor`) | Private work (default) |
+| `public` | `you/project` (or `org/project`) | Stage for upstream |
 | `upstream` | `original/project` | Sync with latest |
+
+**Note:** When using `--org`, all repos are created under the specified organization.
 
 ### Default Behavior
 
