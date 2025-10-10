@@ -10,12 +10,17 @@ interface RmCall {
   options: { recursive: boolean; force: boolean };
 }
 
+type SignalHandler = () => void | Promise<void>;
+type MockResponse =
+  | { exitCode: number; stdout: string; stderr: string }
+  | (() => Promise<unknown>);
+
 // Track calls to our mocks
 const execaCalls: string[] = [];
 const rmCalls: RmCall[] = [];
-let signalHandlers = new Map<string, Function>();
+const signalHandlers = new Map<string, SignalHandler>();
 let shouldHangOnFork = false;
-let mockResponses: Map<string, any> = new Map();
+const mockResponses: Map<string, MockResponse> = new Map();
 
 // Store originals
 const originalProcessOn = process.on;
@@ -24,14 +29,20 @@ const originalProcessExit = process.exit;
 
 // Mock execa BEFORE any imports
 mock.module('execa', () => ({
+  // biome-ignore lint/suspicious/noExplicitAny: Mocking execa's complex overloaded types requires any
   $: mock((stringsOrOptions: TemplateStringsArray | any, ...values: any[]) => {
     let command: string;
-    let options: any = {};
+    // biome-ignore lint/suspicious/noExplicitAny: Execa options type is complex
+    let _options: any = {};
 
     // Handle both $`command` and $({ options })`command` patterns
-    if (typeof stringsOrOptions === 'object' && !Array.isArray(stringsOrOptions)) {
+    if (
+      typeof stringsOrOptions === 'object' &&
+      !Array.isArray(stringsOrOptions)
+    ) {
       // Called with options: $({ cwd: '...' })`command`
-      options = stringsOrOptions;
+      _options = stringsOrOptions;
+      // biome-ignore lint/suspicious/noExplicitAny: Template literal values type
       return mock((strings: TemplateStringsArray, ...vals: any[]) => {
         command = String.raw({ raw: strings }, ...vals);
         execaCalls.push(command);
@@ -50,7 +61,9 @@ function getMockExecaResponse(command: string) {
   // Check if there's a specific mock response set for this test
   for (const [pattern, response] of mockResponses.entries()) {
     if (command.includes(pattern)) {
-      return typeof response === 'function' ? response(command) : Promise.resolve(response);
+      return typeof response === 'function'
+        ? response(command)
+        : Promise.resolve(response);
     }
   }
 
@@ -72,18 +85,27 @@ function getMockExecaResponse(command: string) {
   if (command.includes('git remote -v')) {
     return Promise.resolve({
       exitCode: 0,
-      stdout: 'origin\tgit@github.com:test/repo.git (fetch)\norigin\tgit@github.com:test/repo.git (push)',
+      stdout:
+        'origin\tgit@github.com:test/repo.git (fetch)\norigin\tgit@github.com:test/repo.git (push)',
       stderr: '',
     });
   }
   if (command.includes('git remote get-url')) {
-    return Promise.resolve({ exitCode: 0, stdout: 'git@github.com:test/repo.git', stderr: '' });
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: 'git@github.com:test/repo.git',
+      stderr: '',
+    });
   }
   if (command.includes('git remote set-head')) {
     return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
   }
   if (command.includes('git symbolic-ref')) {
-    return Promise.resolve({ exitCode: 0, stdout: 'refs/remotes/upstream/main', stderr: '' });
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: 'refs/remotes/upstream/main',
+      stderr: '',
+    });
   }
 
   // For signal handler tests: make fork command hang to prevent cleanup
@@ -98,7 +120,7 @@ function getMockExecaResponse(command: string) {
 
 // Mock fs.rm BEFORE any imports
 mock.module('node:fs/promises', () => ({
-  rm: mock((path: string, options: any) => {
+  rm: mock((path: string, options: { recursive: boolean; force: boolean }) => {
     rmCalls.push({ path, options });
     return Promise.resolve();
   }),
@@ -124,10 +146,10 @@ mock.module('@clack/prompts', () => ({
 // Import commands (will use mocked execa, fs, and prompts)
 import {
   setupCommand,
-  syncCommand,
+  showHelp,
   stageCommand,
   statusCommand,
-  showHelp,
+  syncCommand,
 } from '../src/commands.js';
 
 /**
@@ -145,7 +167,7 @@ async function startSetupCommand(
 
   // Wait for async operations to complete (checkGhAuth, getGitHubUsername, etc.)
   // Signal handlers are registered after these complete
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await new Promise((resolve) => setTimeout(resolve, 50));
 
   // Suppress unhandled rejection warnings
   promise.catch(() => {});
@@ -160,18 +182,21 @@ beforeEach(() => {
   mockResponses.clear();
 
   // Mock process methods
-  process.on = ((event: string, handler: Function) => {
+  process.on = ((event: string, handler: SignalHandler) => {
     signalHandlers.set(event, handler);
     return process;
+    // biome-ignore lint/suspicious/noExplicitAny: Process.on return type is complex
   }) as any;
 
-  process.off = ((event: string, handler: Function) => {
+  process.off = ((event: string, _handler: SignalHandler) => {
     signalHandlers.delete(event);
     return process;
+    // biome-ignore lint/suspicious/noExplicitAny: Process.off return type is complex
   }) as any;
 
   process.exit = mock(() => {
     throw new Error('process.exit called');
+    // biome-ignore lint/suspicious/noExplicitAny: Process.exit type is complex
   }) as any;
 });
 
@@ -284,7 +309,9 @@ describe('syncCommand', () => {
     }
 
     // Should have called git fetch and git rebase
-    const fetchCalls = execaCalls.filter((cmd) => cmd.includes('git fetch upstream'));
+    const fetchCalls = execaCalls.filter((cmd) =>
+      cmd.includes('git fetch upstream')
+    );
     const rebaseCalls = execaCalls.filter((cmd) => cmd.includes('git rebase'));
 
     expect(fetchCalls.length).toBeGreaterThanOrEqual(1);
@@ -382,10 +409,94 @@ describe('showHelp', () => {
   });
 });
 
+describe('setupCommand - organization tests', () => {
+  test('uses --org flag when organization is specified', async () => {
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        'my-org'
+      );
+    } catch {
+      // Expected
+    }
+
+    // Should call gh repo fork with --org flag
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls[0]).toContain('--org my-org');
+  });
+
+  test('creates private repo with org/repo format when organization specified', async () => {
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        'my-org'
+      );
+    } catch {
+      // Expected
+    }
+
+    // Should call gh repo create with org/repo format
+    const createCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo create')
+    );
+    expect(createCalls.length).toBeGreaterThan(0);
+    expect(createCalls[0]).toContain('my-org/test-vendor');
+  });
+
+  test('uses organization in git URLs when specified', async () => {
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        'my-org'
+      );
+    } catch {
+      // Expected
+    }
+
+    // Should use org in clone and remote URLs
+    const cloneCalls = execaCalls.filter((cmd) => cmd.includes('git clone'));
+    const remoteCalls = execaCalls.filter((cmd) =>
+      cmd.includes('git remote add')
+    );
+
+    expect(cloneCalls.some((cmd) => cmd.includes('my-org/test-vendor'))).toBe(
+      true
+    );
+    expect(remoteCalls.some((cmd) => cmd.includes('my-org/'))).toBe(true);
+  });
+
+  test('uses username when no organization specified', async () => {
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    // Should NOT include --org flag
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls[0]).not.toContain('--org');
+
+    // Should use testuser (from mock) in URLs
+    const cloneCalls = execaCalls.filter((cmd) => cmd.includes('git clone'));
+    expect(cloneCalls.some((cmd) => cmd.includes('testuser/test-vendor'))).toBe(
+      true
+    );
+  });
+});
+
 describe('setupCommand - error paths', () => {
   test('throws AuthenticationError when not authenticated', async () => {
     // Mock checkGhAuth to return false
-    mockResponses.set('gh auth status', { exitCode: 1, stdout: '', stderr: 'not authenticated' });
+    mockResponses.set('gh auth status', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'not authenticated',
+    });
 
     try {
       await setupCommand('git@github.com:test/repo.git', 'test-vendor');
@@ -397,7 +508,9 @@ describe('setupCommand - error paths', () => {
 
   test('handles error in catch block', async () => {
     // Make fork command fail instead of hanging
-    mockResponses.set('gh repo fork', () => Promise.reject(new Error('Fork failed')));
+    mockResponses.set('gh repo fork', () =>
+      Promise.reject(new Error('Fork failed'))
+    );
 
     try {
       await setupCommand('git@github.com:test/repo.git', 'test-vendor');
@@ -412,7 +525,11 @@ describe('setupCommand - error paths', () => {
 
 describe('syncCommand - error paths', () => {
   test('throws error when current branch cannot be determined', async () => {
-    mockResponses.set('git branch --show-current', { exitCode: 0, stdout: '', stderr: '' });
+    mockResponses.set('git branch --show-current', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
 
     try {
       await syncCommand('main');
@@ -423,7 +540,9 @@ describe('syncCommand - error paths', () => {
   });
 
   test('handles rebase conflicts', async () => {
-    mockResponses.set('git rebase', () => Promise.reject(new Error('Rebase conflict')));
+    mockResponses.set('git rebase', () =>
+      Promise.reject(new Error('Rebase conflict'))
+    );
 
     try {
       await syncCommand('main');
@@ -435,7 +554,9 @@ describe('syncCommand - error paths', () => {
   });
 
   test('handles general errors', async () => {
-    mockResponses.set('git fetch', () => Promise.reject(new Error('Fetch failed')));
+    mockResponses.set('git fetch', () =>
+      Promise.reject(new Error('Fetch failed'))
+    );
 
     try {
       await syncCommand('main');
@@ -449,7 +570,11 @@ describe('syncCommand - error paths', () => {
 
 describe('stageCommand - error paths', () => {
   test('throws AuthenticationError when not authenticated', async () => {
-    mockResponses.set('gh auth status', { exitCode: 1, stdout: '', stderr: 'not authenticated' });
+    mockResponses.set('gh auth status', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'not authenticated',
+    });
 
     try {
       await stageCommand('feature-branch');
@@ -460,7 +585,11 @@ describe('stageCommand - error paths', () => {
   });
 
   test('throws BranchNotFoundError when branch does not exist', async () => {
-    mockResponses.set('git rev-parse --verify', { exitCode: 1, stdout: '', stderr: 'not found' });
+    mockResponses.set('git rev-parse --verify', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'not found',
+    });
 
     try {
       await stageCommand('nonexistent-branch');
@@ -472,7 +601,11 @@ describe('stageCommand - error paths', () => {
   });
 
   test('throws RemoteNotFoundError when public remote missing', async () => {
-    mockResponses.set('git remote get-url public', { exitCode: 1, stdout: '', stderr: 'not found' });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'not found',
+    });
 
     try {
       await stageCommand('feature-branch');
@@ -486,7 +619,11 @@ describe('stageCommand - error paths', () => {
 
 describe('statusCommand - error paths', () => {
   test('throws NotInRepositoryError when not in git repo', async () => {
-    mockResponses.set('git rev-parse --git-dir', { exitCode: 128, stdout: '', stderr: 'not a git repository' });
+    mockResponses.set('git rev-parse --git-dir', {
+      exitCode: 128,
+      stdout: '',
+      stderr: 'not a git repository',
+    });
 
     try {
       await statusCommand();
@@ -506,12 +643,16 @@ describe('statusCommand - error paths', () => {
     }
 
     // Command should run successfully
-    expect(execaCalls.some(cmd => cmd.includes('git remote -v'))).toBe(true);
+    expect(execaCalls.some((cmd) => cmd.includes('git remote -v'))).toBe(true);
   });
 
   test('shows incomplete setup message when missing remotes', async () => {
     // Mock hasRemote to return false for public
-    mockResponses.set('git remote get-url public', { exitCode: 1, stdout: '', stderr: 'not found' });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'not found',
+    });
 
     try {
       await statusCommand();
@@ -520,6 +661,8 @@ describe('statusCommand - error paths', () => {
     }
 
     // Should check for remotes
-    expect(execaCalls.some(cmd => cmd.includes('git remote get-url'))).toBe(true);
+    expect(execaCalls.some((cmd) => cmd.includes('git remote get-url'))).toBe(
+      true
+    );
   });
 });

@@ -26,7 +26,8 @@ import { parseRepoName, parseRepoPath } from './utils.js';
  */
 export async function setupCommand(
   upstreamUrl?: string,
-  vendorName?: string
+  vendorName?: string,
+  organization?: string
 ): Promise<void> {
   p.intro('🔧 Venfork Setup');
 
@@ -81,6 +82,9 @@ export async function setupCommand(
   const s = p.spinner();
   const username = await getGitHubUsername();
 
+  // Determine the account owner (org or user)
+  const owner = organization || username;
+
   // Generate unique temp directory in OS temp folder
   const uniqueId = randomBytes(8).toString('hex');
   const tempDir = path.join(os.tmpdir(), `venfork-${uniqueId}`);
@@ -112,7 +116,11 @@ export async function setupCommand(
     // Step 1: Create public fork
     s.start('Creating public fork of upstream repository');
     const upstreamRepoPath = parseRepoPath(config.upstreamUrl);
-    await $`gh repo fork ${upstreamRepoPath} --clone=false`;
+    if (organization) {
+      await $`gh repo fork ${upstreamRepoPath} --clone=false --org ${organization}`;
+    } else {
+      await $`gh repo fork ${upstreamRepoPath} --clone=false`;
+    }
     s.stop('Public fork created');
 
     // Get the public fork name (same as upstream repo name)
@@ -120,7 +128,10 @@ export async function setupCommand(
 
     // Step 2: Create private vendor repository
     s.start('Creating private vendor repository');
-    await $`gh repo create ${config.vendorName} --private --clone=false`;
+    const vendorRepoName = organization
+      ? `${organization}/${config.vendorName}`
+      : config.vendorName;
+    await $`gh repo create ${vendorRepoName} --private --clone=false`;
     s.stop('Private vendor repository created');
 
     // Step 3: Clone upstream to temp directory
@@ -132,12 +143,12 @@ export async function setupCommand(
     s.start('Pushing to private vendor repository');
     await $({
       cwd: tempDir,
-    })`git push --mirror git@github.com:${username}/${config.vendorName}.git`;
+    })`git push --mirror git@github.com:${owner}/${config.vendorName}.git`;
     s.stop('Pushed to private vendor repository');
 
     // Step 5: Clone private vendor repo locally
     s.start('Cloning private vendor repository locally');
-    await $`git clone git@github.com:${username}/${config.vendorName}.git`;
+    await $`git clone git@github.com:${owner}/${config.vendorName}.git`;
     s.stop('Private vendor repository cloned');
 
     // Step 6: Configure remotes
@@ -147,7 +158,7 @@ export async function setupCommand(
     // Add public fork remote
     await $({
       cwd: repoDir,
-    })`git remote add public git@github.com:${username}/${publicForkName}.git`;
+    })`git remote add public git@github.com:${owner}/${publicForkName}.git`;
 
     // Add upstream remote (with push disabled)
     await $({ cwd: repoDir })`git remote add upstream ${config.upstreamUrl}`;
@@ -418,8 +429,11 @@ export function showHelp(): void {
   p.intro('🔧 Venfork - Private Repository Mirrors for Vendor Development');
 
   p.note(
-    `venfork setup <upstream-url> [name]
+    `venfork setup <upstream-url> [name] [--org <organization>]
   Create private mirror + public fork for vendor workflow
+
+  Options:
+  • --org <name>  Create repos under organization instead of user account
 
   Creates:
   • Private mirror (yourname/project-vendor) - internal work
@@ -443,6 +457,9 @@ venfork stage <branch>
   p.note(
     `# One-time setup
 venfork setup git@github.com:awesome/project.git
+
+# Or for organization repos:
+venfork setup git@github.com:awesome/project.git --org my-company
 
 cd project-vendor
 

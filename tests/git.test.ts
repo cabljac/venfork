@@ -5,22 +5,32 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
  * These tests verify the actual logic in git.ts functions
  */
 
+type ExecaOptions = Record<string, unknown>;
+type MockResponse =
+  | { exitCode: number; stdout: string; stderr: string }
+  | (() => Promise<unknown>);
+
 // Track execa calls for verification
-const execaCalls: Array<{ command: string; options?: any }> = [];
+const execaCalls: Array<{ command: string; options?: ExecaOptions }> = [];
 
 // Control mock behavior per test
-let mockResponses: Map<string, any> = new Map();
+const mockResponses: Map<string, MockResponse> = new Map();
 
 // Mock execa BEFORE importing git.ts
 mock.module('execa', () => ({
+  // biome-ignore lint/suspicious/noExplicitAny: Mocking execa's complex overloaded types requires any
   $: mock((stringsOrOptions: TemplateStringsArray | any, ...values: any[]) => {
     let command: string;
-    let options: any = {};
+    let options: ExecaOptions = {};
 
     // Handle both $`command` and $({ options })`command` patterns
-    if (typeof stringsOrOptions === 'object' && !Array.isArray(stringsOrOptions)) {
+    if (
+      typeof stringsOrOptions === 'object' &&
+      !Array.isArray(stringsOrOptions)
+    ) {
       // Called with options: $({ cwd: '...' })`command`
       options = stringsOrOptions;
+      // biome-ignore lint/suspicious/noExplicitAny: Template literal values type
       return mock((strings: TemplateStringsArray, ...vals: any[]) => {
         command = String.raw({ raw: strings }, ...vals);
         execaCalls.push({ command, options });
@@ -35,11 +45,13 @@ mock.module('execa', () => ({
   }),
 }));
 
-function getMockResponse(command: string, options: any = {}) {
+function getMockResponse(command: string, _options: ExecaOptions = {}) {
   // Check if there's a specific mock response set for this test
   for (const [pattern, response] of mockResponses.entries()) {
     if (command.includes(pattern)) {
-      return typeof response === 'function' ? response(command) : Promise.resolve(response);
+      return typeof response === 'function'
+        ? response(command)
+        : Promise.resolve(response);
     }
   }
 
@@ -103,7 +115,11 @@ beforeEach(() => {
 
 describe('checkGhAuth', () => {
   test('returns true when gh auth status succeeds', async () => {
-    mockResponses.set('gh auth status', { exitCode: 0, stdout: '', stderr: '' });
+    mockResponses.set('gh auth status', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
 
     const result = await checkGhAuth();
 
@@ -125,7 +141,9 @@ describe('checkGhAuth', () => {
   });
 
   test('returns false when command throws error', async () => {
-    mockResponses.set('gh auth status', () => Promise.reject(new Error('command failed')));
+    mockResponses.set('gh auth status', () =>
+      Promise.reject(new Error('command failed'))
+    );
 
     const result = await checkGhAuth();
 
@@ -148,7 +166,9 @@ describe('getCurrentBranch', () => {
   });
 
   test('returns empty string on error', async () => {
-    mockResponses.set('git branch', () => Promise.reject(new Error('not a git repo')));
+    mockResponses.set('git branch', () =>
+      Promise.reject(new Error('not a git repo'))
+    );
 
     const result = await getCurrentBranch();
 
@@ -195,7 +215,9 @@ describe('getGitHubUsername', () => {
   });
 
   test('returns empty string on error', async () => {
-    mockResponses.set('gh api', () => Promise.reject(new Error('not authenticated')));
+    mockResponses.set('gh api', () =>
+      Promise.reject(new Error('not authenticated'))
+    );
 
     const result = await getGitHubUsername();
 
@@ -205,7 +227,11 @@ describe('getGitHubUsername', () => {
 
 describe('isGitRepository', () => {
   test('returns true when in git repository', async () => {
-    mockResponses.set('git rev-parse', { exitCode: 0, stdout: '.git', stderr: '' });
+    mockResponses.set('git rev-parse', {
+      exitCode: 0,
+      stdout: '.git',
+      stderr: '',
+    });
 
     const result = await isGitRepository();
 
@@ -226,7 +252,9 @@ describe('isGitRepository', () => {
   });
 
   test('returns false on command error', async () => {
-    mockResponses.set('git rev-parse', () => Promise.reject(new Error('command failed')));
+    mockResponses.set('git rev-parse', () =>
+      Promise.reject(new Error('command failed'))
+    );
 
     const result = await isGitRepository();
 
@@ -328,7 +356,9 @@ describe('getRemotes', () => {
   });
 
   test('returns empty object on command error', async () => {
-    mockResponses.set('git remote', () => Promise.reject(new Error('command failed')));
+    mockResponses.set('git remote', () =>
+      Promise.reject(new Error('command failed'))
+    );
 
     const result = await getRemotes();
 
@@ -393,7 +423,11 @@ describe('hasRemote', () => {
   });
 
   test('passes remote name to command', async () => {
-    mockResponses.set('git remote get-url', { exitCode: 0, stdout: 'url', stderr: '' });
+    mockResponses.set('git remote get-url', {
+      exitCode: 0,
+      stdout: 'url',
+      stderr: '',
+    });
 
     await hasRemote('my-custom-remote');
 
@@ -424,7 +458,9 @@ describe('getDefaultBranch', () => {
     await getDefaultBranch('origin');
 
     expect(execaCalls[0].command).toContain('git remote set-head origin -a');
-    expect(execaCalls[1].command).toContain('git symbolic-ref refs/remotes/origin/HEAD');
+    expect(execaCalls[1].command).toContain(
+      'git symbolic-ref refs/remotes/origin/HEAD'
+    );
   });
 
   test('uses upstream as default remote', async () => {
