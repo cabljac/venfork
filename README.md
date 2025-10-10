@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgd2lkdGg9IjIwMCIgaGVpZ2h0PSIyMDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iY3VycmVudENvbG9yIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+CiAgPCEtLSBGb3JrIGhhbmRsZSAtLT4KICA8bGluZSB4MT0iMTIiIHkxPSIyMiIgeDI9IjEyIiB5Mj0iOCIgLz4KICAKICA8IS0tIEZvcmsgcHJvbmdzIC0tPgogIDxsaW5lIHgxPSI4IiB5MT0iMiIgeDI9IjgiIHkyPSI4IiAvPgogIDxsaW5lIHgxPSIxMiIgeTE9IjIiIHgyPSIxMiIgeTI9IjgiIC8+CiAgPGxpbmUgeDE9IjE2IiB5MT0iMiIgeDI9IjE2IiB5Mj0iOCIgLz4KICAKICA8IS0tIEZvcmsgYmFzZSBjb25uZWN0aW5nIHByb25ncyAtLT4KICA8cGF0aCBkPSJNOCA4IFExMiAxMCAxNiA4IiAvPgo8L3N2Zz4=" alt="Venfork Logo" width="200" />
+</p>
+
 # 🔧 Venfork
 
 [![CI](https://github.com/cabljac/venfork/actions/workflows/ci.yml/badge.svg)](https://github.com/cabljac/venfork/actions/workflows/ci.yml)

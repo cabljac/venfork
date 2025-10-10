@@ -27,9 +27,26 @@ async function main(): Promise<void> {
   }
 
   switch (command) {
-    case 'setup':
-      await setupCommand(args[1], args[2]);
+    case 'setup': {
+      // Parse --org flag
+      const orgIndex = args.indexOf('--org');
+      let organization: string | undefined;
+      let upstreamUrl = args[1];
+      let vendorName = args[2];
+
+      if (orgIndex !== -1) {
+        organization = args[orgIndex + 1];
+        // Remove --org and its value from args
+        const filteredArgs = args.filter(
+          (_, i) => i !== orgIndex && i !== orgIndex + 1
+        );
+        upstreamUrl = filteredArgs[1];
+        vendorName = filteredArgs[2];
+      }
+
+      await setupCommand(upstreamUrl, vendorName, organization);
       break;
+    }
     case 'sync':
       await syncCommand(args[1]);
       break;
