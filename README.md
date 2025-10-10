@@ -121,21 +121,27 @@ venfork setup git@github.com:client/project.git internal-mirror --org my-company
 
 ### `venfork sync [branch]`
 
-Fetch from upstream and rebase current branch to stay up-to-date.
+Update the default branches of your private mirror and public fork to match upstream.
 
 **Arguments:**
-- `branch` - (Optional) Upstream branch to sync with (default: `main`)
+- `branch` - (Optional) Upstream branch to sync (default: auto-detected, usually `main` or `master`)
 
 **Examples:**
 ```bash
-venfork sync           # Sync with upstream/main
-venfork sync develop   # Sync with upstream/develop
+venfork sync           # Sync default branches with upstream
+venfork sync develop   # Sync develop branch with upstream/develop
 ```
 
 **What it does:**
-1. Fetches latest changes from upstream
-2. Rebases your current branch on upstream
-3. Handles conflicts gracefully with instructions
+1. Fetches latest changes from all remotes (upstream, origin, public)
+2. Checks for divergent commits (warns if found to prevent data loss)
+3. Force pushes upstream's default branch to origin and public
+4. **Does not affect your current working branch or feature branches**
+
+**Important:**
+- This keeps your default branches (main/master) in sync with upstream
+- Your current work on feature branches is completely unaffected
+- If divergent commits are detected, sync will abort to prevent data loss
 
 ### `venfork status`
 
@@ -212,7 +218,7 @@ git remote -v
 ### Daily Development
 
 ```bash
-# Sync with upstream before starting
+# Sync default branches with upstream (optional, keeps main up-to-date)
 venfork sync
 
 # Create feature branch
@@ -304,7 +310,7 @@ After `venfork setup`, your local repository has three remotes:
 
 - `git push` → Pushes to `origin` (private mirror)
 - `git pull` → Pulls from `origin` (private mirror)
-- `venfork sync` → Fetches from `upstream`
+- `venfork sync` → Updates default branches of `origin` and `public` to match `upstream`
 - `venfork stage` → Pushes to `public`
 
 ## Troubleshooting
@@ -330,13 +336,13 @@ This means `venfork setup` wasn't run or didn't complete successfully.
 - Run `venfork status` to see which remotes are missing
 - Re-run `venfork setup` if needed
 
-### Rebase Conflicts
+### Divergent Commits Warning
 
-When `venfork sync` encounters conflicts:
-1. Open the conflicted files and resolve markers
-2. Stage the resolved files: `git add <file>`
-3. Continue: `git rebase --continue`
-4. Or abort: `git rebase --abort`
+If `venfork sync` detects commits on your default branch that aren't in upstream:
+1. This suggests work was committed directly to main/master (not recommended)
+2. Sync will abort to prevent losing these commits
+3. To preserve: manually rebase or cherry-pick them to a feature branch
+4. To force sync anyway: `git push origin upstream/main:main -f` (loses commits)
 
 ### Branch Already Exists on Public Fork
 

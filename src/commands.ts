@@ -201,7 +201,7 @@ Upstream: ${config.upstreamUrl} (read-only)`,
 }
 
 /**
- * Sync command: Fetch from upstream and rebase current branch
+ * Sync command: Update default branches of origin and public to match upstream
  */
 export async function syncCommand(targetBranch?: string): Promise<void> {
   p.intro('🔄 Venfork Sync');
@@ -209,44 +209,76 @@ export async function syncCommand(targetBranch?: string): Promise<void> {
   const s = p.spinner();
 
   try {
-    // Get current branch
-    const currentBranch = await getCurrentBranch();
-    if (!currentBranch) {
-      throw new Error('Could not determine current branch');
-    }
-
     // Step 1: Fetch from upstream
     s.start('Fetching from upstream');
     await $`git fetch upstream`;
-    s.stop('Fetched from upstream');
+    await $`git fetch origin`;
+    await $`git fetch public`;
+    s.stop('Fetched from all remotes');
 
     // Step 2: Detect default branch if not specified
-    const branch = targetBranch || (await getDefaultBranch('upstream'));
+    const defaultBranch = targetBranch || (await getDefaultBranch('upstream'));
 
-    // Step 3: Rebase current branch on upstream
-    s.start(`Rebasing ${currentBranch} on upstream/${branch}`);
-    try {
-      await $`git rebase upstream/${branch}`;
-      s.stop('Rebase successful');
+    // Step 3: Check for divergence
+    s.start('Checking for divergent commits');
 
-      p.outro(
-        `✨ Sync complete! ${currentBranch} is now up to date with upstream/${branch}`
-      );
-    } catch (_rebaseError) {
-      s.stop('Rebase conflicts detected');
+    const checkDivergence = async (remote: string): Promise<number> => {
+      try {
+        const result =
+          await $`git rev-list --count upstream/${defaultBranch}..${remote}/${defaultBranch}`;
+        return Number.parseInt(result.stdout.trim(), 10);
+      } catch {
+        // Remote branch might not exist yet (first sync)
+        return 0;
+      }
+    };
 
+    const originDivergence = await checkDivergence('origin');
+    const publicDivergence = await checkDivergence('public');
+
+    s.stop('Checked for divergence');
+
+    // Step 4: Warn if divergent commits exist
+    if (originDivergence > 0 || publicDivergence > 0) {
+      const warnings: string[] = [];
+      if (originDivergence > 0) {
+        warnings.push(
+          `  • origin/${defaultBranch} has ${originDivergence} commit(s) not in upstream`
+        );
+      }
+      if (publicDivergence > 0) {
+        warnings.push(
+          `  • public/${defaultBranch} has ${publicDivergence} commit(s) not in upstream`
+        );
+      }
+
+      p.log.warn('Divergent commits detected:');
       p.note(
-        `Git rebase has conflicts. To resolve:
-  1. Fix conflicts in the listed files
-  2. Stage resolved files: git add <file>
-  3. Continue rebase: git rebase --continue
-  4. Or abort: git rebase --abort`,
-        'Conflict Resolution'
+        `${warnings.join('\n')}
+
+This suggests commits were made directly to the default branch.
+Force syncing will LOSE these commits.
+
+To preserve them: manually rebase or cherry-pick before running sync.
+To force sync anyway: git push origin upstream/${defaultBranch}:${defaultBranch} -f`,
+        '⚠️  Warning'
       );
 
-      p.outro('⚠️  Please resolve conflicts and continue the rebase');
+      p.outro('❌ Sync aborted to prevent data loss');
       process.exit(1);
     }
+
+    // Step 5: Push upstream default branch to origin and public
+    s.start(`Syncing ${defaultBranch} to origin and public`);
+
+    await $`git push origin upstream/${defaultBranch}:${defaultBranch} --force`;
+    await $`git push public upstream/${defaultBranch}:${defaultBranch} --force`;
+
+    s.stop('Synced to all remotes');
+
+    p.outro(
+      `✨ Sync complete! origin/${defaultBranch} and public/${defaultBranch} are now up to date with upstream/${defaultBranch}`
+    );
   } catch (error) {
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
@@ -445,8 +477,8 @@ venfork status
   Check which remotes are configured and setup completion
 
 venfork sync [branch]
-  Fetch from upstream and rebase current branch (default: main)
-  Keeps your private work up-to-date with upstream
+  Update default branches of origin and public to match upstream
+  Syncs main/master branch without affecting your current work
 
 venfork stage <branch>
   Push branch to public fork for PR to upstream

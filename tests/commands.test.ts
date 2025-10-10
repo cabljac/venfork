@@ -301,21 +301,47 @@ describe('setupCommand - execution tests', () => {
 });
 
 describe('syncCommand', () => {
-  test('fetches from upstream and rebases', async () => {
+  test('fetches from all remotes', async () => {
     try {
       await syncCommand('main');
     } catch {
       // Expected - may fail in test environment
     }
 
-    // Should have called git fetch and git rebase
-    const fetchCalls = execaCalls.filter((cmd) =>
-      cmd.includes('git fetch upstream')
-    );
-    const rebaseCalls = execaCalls.filter((cmd) => cmd.includes('git rebase'));
+    // Should have called git fetch for all remotes
+    const fetchCalls = execaCalls.filter((cmd) => cmd.includes('git fetch'));
 
-    expect(fetchCalls.length).toBeGreaterThanOrEqual(1);
-    expect(rebaseCalls.length).toBeGreaterThanOrEqual(1);
+    expect(fetchCalls.some((cmd) => cmd.includes('git fetch upstream'))).toBe(
+      true
+    );
+    expect(fetchCalls.some((cmd) => cmd.includes('git fetch origin'))).toBe(
+      true
+    );
+    expect(fetchCalls.some((cmd) => cmd.includes('git fetch public'))).toBe(
+      true
+    );
+  });
+
+  test('pushes to origin and public default branches', async () => {
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected
+    }
+
+    // Should push upstream/main to origin/main and public/main
+    const pushCalls = execaCalls.filter((cmd) => cmd.includes('git push'));
+
+    expect(
+      pushCalls.some((cmd) =>
+        cmd.includes('git push origin upstream/main:main')
+      )
+    ).toBe(true);
+    expect(
+      pushCalls.some((cmd) =>
+        cmd.includes('git push public upstream/main:main')
+      )
+    ).toBe(true);
   });
 
   test('uses default branch when not specified', async () => {
@@ -326,11 +352,22 @@ describe('syncCommand', () => {
     }
 
     // Should call getDefaultBranch (already mocked to return 'main')
-    const rebaseCalls = execaCalls.filter((cmd) => cmd.includes('git rebase'));
-    expect(rebaseCalls.length).toBeGreaterThanOrEqual(1);
-    if (rebaseCalls.length > 0) {
-      expect(rebaseCalls[0]).toContain('upstream/main');
+    const pushCalls = execaCalls.filter((cmd) => cmd.includes('git push'));
+    expect(pushCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test('checks for divergent commits', async () => {
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected
     }
+
+    // Should call git rev-list to check divergence
+    const revListCalls = execaCalls.filter((cmd) =>
+      cmd.includes('git rev-list --count')
+    );
+    expect(revListCalls.length).toBeGreaterThanOrEqual(2); // Check origin and public
   });
 });
 
@@ -524,25 +561,13 @@ describe('setupCommand - error paths', () => {
 });
 
 describe('syncCommand - error paths', () => {
-  test('throws error when current branch cannot be determined', async () => {
-    mockResponses.set('git branch --show-current', {
+  test('aborts when origin has divergent commits', async () => {
+    // Mock rev-list to show origin has divergent commits
+    mockResponses.set('git rev-list --count upstream/main..origin/main', {
       exitCode: 0,
-      stdout: '',
+      stdout: '3',
       stderr: '',
     });
-
-    try {
-      await syncCommand('main');
-      expect(true).toBe(false); // Should not reach here
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
-  });
-
-  test('handles rebase conflicts', async () => {
-    mockResponses.set('git rebase', () =>
-      Promise.reject(new Error('Rebase conflict'))
-    );
 
     try {
       await syncCommand('main');
@@ -553,9 +578,40 @@ describe('syncCommand - error paths', () => {
     expect(process.exit).toHaveBeenCalledWith(1);
   });
 
-  test('handles general errors', async () => {
+  test('aborts when public has divergent commits', async () => {
+    // Mock rev-list to show public has divergent commits
+    mockResponses.set('git rev-list --count upstream/main..public/main', {
+      exitCode: 0,
+      stdout: '2',
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected - process.exit(1) throws in tests
+    }
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+  });
+
+  test('handles fetch errors', async () => {
     mockResponses.set('git fetch', () =>
       Promise.reject(new Error('Fetch failed'))
+    );
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected
+    }
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+  });
+
+  test('handles push errors', async () => {
+    mockResponses.set('git push', () =>
+      Promise.reject(new Error('Push failed'))
     );
 
     try {
