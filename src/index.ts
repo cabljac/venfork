@@ -33,7 +33,7 @@ async function main(): Promise<void> {
       const orgIndex = args.indexOf('--org');
       let organization: string | undefined;
       let upstreamUrl = args[1];
-      let vendorName = args[2];
+      let privateMirrorName = args[2];
 
       if (orgIndex !== -1) {
         organization = args[orgIndex + 1];
@@ -42,10 +42,10 @@ async function main(): Promise<void> {
           (_, i) => i !== orgIndex && i !== orgIndex + 1
         );
         upstreamUrl = filteredArgs[1];
-        vendorName = filteredArgs[2];
+        privateMirrorName = filteredArgs[2];
       }
 
-      await setupCommand(upstreamUrl, vendorName, organization);
+      await setupCommand(upstreamUrl, privateMirrorName, organization);
       break;
     }
     case 'clone':

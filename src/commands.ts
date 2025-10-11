@@ -26,7 +26,7 @@ import { parseOwner, parseRepoName, parseRepoPath } from './utils.js';
  */
 export async function setupCommand(
   upstreamUrl?: string,
-  vendorName?: string,
+  privateMirrorName?: string,
   organization?: string
 ): Promise<void> {
   p.intro('🔧 Venfork Setup');
@@ -38,10 +38,10 @@ export async function setupCommand(
   }
 
   // Get configuration from user or use provided arguments
-  let config: { upstreamUrl: string; vendorName: string };
+  let config: { upstreamUrl: string; privateMirrorName: string };
 
-  if (upstreamUrl && vendorName) {
-    config = { upstreamUrl, vendorName };
+  if (upstreamUrl && privateMirrorName) {
+    config = { upstreamUrl, privateMirrorName };
   } else {
     const groupResult = await p.group(
       {
@@ -55,15 +55,15 @@ export async function setupCommand(
               if (!value.includes('github.com')) return 'Must be a GitHub URL';
             },
           }),
-        vendorName: ({ results }) =>
+        privateMirrorName: ({ results }) =>
           p.text({
-            message: 'Private vendor repo name?',
+            message: 'Private mirror repo name?',
             placeholder: `${parseRepoName(results.upstreamUrl as string)}-vendor`,
             defaultValue:
-              vendorName ||
+              privateMirrorName ||
               `${parseRepoName(results.upstreamUrl as string)}-vendor`,
             validate: (value) => {
-              if (!value) return 'Vendor repo name is required';
+              if (!value) return 'Private mirror repo name is required';
               if (!/^[a-zA-Z0-9-_]+$/.test(value))
                 return 'Name can only contain letters, numbers, hyphens, and underscores';
             },
@@ -76,7 +76,7 @@ export async function setupCommand(
         },
       }
     );
-    config = groupResult as { upstreamUrl: string; vendorName: string };
+    config = groupResult as { upstreamUrl: string; privateMirrorName: string };
   }
 
   const s = p.spinner();
@@ -126,34 +126,34 @@ export async function setupCommand(
     // Get the public fork name (same as upstream repo name)
     const publicForkName = parseRepoName(config.upstreamUrl);
 
-    // Step 2: Create private vendor repository
-    s.start('Creating private vendor repository');
-    const vendorRepoName = organization
-      ? `${organization}/${config.vendorName}`
-      : config.vendorName;
-    await $`gh repo create ${vendorRepoName} --private --clone=false`;
-    s.stop('Private vendor repository created');
+    // Step 2: Create private mirror repository
+    s.start('Creating private mirror repository');
+    const privateMirrorRepoName = organization
+      ? `${organization}/${config.privateMirrorName}`
+      : config.privateMirrorName;
+    await $`gh repo create ${privateMirrorRepoName} --private --clone=false`;
+    s.stop('Private mirror repository created');
 
     // Step 3: Clone upstream to temp directory
     s.start('Cloning upstream repository');
     await $`git clone --bare ${config.upstreamUrl} ${tempDir}`;
     s.stop('Upstream cloned');
 
-    // Step 4: Push to private vendor repo
-    s.start('Pushing to private vendor repository');
+    // Step 4: Push to private mirror repo
+    s.start('Pushing to private mirror repository');
     await $({
       cwd: tempDir,
-    })`git push --mirror git@github.com:${owner}/${config.vendorName}.git`;
-    s.stop('Pushed to private vendor repository');
+    })`git push --mirror git@github.com:${owner}/${config.privateMirrorName}.git`;
+    s.stop('Pushed to private mirror repository');
 
-    // Step 5: Clone private vendor repo locally
-    s.start('Cloning private vendor repository locally');
-    await $`git clone git@github.com:${owner}/${config.vendorName}.git`;
-    s.stop('Private vendor repository cloned');
+    // Step 5: Clone private mirror repo locally
+    s.start('Cloning private mirror repository locally');
+    await $`git clone git@github.com:${owner}/${config.privateMirrorName}.git`;
+    s.stop('Private mirror repository cloned');
 
     // Step 6: Configure remotes
     s.start('Configuring git remotes');
-    const repoDir = config.vendorName;
+    const repoDir = config.privateMirrorName;
 
     // Add public fork remote
     await $({
@@ -173,7 +173,7 @@ export async function setupCommand(
     p.note(remotesText.trim(), 'Git Remote Configuration');
 
     p.note(
-      `Private Mirror: https://github.com/${owner}/${config.vendorName} (for internal work)
+      `Private Mirror: https://github.com/${owner}/${config.privateMirrorName} (for internal work)
 Public Fork: https://github.com/${owner}/${publicForkName} (for staging to upstream)
 Upstream: ${config.upstreamUrl} (read-only)`,
       'Repositories Created'
