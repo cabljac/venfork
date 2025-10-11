@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { DEFAULT_REPO_NAME, parseRepoName, parseRepoPath } from '../src/utils';
+import {
+  DEFAULT_REPO_NAME,
+  parseOwner,
+  parseRepoName,
+  parseRepoPath,
+} from '../src/utils';
 
 describe('parseRepoName', () => {
   test('extracts repo name from SSH URL with .git', () => {
@@ -93,6 +98,48 @@ describe('parseRepoPath', () => {
   test('handles organization with dots', () => {
     expect(parseRepoPath('https://github.com/my.org/project.git')).toBe(
       'my.org/project'
+    );
+  });
+});
+
+describe('parseOwner', () => {
+  test('extracts owner from SSH URL with .git', () => {
+    expect(parseOwner('git@github.com:facebook/react.git')).toBe('facebook');
+  });
+
+  test('extracts owner from SSH URL without .git', () => {
+    expect(parseOwner('git@github.com:facebook/react')).toBe('facebook');
+  });
+
+  test('extracts owner from HTTPS URL with .git', () => {
+    expect(parseOwner('https://github.com/vercel/next.js.git')).toBe('vercel');
+  });
+
+  test('extracts owner from HTTPS URL without .git', () => {
+    expect(parseOwner('https://github.com/vercel/next.js')).toBe('vercel');
+  });
+
+  test('extracts owner with hyphens', () => {
+    expect(parseOwner('git@github.com:my-company/project.git')).toBe(
+      'my-company'
+    );
+  });
+
+  test('extracts owner with dots', () => {
+    expect(parseOwner('https://github.com/my.org/project.git')).toBe('my.org');
+  });
+
+  test('returns empty string for invalid URL', () => {
+    expect(parseOwner('not-a-valid-url')).toBe('');
+  });
+
+  test('returns empty string for empty string', () => {
+    expect(parseOwner('')).toBe('');
+  });
+
+  test('extracts owner from URL with www', () => {
+    expect(parseOwner('https://www.github.com/facebook/react.git')).toBe(
+      'facebook'
     );
   });
 });

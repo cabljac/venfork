@@ -63,11 +63,14 @@ npx venfork setup <repo-url>
 ## Quick Start
 
 ```bash
-# 1. One-time setup (personal account)
+# 1a. One-time setup (first team member, personal account)
 venfork setup git@github.com:awesome/project.git
 
 # Or for organization repos
 venfork setup git@github.com:awesome/project.git --org my-company
+
+# 1b. Clone existing setup (other team members)
+venfork clone git@github.com:yourname/project-vendor.git
 
 cd project-vendor
 
@@ -118,6 +121,42 @@ venfork setup git@github.com:client/awesome-project.git --org acme-corp
 venfork setup git@github.com:client/project.git internal-mirror --org my-company
 # Creates: my-company/internal-mirror (private), my-company/project (public fork)
 ```
+
+### `venfork clone <vendor-repo-url>`
+
+Clone an existing vendor setup and automatically configure all remotes.
+
+**What it does:**
+- Clones the private vendor repository
+- Auto-detects the public fork (by stripping `-vendor` suffix)
+- Auto-detects the upstream repository (from public fork's parent)
+- Configures all three remotes (origin, public, upstream)
+- Disables push to upstream (read-only)
+
+**Use this when:**
+- A teammate has already run `venfork setup`
+- You need to clone an existing vendor setup
+- You want automatic remote configuration
+
+**Arguments:**
+- `vendor-repo-url` - GitHub URL of the private vendor repository (SSH or HTTPS)
+
+**Examples:**
+```bash
+# Clone existing vendor setup (personal account)
+venfork clone git@github.com:yourname/project-vendor.git
+# Auto-detects: public fork at yourname/project
+# Auto-detects: upstream from public fork's parent
+
+# Clone organization vendor setup
+venfork clone git@github.com:acme-corp/awesome-project-vendor.git
+# Auto-detects: public fork at acme-corp/awesome-project
+# Auto-detects: upstream from public fork's parent
+```
+
+**Interactive prompts:**
+- If public fork cannot be auto-detected, you'll be prompted for the URL
+- If upstream cannot be auto-detected (no parent), you'll be prompted for the URL
 
 ### `venfork sync [branch]`
 

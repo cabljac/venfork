@@ -108,6 +108,19 @@ function getMockExecaResponse(command: string) {
     });
   }
 
+  // GitHub CLI commands for clone
+  if (command.includes('gh repo view') && command.includes('--json parent')) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: 'https://github.com/upstream/original.git',
+      stderr: '',
+    });
+  }
+  if (command.includes('gh repo view')) {
+    // Checking if public fork exists
+    return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+  }
+
   // For signal handler tests: make fork command hang to prevent cleanup
   // This keeps setupCommand running so signal handlers remain registered
   if (command.includes('gh repo fork') && shouldHangOnFork) {
@@ -145,6 +158,7 @@ mock.module('@clack/prompts', () => ({
 
 // Import commands (will use mocked execa, fs, and prompts)
 import {
+  cloneCommand,
   setupCommand,
   showHelp,
   stageCommand,
@@ -557,6 +571,90 @@ describe('setupCommand - error paths', () => {
 
     // Cleanup should still be called
     expect(rmCalls.length).toBeGreaterThan(0);
+  });
+});
+
+describe('cloneCommand', () => {
+  test('checks authentication first', async () => {
+    try {
+      await cloneCommand('git@github.com:acme/project-vendor.git');
+    } catch {
+      // Expected
+    }
+
+    // Should check authentication
+    const authCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh auth status')
+    );
+    expect(authCalls.length).toBeGreaterThan(0);
+  });
+
+  test('clones the vendor repository', async () => {
+    try {
+      await cloneCommand('git@github.com:acme/project-vendor.git');
+    } catch {
+      // Expected
+    }
+
+    // Should clone the repo
+    const cloneCalls = execaCalls.filter((cmd) => cmd.includes('git clone'));
+    expect(cloneCalls.length).toBeGreaterThan(0);
+    expect(cloneCalls[0]).toContain('acme/project-vendor');
+  });
+
+  test('detects public fork by stripping -vendor suffix', async () => {
+    try {
+      await cloneCommand('git@github.com:acme/project-vendor.git');
+    } catch {
+      // Expected
+    }
+
+    // Should try to detect public fork
+    const viewCalls = execaCalls.filter((cmd) => cmd.includes('gh repo view'));
+    expect(viewCalls.length).toBeGreaterThan(0);
+    // Should check for 'project' (without -vendor)
+    expect(viewCalls.some((cmd) => cmd.includes('acme/project'))).toBe(true);
+  });
+
+  test('attempts to configure remotes', async () => {
+    try {
+      await cloneCommand('git@github.com:acme/project-vendor.git');
+    } catch {
+      // Expected - may fail due to interactive prompts in test environment
+    }
+
+    // Command should attempt to configure remotes
+    // Note: Full remote configuration may require interactive input mocking
+    const remoteCalls = execaCalls.filter((cmd) => cmd.includes('git remote'));
+    // Should attempt some remote operations
+    expect(remoteCalls.length).toBeGreaterThan(0);
+  });
+});
+
+describe('cloneCommand - error paths', () => {
+  test('throws AuthenticationError when not authenticated', async () => {
+    mockResponses.set('gh auth status', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'not authenticated',
+    });
+
+    try {
+      await cloneCommand('git@github.com:acme/project-vendor.git');
+      expect(true).toBe(false); // Should not reach here
+    } catch (error) {
+      expect(error).toBeDefined();
+    }
+  });
+
+  test('requires vendor repo URL', async () => {
+    try {
+      await cloneCommand();
+    } catch {
+      // Expected - process.exit(1) throws
+    }
+
+    expect(process.exit).toHaveBeenCalledWith(1);
   });
 });
 

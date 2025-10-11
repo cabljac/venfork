@@ -2,6 +2,7 @@
 
 import * as p from '@clack/prompts';
 import {
+  cloneCommand,
   setupCommand,
   showHelp,
   stageCommand,
@@ -47,6 +48,9 @@ async function main(): Promise<void> {
       await setupCommand(upstreamUrl, vendorName, organization);
       break;
     }
+    case 'clone':
+      await cloneCommand(args[1]);
+      break;
     case 'sync':
       await syncCommand(args[1]);
       break;
