@@ -172,12 +172,12 @@ import {
  */
 async function startSetupCommand(
   upstreamUrl = 'git@github.com:test/repo.git',
-  vendorName = 'test-vendor'
+  privateMirrorName = 'test-vendor'
 ): Promise<void> {
   // Enable fork hanging to keep setupCommand running for signal handler tests
   shouldHangOnFork = true;
 
-  const promise = setupCommand(upstreamUrl, vendorName);
+  const promise = setupCommand(upstreamUrl, privateMirrorName);
 
   // Wait for async operations to complete (checkGhAuth, getGitHubUsername, etc.)
   // Signal handlers are registered after these complete
