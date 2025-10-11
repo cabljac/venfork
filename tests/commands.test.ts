@@ -21,6 +21,7 @@ const rmCalls: RmCall[] = [];
 const signalHandlers = new Map<string, SignalHandler>();
 let shouldHangOnFork = false;
 const mockResponses: Map<string, MockResponse> = new Map();
+let confirmResponse = true; // Default to true for most tests
 
 // Store originals
 const originalProcessOn = process.on;
@@ -149,10 +150,10 @@ mock.module('@clack/prompts', () => ({
   note: mock(() => {}),
   outro: mock(() => {}),
   cancel: mock(() => {}),
-  log: { error: mock(() => {}) },
+  log: { error: mock(() => {}), warn: mock(() => {}), info: mock(() => {}) },
   group: mock(() => Promise.resolve({})),
   text: mock(() => Promise.resolve('')),
-  confirm: mock(() => Promise.resolve(false)), // Mock confirm to return false
+  confirm: mock(() => Promise.resolve(confirmResponse)), // Use dynamic confirmResponse
   isCancel: mock(() => false),
 }));
 
@@ -194,6 +195,10 @@ beforeEach(() => {
   signalHandlers.clear();
   shouldHangOnFork = false;
   mockResponses.clear();
+  confirmResponse = true; // Reset to true for each test
+
+  // Clear VENFORK_ORG environment variable
+  delete process.env.VENFORK_ORG;
 
   // Mock process methods
   process.on = ((event: string, handler: SignalHandler) => {
@@ -537,6 +542,102 @@ describe('setupCommand - organization tests', () => {
     expect(cloneCalls.some((cmd) => cmd.includes('testuser/test-vendor'))).toBe(
       true
     );
+  });
+});
+
+describe('setupCommand - VENFORK_ORG environment variable', () => {
+  test('uses VENFORK_ORG when no --org flag is present', async () => {
+    // Simulate what index.ts does: read VENFORK_ORG and pass to setupCommand
+    process.env.VENFORK_ORG = 'env-org';
+    const organization = process.env.VENFORK_ORG;
+
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        organization
+      );
+    } catch {
+      // Expected
+    }
+
+    // Should use env-org in commands
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls[0]).toContain('--org env-org');
+
+    // Should use env-org in URLs
+    const cloneCalls = execaCalls.filter((cmd) => cmd.includes('git clone'));
+    expect(cloneCalls.some((cmd) => cmd.includes('env-org/test-vendor'))).toBe(
+      true
+    );
+  });
+
+  test('--org flag overrides VENFORK_ORG', async () => {
+    process.env.VENFORK_ORG = 'env-org';
+
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        'flag-org'
+      );
+    } catch {
+      // Expected
+    }
+
+    // Should use flag-org (not env-org)
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls[0]).toContain('--org flag-org');
+    expect(forkCalls[0]).not.toContain('env-org');
+
+    // Should use flag-org in URLs
+    const cloneCalls = execaCalls.filter((cmd) => cmd.includes('git clone'));
+    expect(cloneCalls.some((cmd) => cmd.includes('flag-org/test-vendor'))).toBe(
+      true
+    );
+    expect(cloneCalls.some((cmd) => cmd.includes('env-org/'))).toBe(false);
+  });
+
+  test('prompts for confirmation when neither --org nor VENFORK_ORG is set', async () => {
+    // Ensure env var is not set
+    delete process.env.VENFORK_ORG;
+    // Confirm will return true (from beforeEach default)
+
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    // Should use testuser (after confirmation)
+    const cloneCalls = execaCalls.filter((cmd) => cmd.includes('git clone'));
+    expect(cloneCalls.some((cmd) => cmd.includes('testuser/test-vendor'))).toBe(
+      true
+    );
+  });
+
+  test('exits when user declines personal account confirmation', async () => {
+    // Ensure env var is not set
+    delete process.env.VENFORK_ORG;
+    // Set confirm to return false (decline)
+    confirmResponse = false;
+
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected - command should exit
+    }
+
+    // Should call process.exit
+    expect(process.exit).toHaveBeenCalledWith(0);
+
+    // Should NOT create any repos
+    const createCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo create')
+    );
+    expect(createCalls.length).toBe(0);
   });
 });
 

@@ -224,6 +224,45 @@ venfork stage bugfix/issue-123
 3. Pushes to public fork
 4. Provides PR creation link
 
+## Environment Variables
+
+### `VENFORK_ORG`
+
+Set a default organization for all venfork commands. This avoids having to type `--org` every time.
+
+**Priority order:**
+1. `--org` flag (highest priority - always overrides)
+2. `VENFORK_ORG` environment variable
+3. Personal account (prompts for confirmation)
+
+**Usage:**
+
+```bash
+# Set in your shell profile (~/.zshrc, ~/.bashrc, etc.)
+export VENFORK_ORG=my-company
+
+# Now all commands use this org by default
+venfork setup git@github.com:client/project.git
+# Creates: my-company/project-vendor (private), my-company/project (public fork)
+
+# Override with --org flag when needed
+venfork setup git@github.com:other-client/app.git --org different-org
+# Creates: different-org/app-vendor (private), different-org/app (public fork)
+```
+
+**Safety feature:**
+If neither `--org` nor `VENFORK_ORG` is set, venfork will prompt for confirmation before creating repos under your personal account. This prevents accidental personal repo creation when working as a vendor/contractor.
+
+```bash
+# Without VENFORK_ORG or --org
+venfork setup git@github.com:client/project.git
+
+# Output:
+# ⚠️  No organization specified
+# Repos will be created under your personal account (username: yourname)
+# Continue with personal account? (y/N)
+```
+
 ## Complete Workflow
 
 ### Initial Setup

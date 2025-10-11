@@ -82,6 +82,24 @@ export async function setupCommand(
   const s = p.spinner();
   const username = await getGitHubUsername();
 
+  // If no organization is specified, confirm before using personal account
+  if (!organization) {
+    p.log.warn('⚠️  No organization specified');
+    p.log.info(
+      `Repos will be created under your personal account (username: ${username})`
+    );
+
+    const confirmed = await p.confirm({
+      message: 'Continue with personal account?',
+      initialValue: false,
+    });
+
+    if (p.isCancel(confirmed) || !confirmed) {
+      p.outro('❌ Setup cancelled');
+      process.exit(0);
+    }
+  }
+
   // Determine the account owner (org or user)
   const owner = organization || username;
 
@@ -666,6 +684,21 @@ venfork stage feature/new-thing
 # NOW visible on public fork
 # Create PR: public fork → upstream`,
     'Example Workflow'
+  );
+
+  p.note(
+    `VENFORK_ORG - Default organization for repo creation
+  Set this to avoid typing --org every time
+
+  Priority:
+  1. --org flag (highest priority)
+  2. VENFORK_ORG environment variable
+  3. Personal account (with confirmation prompt)
+
+  Example:
+  export VENFORK_ORG=my-company
+  venfork setup <url>  # Uses my-company automatically`,
+    'Environment Variables'
   );
 
   p.outro('Built for teams who need private vendor workflows');
