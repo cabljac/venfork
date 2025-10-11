@@ -30,3 +30,18 @@ export function parseRepoPath(url: string): string {
   const match = url.match(/github\.com[:/](.+?)(?:\.git)?$/);
   return match?.[1] || '';
 }
+
+/**
+ * Extracts owner from a GitHub URL
+ *
+ * @param url - GitHub repository URL (SSH or HTTPS)
+ * @returns Owner/organization name (e.g., "facebook" from "github.com/facebook/react")
+ *
+ * @example
+ * parseOwner("git@github.com:facebook/react.git") // "facebook"
+ * parseOwner("https://github.com/vercel/next.js.git") // "vercel"
+ */
+export function parseOwner(url: string): string {
+  const match = url.match(/github\.com[:/](.+?)\/.+/);
+  return match?.[1] || '';
+}

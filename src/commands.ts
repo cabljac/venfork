@@ -19,7 +19,7 @@ import {
   hasRemote,
   isGitRepository,
 } from './git.js';
-import { parseRepoName, parseRepoPath } from './utils.js';
+import { parseOwner, parseRepoName, parseRepoPath } from './utils.js';
 
 /**
  * Setup command: Create private mirror and public fork
@@ -173,8 +173,8 @@ export async function setupCommand(
     p.note(remotesText.trim(), 'Git Remote Configuration');
 
     p.note(
-      `Private Mirror: https://github.com/${username}/${config.vendorName} (for internal work)
-Public Fork: https://github.com/${username}/${publicForkName} (for staging to upstream)
+      `Private Mirror: https://github.com/${owner}/${config.vendorName} (for internal work)
+Public Fork: https://github.com/${owner}/${publicForkName} (for staging to upstream)
 Upstream: ${config.upstreamUrl} (read-only)`,
       'Repositories Created'
     );
@@ -197,6 +197,158 @@ Upstream: ${config.upstreamUrl} (read-only)`,
     await cleanup();
     process.off('SIGINT', signalHandler);
     process.off('SIGTERM', signalHandler);
+  }
+}
+
+/**
+ * Clone command: Clone vendor repository and configure all remotes
+ */
+export async function cloneCommand(vendorRepoUrl?: string): Promise<void> {
+  p.intro('🔧 Venfork Clone');
+
+  // Validate vendor repo URL provided
+  if (!vendorRepoUrl) {
+    p.log.error('Vendor repository URL is required');
+    p.outro('❌ Clone failed');
+    process.exit(1);
+  }
+
+  // Step 1: Check GitHub CLI authentication
+  const isAuthenticated = await checkGhAuth();
+  if (!isAuthenticated) {
+    throw new AuthenticationError();
+  }
+
+  const s = p.spinner();
+
+  try {
+    // Parse vendor repo details
+    const vendorRepoName = parseRepoName(vendorRepoUrl);
+    const owner = parseOwner(vendorRepoUrl);
+
+    if (!owner || !vendorRepoName) {
+      throw new Error('Invalid vendor repository URL');
+    }
+
+    // Check if directory already exists
+    try {
+      await $`test -d ${vendorRepoName}`;
+      p.log.error(`Directory '${vendorRepoName}' already exists.`);
+      p.outro('❌ Clone failed');
+      process.exit(1);
+    } catch {
+      // Directory doesn't exist, good to proceed
+    }
+
+    // Step 2: Clone vendor repository
+    s.start('Cloning vendor repository');
+    await $`git clone ${vendorRepoUrl}`;
+    s.stop('Vendor repository cloned');
+
+    // Step 3: Auto-detect public fork
+    s.start('Detecting public fork');
+
+    // Try to strip -vendor suffix
+    let publicRepoName = vendorRepoName;
+    if (vendorRepoName.endsWith('-vendor')) {
+      publicRepoName = vendorRepoName.replace(/-vendor$/, '');
+    }
+
+    // Verify public fork exists
+    let publicForkUrl: string;
+    try {
+      await $`gh repo view ${owner}/${publicRepoName}`;
+      publicForkUrl = `git@github.com:${owner}/${publicRepoName}.git`;
+      s.stop(`Found public fork: ${owner}/${publicRepoName}`);
+    } catch {
+      s.stop('Public fork not found');
+
+      p.log.warn('⚠️  Could not auto-detect public fork.');
+      p.note(`Tried: ${owner}/${publicRepoName}`, 'Detection Failed');
+
+      const response = await p.text({
+        message: 'Please provide the public fork URL:',
+        placeholder: 'git@github.com:owner/repo.git',
+      });
+
+      if (p.isCancel(response)) {
+        p.outro('❌ Clone cancelled');
+        process.exit(1);
+      }
+
+      publicForkUrl = response as string;
+      publicRepoName = parseRepoName(publicForkUrl);
+    }
+
+    // Step 4: Auto-detect upstream from public fork's parent
+    s.start('Detecting upstream repository');
+
+    let upstreamUrl: string;
+    try {
+      const result =
+        await $`gh repo view ${owner}/${publicRepoName} --json parent --jq '.parent.url'`;
+      upstreamUrl = result.stdout.trim();
+
+      if (!upstreamUrl || upstreamUrl === 'null') {
+        throw new Error('No parent found');
+      }
+
+      const upstreamPath = parseRepoPath(upstreamUrl);
+      s.stop(`Found upstream: ${upstreamPath}`);
+    } catch {
+      s.stop('Upstream not found');
+
+      p.log.warn('⚠️  Public fork has no parent repository.');
+
+      const response = await p.text({
+        message: 'Please provide the upstream URL:',
+        placeholder: 'git@github.com:original/repo.git',
+      });
+
+      if (p.isCancel(response)) {
+        p.outro('❌ Clone cancelled');
+        process.exit(1);
+      }
+
+      upstreamUrl = response as string;
+    }
+
+    // Step 5: Configure remotes
+    s.start('Configuring git remotes');
+
+    // origin is already configured from clone
+
+    // Add public fork remote
+    await $({ cwd: vendorRepoName })`git remote add public ${publicForkUrl}`;
+
+    // Add upstream remote (with push disabled)
+    await $({ cwd: vendorRepoName })`git remote add upstream ${upstreamUrl}`;
+    await $({
+      cwd: vendorRepoName,
+    })`git remote set-url --push upstream DISABLE`;
+
+    s.stop('Git remotes configured');
+
+    // Step 6: Show configuration
+    const remotesOutput = await $({ cwd: vendorRepoName })`git remote -v`;
+    const remotesText = remotesOutput.stdout;
+
+    p.note(remotesText.trim(), 'Git Remote Configuration');
+
+    // Step 7: Success output
+    p.outro(
+      `✨ Clone complete!\n\nNext steps:
+  cd ${vendorRepoName}
+  venfork sync          # Sync with upstream
+  git checkout -b feature-branch
+  # Do your work...
+  venfork stage feature-branch`
+    );
+  } catch (error) {
+    s.stop('Error occurred');
+    p.log.error(error instanceof Error ? error.message : String(error));
+    p.outro('❌ Clone failed');
+    process.exit(1);
   }
 }
 
@@ -471,6 +623,14 @@ export function showHelp(): void {
   • Private mirror (yourname/project-vendor) - internal work
   • Public fork (yourname/project) - staging for upstream
   • Configures remotes: origin, public, upstream
+
+venfork clone <vendor-repo-url>
+  Clone an existing vendor setup and configure remotes automatically
+
+  Auto-detects:
+  • Public fork (strips -vendor suffix)
+  • Upstream repository (from public fork's parent)
+  • Configures all three remotes (origin, public, upstream)
 
 venfork status
   Show current repository setup and configuration
