@@ -36,6 +36,7 @@ async function main(): Promise<void> {
       let privateMirrorName = args[2];
 
       if (orgIndex !== -1) {
+        // --org flag has highest priority
         organization = args[orgIndex + 1];
         // Remove --org and its value from args
         const filteredArgs = args.filter(
@@ -43,7 +44,12 @@ async function main(): Promise<void> {
         );
         upstreamUrl = filteredArgs[1];
         privateMirrorName = filteredArgs[2];
+      } else if (process.env.VENFORK_ORG) {
+        // Fall back to VENFORK_ORG environment variable
+        organization = process.env.VENFORK_ORG;
       }
+      // If neither is set, organization remains undefined
+      // setupCommand will prompt for confirmation before using personal account
 
       await setupCommand(upstreamUrl, privateMirrorName, organization);
       break;
