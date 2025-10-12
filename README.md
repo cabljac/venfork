@@ -13,7 +13,7 @@ Create and manage private mirrors of public GitHub repositories for vendor devel
 
 Venfork helps contractors and vendors who need to work on private forks of public repositories. It creates a **three-repository workflow**:
 
-1. **Private Mirror** (`yourname/project-vendor` or `org/project-vendor`) - Where your team works internally
+1. **Private Mirror** (`yourname/project-private` or `org/project-private`) - Where your team works internally
 2. **Public Fork** (`yourname/project` or `org/project`) - Staging area for contributions to upstream
 3. **Upstream** (`original/project`) - The original repository
 
@@ -70,9 +70,9 @@ venfork setup git@github.com:awesome/project.git
 venfork setup git@github.com:awesome/project.git --org my-company
 
 # 1b. Clone existing setup (other team members)
-venfork clone git@github.com:yourname/project-vendor.git
+venfork clone git@github.com:yourname/project-private.git
 
-cd project-vendor
+cd project-private
 
 # 2. Work privately
 git checkout -b feature/new-thing
@@ -93,8 +93,9 @@ venfork stage feature/new-thing
 Creates the complete vendor workflow setup:
 
 **What it creates:**
-- **Private mirror** (`yourname/project-vendor` or `org/project-vendor`) - For internal work
+- **Private mirror** (`yourname/project-private` or `org/project-private`) - For internal work
 - **Public fork** (`yourname/project` or `org/project`) - For staging to upstream
+- **Config branch** (`venfork-config`) - Stores remote URLs for easy team cloning
 - **Local clone** with three remotes configured:
   - `origin` → private mirror (default push/pull)
   - `public` → public fork (for staging)
@@ -102,21 +103,21 @@ Creates the complete vendor workflow setup:
 
 **Arguments:**
 - `upstream-url` - GitHub repository URL (SSH or HTTPS)
-- `name` - (Optional) Name for private vendor repo (default: `{repo}-vendor`)
+- `name` - (Optional) Name for private mirror repo (default: `{repo}-private`)
 - `--org <organization>` - (Optional) Create repos under organization instead of personal account
 
 **Examples:**
 ```bash
 # Personal account (default)
 venfork setup git@github.com:vercel/next.js.git
-# Creates: yourname/next.js-vendor (private), yourname/next.js (public fork)
+# Creates: yourname/next.js-private (private), yourname/next.js (public fork)
 
 venfork setup https://github.com/vuejs/vue.git vue-internal
 # Creates: yourname/vue-internal (private), yourname/vue (public fork)
 
 # Organization account
 venfork setup git@github.com:client/awesome-project.git --org acme-corp
-# Creates: acme-corp/awesome-project-vendor (private), acme-corp/awesome-project (public fork)
+# Creates: acme-corp/awesome-project-private (private), acme-corp/awesome-project (public fork)
 
 venfork setup git@github.com:client/project.git internal-mirror --org my-company
 # Creates: my-company/internal-mirror (private), my-company/project (public fork)
@@ -127,9 +128,11 @@ venfork setup git@github.com:client/project.git internal-mirror --org my-company
 Clone an existing vendor setup and automatically configure all remotes.
 
 **What it does:**
-- Clones the private vendor repository
-- Auto-detects the public fork (by stripping `-vendor` suffix)
-- Auto-detects the upstream repository (from public fork's parent)
+- Clones the private mirror repository
+- **Reads venfork-config branch** for public fork and upstream URLs (if available)
+- Falls back to auto-detection:
+  - Public fork (by stripping `-private` suffix)
+  - Upstream repository (from public fork's parent)
 - Configures all three remotes (origin, public, upstream)
 - Disables push to upstream (read-only)
 
@@ -144,14 +147,14 @@ Clone an existing vendor setup and automatically configure all remotes.
 **Examples:**
 ```bash
 # Clone existing vendor setup (personal account)
-venfork clone git@github.com:yourname/project-vendor.git
-# Auto-detects: public fork at yourname/project
-# Auto-detects: upstream from public fork's parent
+venfork clone git@github.com:yourname/project-private.git
+# Reads config from venfork-config branch (if available)
+# Or auto-detects: public fork at yourname/project
 
 # Clone organization vendor setup
-venfork clone git@github.com:acme-corp/awesome-project-vendor.git
-# Auto-detects: public fork at acme-corp/awesome-project
-# Auto-detects: upstream from public fork's parent
+venfork clone git@github.com:acme-corp/awesome-project-private.git
+# Reads config from venfork-config branch (if available)
+# Or auto-detects: public fork at acme-corp/awesome-project
 ```
 
 **Interactive prompts:**
@@ -275,7 +278,7 @@ venfork setup git@github.com:client/awesome-project.git
 venfork setup git@github.com:client/awesome-project.git --org acme-corp
 
 # Navigate to private mirror
-cd awesome-project-vendor
+cd awesome-project-private
 
 # Check setup status
 venfork status
@@ -283,12 +286,12 @@ venfork status
 # Or verify remotes manually
 git remote -v
 # With personal account:
-# origin    git@github.com:you/awesome-project-vendor.git (private)
+# origin    git@github.com:you/awesome-project-private.git (private)
 # public    git@github.com:you/awesome-project.git (public fork)
 # upstream  git@github.com:client/awesome-project.git (read-only)
 
 # With organization:
-# origin    git@github.com:acme-corp/awesome-project-vendor.git (private)
+# origin    git@github.com:acme-corp/awesome-project-private.git (private)
 # public    git@github.com:acme-corp/awesome-project.git (public fork)
 # upstream  git@github.com:client/awesome-project.git (read-only)
 ```
@@ -361,12 +364,13 @@ venfork stage feature/user-auth
                    │ mirror (disconnected)
                    ▼
 ┌─────────────────────────────────────────────┐
-│  Private Mirror (you/project-vendor)        │
-│                  (or org/project-vendor)    │
+│  Private Mirror (you/project-private)       │
+│                  (or org/project-private)   │
 │  • Only visible to your team                │
 │  • Safe space to experiment & iterate       │
 │  • Internal PRs and reviews                 │
 │  • Your daily work happens here             │
+│  • Contains venfork-config branch           │
 └─────────────────────────────────────────────┘
 ```
 
@@ -378,7 +382,7 @@ After `venfork setup`, your local repository has three remotes:
 
 | Remote | URL | Purpose |
 |--------|-----|---------|
-| `origin` | `you/project-vendor` (or `org/project-vendor`) | Private work (default) |
+| `origin` | `you/project-private` (or `org/project-private`) | Private work (default) |
 | `public` | `you/project` (or `org/project`) | Stage for upstream |
 | `upstream` | `original/project` | Sync with latest |
 
