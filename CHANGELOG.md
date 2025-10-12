@@ -1,5 +1,11 @@
 # venfork
 
+## 0.1.1
+
+### Patch Changes
+
+- Update README documentation to reflect v0.1.0 changes - update all examples from `-vendor` to `-private` suffix and document new venfork-config branch feature
+
 ## 0.1.0
 
 ### Minor Changes
