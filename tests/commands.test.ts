@@ -678,7 +678,7 @@ describe('setupCommand - error paths', () => {
 describe('cloneCommand', () => {
   test('checks authentication first', async () => {
     try {
-      await cloneCommand('git@github.com:acme/project-vendor.git');
+      await cloneCommand('git@github.com:acme/project-private.git');
     } catch {
       // Expected
     }
@@ -692,7 +692,7 @@ describe('cloneCommand', () => {
 
   test('clones the vendor repository', async () => {
     try {
-      await cloneCommand('git@github.com:acme/project-vendor.git');
+      await cloneCommand('git@github.com:acme/project-private.git');
     } catch {
       // Expected
     }
@@ -700,12 +700,12 @@ describe('cloneCommand', () => {
     // Should clone the repo
     const cloneCalls = execaCalls.filter((cmd) => cmd.includes('git clone'));
     expect(cloneCalls.length).toBeGreaterThan(0);
-    expect(cloneCalls[0]).toContain('acme/project-vendor');
+    expect(cloneCalls[0]).toContain('acme/project-private');
   });
 
-  test('detects public fork by stripping -vendor suffix', async () => {
+  test('detects public fork by stripping -private suffix', async () => {
     try {
-      await cloneCommand('git@github.com:acme/project-vendor.git');
+      await cloneCommand('git@github.com:acme/project-private.git');
     } catch {
       // Expected
     }
@@ -713,13 +713,13 @@ describe('cloneCommand', () => {
     // Should try to detect public fork
     const viewCalls = execaCalls.filter((cmd) => cmd.includes('gh repo view'));
     expect(viewCalls.length).toBeGreaterThan(0);
-    // Should check for 'project' (without -vendor)
+    // Should check for 'project' (without -private)
     expect(viewCalls.some((cmd) => cmd.includes('acme/project'))).toBe(true);
   });
 
   test('attempts to configure remotes', async () => {
     try {
-      await cloneCommand('git@github.com:acme/project-vendor.git');
+      await cloneCommand('git@github.com:acme/project-private.git');
     } catch {
       // Expected - may fail due to interactive prompts in test environment
     }
@@ -741,7 +741,7 @@ describe('cloneCommand - error paths', () => {
     });
 
     try {
-      await cloneCommand('git@github.com:acme/project-vendor.git');
+      await cloneCommand('git@github.com:acme/project-private.git');
       expect(true).toBe(false); // Should not reach here
     } catch (error) {
       expect(error).toBeDefined();

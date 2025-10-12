@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
+import { createConfigBranch, fetchVenforkConfig } from './config.js';
 import {
   AuthenticationError,
   BranchNotFoundError,
@@ -38,49 +39,62 @@ export async function setupCommand(
   }
 
   // Get configuration from user or use provided arguments
-  let config: { upstreamUrl: string; privateMirrorName: string };
+  let finalUpstreamUrl = upstreamUrl;
+  let finalPrivateMirrorName = privateMirrorName;
 
-  if (upstreamUrl && privateMirrorName) {
-    config = { upstreamUrl, privateMirrorName };
-  } else {
-    const groupResult = await p.group(
-      {
-        upstreamUrl: () =>
-          p.text({
-            message: 'Upstream repository URL?',
-            placeholder: 'git@github.com:google/project.git',
-            defaultValue: upstreamUrl,
-            validate: (value) => {
-              if (!value) return 'Repository URL is required';
-              if (!value.includes('github.com')) return 'Must be a GitHub URL';
-            },
-          }),
-        privateMirrorName: ({ results }) =>
-          p.text({
-            message: 'Private mirror repo name?',
-            placeholder: `${parseRepoName(results.upstreamUrl as string)}-vendor`,
-            defaultValue:
-              privateMirrorName ||
-              `${parseRepoName(results.upstreamUrl as string)}-vendor`,
-            validate: (value) => {
-              if (!value) return 'Private mirror repo name is required';
-              if (!/^[a-zA-Z0-9-_]+$/.test(value))
-                return 'Name can only contain letters, numbers, hyphens, and underscores';
-            },
-          }),
+  // Prompt for upstream URL only if not provided
+  if (!finalUpstreamUrl) {
+    const response = await p.text({
+      message: 'Upstream repository URL?',
+      placeholder: 'git@github.com:google/project.git',
+      validate: (value) => {
+        if (!value) return 'Repository URL is required';
+        if (!value.includes('github.com')) return 'Must be a GitHub URL';
       },
-      {
-        onCancel: () => {
-          p.cancel('Operation cancelled');
-          process.exit(0);
-        },
-      }
-    );
-    config = groupResult as { upstreamUrl: string; privateMirrorName: string };
+    });
+
+    if (p.isCancel(response)) {
+      p.cancel('Operation cancelled');
+      process.exit(0);
+    }
+
+    finalUpstreamUrl = response as string;
   }
+
+  // Prompt for private mirror name only if not provided
+  if (!finalPrivateMirrorName) {
+    const defaultName = `${parseRepoName(finalUpstreamUrl)}-private`;
+    const response = await p.text({
+      message: 'Private mirror repo name?',
+      placeholder: defaultName,
+      defaultValue: defaultName,
+      validate: (value) => {
+        if (!value) return 'Private mirror repo name is required';
+        if (!/^[a-zA-Z0-9-_]+$/.test(value))
+          return 'Name can only contain letters, numbers, hyphens, and underscores';
+      },
+    });
+
+    if (p.isCancel(response)) {
+      p.cancel('Operation cancelled');
+      process.exit(0);
+    }
+
+    finalPrivateMirrorName = response as string;
+  }
+
+  const config = {
+    upstreamUrl: finalUpstreamUrl,
+    privateMirrorName: finalPrivateMirrorName,
+  };
 
   const s = p.spinner();
   const username = await getGitHubUsername();
+
+  // If organization is the user's personal account, treat it as no organization
+  if (organization && organization === username) {
+    organization = undefined;
+  }
 
   // If no organization is specified, confirm before using personal account
   if (!organization) {
@@ -184,6 +198,12 @@ export async function setupCommand(
 
     s.stop('Git remotes configured');
 
+    // Step 7: Create and push venfork config branch
+    s.start('Creating venfork configuration');
+    const publicForkUrl = `git@github.com:${owner}/${publicForkName}.git`;
+    await createConfigBranch(repoDir, publicForkUrl, config.upstreamUrl);
+    s.stop('Venfork configuration created');
+
     // Show remote configuration
     const remotesOutput = await $({ cwd: repoDir })`git remote -v`;
     const remotesText = remotesOutput.stdout;
@@ -263,75 +283,99 @@ export async function cloneCommand(vendorRepoUrl?: string): Promise<void> {
     await $`git clone ${vendorRepoUrl}`;
     s.stop('Vendor repository cloned');
 
-    // Step 3: Auto-detect public fork
-    s.start('Detecting public fork');
+    // Step 3: Try to fetch venfork config
+    s.start('Fetching venfork configuration');
+    const config = await fetchVenforkConfig(vendorRepoUrl);
 
-    // Try to strip -vendor suffix
-    let publicRepoName = vendorRepoName;
-    if (vendorRepoName.endsWith('-vendor')) {
-      publicRepoName = vendorRepoName.replace(/-vendor$/, '');
-    }
-
-    // Verify public fork exists
     let publicForkUrl: string;
-    try {
-      await $`gh repo view ${owner}/${publicRepoName}`;
-      publicForkUrl = `git@github.com:${owner}/${publicRepoName}.git`;
-      s.stop(`Found public fork: ${owner}/${publicRepoName}`);
-    } catch {
-      s.stop('Public fork not found');
-
-      p.log.warn('⚠️  Could not auto-detect public fork.');
-      p.note(`Tried: ${owner}/${publicRepoName}`, 'Detection Failed');
-
-      const response = await p.text({
-        message: 'Please provide the public fork URL:',
-        placeholder: 'git@github.com:owner/repo.git',
-      });
-
-      if (p.isCancel(response)) {
-        p.outro('❌ Clone cancelled');
-        process.exit(1);
-      }
-
-      publicForkUrl = response as string;
-      publicRepoName = parseRepoName(publicForkUrl);
-    }
-
-    // Step 4: Auto-detect upstream from public fork's parent
-    s.start('Detecting upstream repository');
-
     let upstreamUrl: string;
-    try {
-      const result =
-        await $`gh repo view ${owner}/${publicRepoName} --json parent --jq '.parent.url'`;
-      upstreamUrl = result.stdout.trim();
 
-      if (!upstreamUrl || upstreamUrl === 'null') {
-        throw new Error('No parent found');
+    if (config) {
+      // Config found! Use the URLs from config
+      publicForkUrl = config.publicForkUrl;
+      upstreamUrl = config.upstreamUrl;
+
+      const publicRepoPath = parseRepoPath(publicForkUrl);
+      const upstreamRepoPath = parseRepoPath(upstreamUrl);
+
+      s.stop('Configuration found');
+      p.log.success(`✓ Using config from venfork-config branch`);
+      p.note(
+        `Public fork: ${publicRepoPath}\nUpstream: ${upstreamRepoPath}`,
+        'Configuration'
+      );
+    } else {
+      // No config found, fall back to auto-detection
+      s.stop('No configuration found, using auto-detection');
+
+      // Step 3a: Auto-detect public fork
+      s.start('Detecting public fork');
+
+      // Try to strip -private suffix
+      let publicRepoName = vendorRepoName;
+      if (vendorRepoName.endsWith('-private')) {
+        publicRepoName = vendorRepoName.replace(/-private$/, '');
       }
 
-      const upstreamPath = parseRepoPath(upstreamUrl);
-      s.stop(`Found upstream: ${upstreamPath}`);
-    } catch {
-      s.stop('Upstream not found');
+      // Verify public fork exists
+      try {
+        await $`gh repo view ${owner}/${publicRepoName}`;
+        publicForkUrl = `git@github.com:${owner}/${publicRepoName}.git`;
+        s.stop(`Found public fork: ${owner}/${publicRepoName}`);
+      } catch {
+        s.stop('Public fork not found');
 
-      p.log.warn('⚠️  Public fork has no parent repository.');
+        p.log.warn('⚠️  Could not auto-detect public fork.');
+        p.note(`Tried: ${owner}/${publicRepoName}`, 'Detection Failed');
 
-      const response = await p.text({
-        message: 'Please provide the upstream URL:',
-        placeholder: 'git@github.com:original/repo.git',
-      });
+        const response = await p.text({
+          message: 'Please provide the public fork URL:',
+          placeholder: 'git@github.com:owner/repo.git',
+        });
 
-      if (p.isCancel(response)) {
-        p.outro('❌ Clone cancelled');
-        process.exit(1);
+        if (p.isCancel(response)) {
+          p.outro('❌ Clone cancelled');
+          process.exit(1);
+        }
+
+        publicForkUrl = response as string;
+        publicRepoName = parseRepoName(publicForkUrl);
       }
 
-      upstreamUrl = response as string;
+      // Step 3b: Auto-detect upstream from public fork's parent
+      s.start('Detecting upstream repository');
+
+      try {
+        const result =
+          await $`gh repo view ${owner}/${publicRepoName} --json parent --jq '.parent.url'`;
+        upstreamUrl = result.stdout.trim();
+
+        if (!upstreamUrl || upstreamUrl === 'null') {
+          throw new Error('No parent found');
+        }
+
+        const upstreamPath = parseRepoPath(upstreamUrl);
+        s.stop(`Found upstream: ${upstreamPath}`);
+      } catch {
+        s.stop('Upstream not found');
+
+        p.log.warn('⚠️  Public fork has no parent repository.');
+
+        const response = await p.text({
+          message: 'Please provide the upstream URL:',
+          placeholder: 'git@github.com:original/repo.git',
+        });
+
+        if (p.isCancel(response)) {
+          p.outro('❌ Clone cancelled');
+          process.exit(1);
+        }
+
+        upstreamUrl = response as string;
+      }
     }
 
-    // Step 5: Configure remotes
+    // Step 4: Configure remotes
     s.start('Configuring git remotes');
 
     // origin is already configured from clone
@@ -347,13 +391,13 @@ export async function cloneCommand(vendorRepoUrl?: string): Promise<void> {
 
     s.stop('Git remotes configured');
 
-    // Step 6: Show configuration
+    // Step 5: Show configuration
     const remotesOutput = await $({ cwd: vendorRepoName })`git remote -v`;
     const remotesText = remotesOutput.stdout;
 
     p.note(remotesText.trim(), 'Git Remote Configuration');
 
-    // Step 7: Success output
+    // Step 6: Success output
     p.outro(
       `✨ Clone complete!\n\nNext steps:
   cd ${vendorRepoName}
@@ -638,7 +682,7 @@ export function showHelp(): void {
   • --org <name>  Create repos under organization instead of user account
 
   Creates:
-  • Private mirror (yourname/project-vendor) - internal work
+  • Private mirror (yourname/project-private) - internal work
   • Public fork (yourname/project) - staging for upstream
   • Configures remotes: origin, public, upstream
 
@@ -646,7 +690,7 @@ venfork clone <vendor-repo-url>
   Clone an existing vendor setup and configure remotes automatically
 
   Auto-detects:
-  • Public fork (strips -vendor suffix)
+  • Public fork (strips -private suffix)
   • Upstream repository (from public fork's parent)
   • Configures all three remotes (origin, public, upstream)
 
@@ -671,7 +715,7 @@ venfork setup git@github.com:awesome/project.git
 # Or for organization repos:
 venfork setup git@github.com:awesome/project.git --org my-company
 
-cd project-vendor
+cd project-private
 
 # Work privately (juniors can learn here!)
 git checkout -b feature/new-thing
