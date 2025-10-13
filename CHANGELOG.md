@@ -1,5 +1,14 @@
 # venfork
 
+## 0.2.0
+
+### Minor Changes
+
+- [`61a2e54`](https://github.com/cabljac/venfork/commit/61a2e5454dbb04d089898ab2837e0f247954c3f8) Thanks [@cabljac](https://github.com/cabljac)! - Performance improvements and bug fixes:
+
+  - **Faster setup**: Changed from full repository mirror to cloning only the default branch, dramatically reducing setup time for large repositories
+  - **Fixed argument parsing**: Now supports both `--org value` and `--org=value` formats for the organization flag
+
 ## 0.1.1
 
 ### Patch Changes
