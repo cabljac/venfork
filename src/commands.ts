@@ -168,22 +168,38 @@ export async function setupCommand(
 
     // Step 3: Clone upstream to temp directory
     s.start('Cloning upstream repository');
-    await $`git clone --bare ${config.upstreamUrl} ${tempDir}`;
+    await $`git clone ${config.upstreamUrl} ${tempDir}`;
     s.stop('Upstream cloned');
 
-    // Step 4: Push to private mirror repo
-    s.start('Pushing to private mirror repository');
+    // Step 4: Detect default branch from upstream
+    s.start('Detecting default branch');
+    const result = await $({
+      cwd: tempDir,
+      reject: false,
+    })`git symbolic-ref refs/remotes/origin/HEAD`;
+
+    let defaultBranch = 'main';
+    if (result.exitCode === 0) {
+      const match = result.stdout.trim().match(/refs\/remotes\/origin\/(.+)$/);
+      if (match?.[1]) {
+        defaultBranch = match[1];
+      }
+    }
+    s.stop(`Default branch: ${defaultBranch}`);
+
+    // Step 5: Push default branch to private mirror repo
+    s.start(`Pushing ${defaultBranch} to private mirror repository`);
     await $({
       cwd: tempDir,
-    })`git push --mirror git@github.com:${owner}/${config.privateMirrorName}.git`;
+    })`git push git@github.com:${owner}/${config.privateMirrorName}.git ${defaultBranch}:${defaultBranch}`;
     s.stop('Pushed to private mirror repository');
 
-    // Step 5: Clone private mirror repo locally
+    // Step 6: Clone private mirror repo locally
     s.start('Cloning private mirror repository locally');
     await $`git clone git@github.com:${owner}/${config.privateMirrorName}.git`;
     s.stop('Private mirror repository cloned');
 
-    // Step 6: Configure remotes
+    // Step 7: Configure remotes
     s.start('Configuring git remotes');
     const repoDir = config.privateMirrorName;
 
@@ -198,7 +214,7 @@ export async function setupCommand(
 
     s.stop('Git remotes configured');
 
-    // Step 7: Create and push venfork config branch
+    // Step 8: Create and push venfork config branch
     s.start('Creating venfork configuration');
     const publicForkUrl = `git@github.com:${owner}/${publicForkName}.git`;
     await createConfigBranch(repoDir, publicForkUrl, config.upstreamUrl);
