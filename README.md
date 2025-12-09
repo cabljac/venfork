@@ -509,10 +509,7 @@ Key steps:
 ## Support
 
 If you encounter any issues or have questions:
-1. Check the [Troubleshooting](#troubleshooting) section
+
+1. Ensure you have the latest version installed
 2. Open an issue on GitHub
-3. Ensure you have the latest version installed
-
 ---
-
-Built with ❤️ for teams who need private vendor workflows
