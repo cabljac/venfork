@@ -49,7 +49,7 @@
   },
   "homepage": "https://github.com/cabljac/venfork#readme",
   "dependencies": {
-    "@clack/prompts": "^0.11.0",
+    "@clack/prompts": "^1.0.0",
     "execa": "^9.6.0"
   },
   "devDependencies": {
