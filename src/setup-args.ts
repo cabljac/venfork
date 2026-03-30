@@ -17,7 +17,8 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
     const a = setupArgs[i];
     if (a === '--org') {
       const val = setupArgs[++i];
-      if (!val || val.startsWith('--')) throw new Error('--org requires a value');
+      if (!val || val.startsWith('--'))
+        throw new Error('--org requires a value');
       organization = val;
       continue;
     }
@@ -27,7 +28,8 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
     }
     if (a === '--fork-name') {
       const val = setupArgs[++i];
-      if (!val || val.startsWith('--')) throw new Error('--fork-name requires a value');
+      if (!val || val.startsWith('--'))
+        throw new Error('--fork-name requires a value');
       publicForkRepoName = val;
       continue;
     }

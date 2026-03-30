@@ -83,9 +83,9 @@ describe('parseSetupCliArgs', () => {
   });
 
   test('throws when --org has no value', () => {
-    expect(() => parseSetupCliArgs(['https://github.com/a/b', '--org'])).toThrow(
-      '--org requires a value'
-    );
+    expect(() =>
+      parseSetupCliArgs(['https://github.com/a/b', '--org'])
+    ).toThrow('--org requires a value');
   });
 
   test('throws when --fork-name has no value', () => {
