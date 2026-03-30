@@ -8,7 +8,6 @@
   },
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target node",
-    "compile": "bun build ./src/index.ts --compile --outfile ./dist/venfork",
     "dev": "bun run ./src/index.ts",
     "test": "bun test",
     "test:watch": "bun test --watch",
