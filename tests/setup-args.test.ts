@@ -81,4 +81,16 @@ describe('parseSetupCliArgs', () => {
       publicForkRepoName: undefined,
     });
   });
+
+  test('throws when --org has no value', () => {
+    expect(() => parseSetupCliArgs(['https://github.com/a/b', '--org'])).toThrow(
+      '--org requires a value'
+    );
+  });
+
+  test('throws when --fork-name has no value', () => {
+    expect(() =>
+      parseSetupCliArgs(['https://github.com/a/b', '--fork-name'])
+    ).toThrow('--fork-name requires a value');
+  });
 });
