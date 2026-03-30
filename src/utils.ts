@@ -17,7 +17,8 @@ export function normalizeGithubRepoInput(input: string): string {
     !t.includes('@') &&
     /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(t)
   ) {
-    return `git@github.com:${t}.git`;
+    const base = t.endsWith('.git') ? t.slice(0, -4) : t;
+    return `git@github.com:${base}.git`;
   }
   return t;
 }

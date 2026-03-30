@@ -44,6 +44,12 @@ describe('normalizeGithubRepoInput', () => {
   test('returns empty when empty', () => {
     expect(normalizeGithubRepoInput('')).toBe('');
   });
+
+  test('does not double .git for owner/repo.git shorthand', () => {
+    expect(normalizeGithubRepoInput('owner/repo.git')).toBe(
+      'git@github.com:owner/repo.git'
+    );
+  });
 });
 
 describe('parseRepoName', () => {
