@@ -22,7 +22,7 @@ import {
   isGitRepository,
 } from './git.js';
 import {
-  normalizeGithubRepoInput,
+  normalizeGitHubRepoInput,
   parseOwner,
   parseRepoName,
   parseRepoPath,
@@ -86,7 +86,7 @@ export async function setupCommand(
     if (!value?.trim()) {
       return 'GitHub repository is required';
     }
-    const canonical = normalizeGithubRepoInput(value);
+    const canonical = normalizeGitHubRepoInput(value);
     const repoPath = parseRepoPath(canonical);
     if (!repoPath || !/^[^/]+\/[^/]+$/.test(repoPath)) {
       return 'Use a GitHub clone URL or owner/repo (e.g. invertase/react-native-firebase)';
@@ -107,9 +107,9 @@ export async function setupCommand(
       process.exit(0);
     }
 
-    finalUpstreamUrl = normalizeGithubRepoInput(response as string);
+    finalUpstreamUrl = normalizeGitHubRepoInput(response as string);
   } else {
-    finalUpstreamUrl = normalizeGithubRepoInput(finalUpstreamUrl);
+    finalUpstreamUrl = normalizeGitHubRepoInput(finalUpstreamUrl);
   }
 
   if (!parseRepoPath(finalUpstreamUrl)) {
@@ -422,7 +422,7 @@ export async function cloneCommand(vendorRepoUrl?: string): Promise<void> {
     process.exit(1);
   }
 
-  const vendorCloneUrl = normalizeGithubRepoInput(vendorRepoUrl);
+  const vendorCloneUrl = normalizeGitHubRepoInput(vendorRepoUrl);
   if (!parseRepoPath(vendorCloneUrl)) {
     p.log.error(
       'Invalid vendor repository. Use a GitHub URL or owner/repo (e.g. invertase/project-private).'

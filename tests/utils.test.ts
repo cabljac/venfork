@@ -1,54 +1,54 @@
 import { describe, expect, test } from 'bun:test';
 import {
   DEFAULT_REPO_NAME,
-  normalizeGithubRepoInput,
+  normalizeGitHubRepoInput,
   parseOwner,
   parseRepoName,
   parseRepoPath,
 } from '../src/utils';
 
-describe('normalizeGithubRepoInput', () => {
+describe('normalizeGitHubRepoInput', () => {
   test('converts owner/repo to SSH URL with .git', () => {
-    expect(normalizeGithubRepoInput('invertase/react-native-firebase')).toBe(
+    expect(normalizeGitHubRepoInput('invertase/react-native-firebase')).toBe(
       'git@github.com:invertase/react-native-firebase.git'
     );
   });
 
   test('trims whitespace', () => {
-    expect(normalizeGithubRepoInput('  org/repo  ')).toBe(
+    expect(normalizeGitHubRepoInput('  org/repo  ')).toBe(
       'git@github.com:org/repo.git'
     );
   });
 
   test('leaves SSH github URLs unchanged', () => {
     const u = 'git@github.com:invertase/react-native-firebase.git';
-    expect(normalizeGithubRepoInput(u)).toBe(u);
+    expect(normalizeGitHubRepoInput(u)).toBe(u);
   });
 
   test('leaves SSH without .git unchanged', () => {
     const u = 'git@github.com:org/project';
-    expect(normalizeGithubRepoInput(u)).toBe(u);
+    expect(normalizeGitHubRepoInput(u)).toBe(u);
   });
 
   test('leaves HTTPS github URLs unchanged', () => {
     const u = 'https://github.com/vuejs/core.git';
-    expect(normalizeGithubRepoInput(u)).toBe(u);
+    expect(normalizeGitHubRepoInput(u)).toBe(u);
   });
 
   test('returns empty string for non-github URLs', () => {
-    expect(normalizeGithubRepoInput('https://gitlab.com/a/b.git')).toBe('');
+    expect(normalizeGitHubRepoInput('https://gitlab.com/a/b.git')).toBe('');
   });
 
   test('returns empty string for bare github.com/owner/repo without scheme', () => {
-    expect(normalizeGithubRepoInput('github.com/owner/repo')).toBe('');
+    expect(normalizeGitHubRepoInput('github.com/owner/repo')).toBe('');
   });
 
   test('returns empty when empty', () => {
-    expect(normalizeGithubRepoInput('')).toBe('');
+    expect(normalizeGitHubRepoInput('')).toBe('');
   });
 
   test('does not double .git for owner/repo.git shorthand', () => {
-    expect(normalizeGithubRepoInput('owner/repo.git')).toBe(
+    expect(normalizeGitHubRepoInput('owner/repo.git')).toBe(
       'git@github.com:owner/repo.git'
     );
   });
