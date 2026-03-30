@@ -4,7 +4,7 @@ export const DEFAULT_REPO_NAME = 'my-mirror';
  * If `input` is GitHub `owner/repo` shorthand, returns `git@github.com:owner/repo.git`.
  * Otherwise returns `input` trimmed (full SSH/HTTPS URLs are left as-is, aside from trim).
  */
-export function normalizeGithubRepoInput(input: string): string {
+export function normalizeGitHubRepoInput(input: string): string {
   const t = input.trim();
   if (!t) {
     return t;
