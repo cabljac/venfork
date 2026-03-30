@@ -1,7 +1,8 @@
 import path from "node:path";
 import { $ } from "bun";
 
-const distDir = path.join(__dirname, "dist", "targets");
+const rootDir = path.resolve(import.meta.dir, "..");
+const distDir = path.join(rootDir, "dist", "targets");
 
 await $`mkdir -p ${distDir}`;
 
@@ -14,28 +15,36 @@ const TARGETS: { bunTarget: string; platform: string }[] = [
   { bunTarget: "bun-windows-arm64", platform: "win32-arm64" },
 ];
 
+try {
+  await Promise.all(
+    TARGETS.map(async ({ bunTarget, platform }) => {
+      const outfile = path.join(distDir, `venfork-${platform}`);
+      const buildProc = Bun.spawn(
+        [
+          "bun",
+          "build",
+          "src/index.ts",
+          "--compile",
+          `--target=${bunTarget}`,
+          "--outfile",
+          outfile,
+        ],
+        { cwd: rootDir, stdout: "inherit", stderr: "inherit" },
+      );
 
-await Promise.all(
-  TARGETS.map(async ({ bunTarget, platform }) => {
-    const outfile = path.join(distDir, `venfork-${platform}`);
-    const buildProc = Bun.spawn(
-      [
-        "bun",
-        "build",
-        "src/index.ts",
-        "--compile",
-        `--target=${bunTarget}`,
-        "--outfile",
-        outfile,
-      ],
-      { cwd: __dirname, stdout: "inherit", stderr: "inherit" },
-    );
+      const buildExit = await buildProc.exited;
+      if (buildExit !== 0) {
+        throw new Error(
+          `Build failed for ${platform} (target: ${bunTarget}) with exit code ${buildExit}`,
+        );
+      }
 
-    const buildExit = await buildProc.exited;
-    if (buildExit !== 0) process.exit(buildExit ?? 1);
-
-    console.log("Built", platform);
-  })
-);
+      console.log("Built", platform);
+    }),
+  );
+} catch (error) {
+  console.error("Release build failed:", error);
+  process.exit(1);
+}
 
 console.log("Built all platforms");
