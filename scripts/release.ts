@@ -18,7 +18,12 @@ const TARGETS: { bunTarget: string; platform: string }[] = [
 try {
   await Promise.all(
     TARGETS.map(async ({ bunTarget, platform }) => {
-      const outfile = path.join(distDir, `venfork-${platform}`);
+      const outfile = path.join(
+        distDir,
+        platform.startsWith('win32-')
+          ? `venfork-${platform}.exe`
+          : `venfork-${platform}`
+      );
       const buildProc = Bun.spawn(
         [
           'bun',
