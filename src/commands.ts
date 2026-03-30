@@ -87,7 +87,8 @@ export async function setupCommand(
       return 'GitHub repository is required';
     }
     const canonical = normalizeGithubRepoInput(value);
-    if (!parseRepoPath(canonical)) {
+    const repoPath = parseRepoPath(canonical);
+    if (!repoPath || !/^[^/]+\/[^/]+$/.test(repoPath)) {
       return 'Use a GitHub clone URL or owner/repo (e.g. invertase/react-native-firebase)';
     }
     return undefined;
@@ -247,6 +248,11 @@ export async function setupCommand(
 
     let forkPreexisted = false;
     if (forkResult.exitCode !== 0) {
+      if (publicForkFullName === upstreamRepoPath && !useForkNameFlag) {
+        throw new Error(
+          `The upstream repo is already under ${owner}. Use --fork-name to give the public fork a different name.`
+        );
+      }
       const exists = await ghRepoExists(publicForkFullName);
       if (!exists) {
         throw new Error(

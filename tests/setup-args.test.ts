@@ -88,9 +88,21 @@ describe('parseSetupCliArgs', () => {
     ).toThrow('--org requires a value');
   });
 
+  test('throws when --org= is empty', () => {
+    expect(() =>
+      parseSetupCliArgs(['https://github.com/a/b', '--org='])
+    ).toThrow('--org requires a value');
+  });
+
   test('throws when --fork-name has no value', () => {
     expect(() =>
       parseSetupCliArgs(['https://github.com/a/b', '--fork-name'])
+    ).toThrow('--fork-name requires a value');
+  });
+
+  test('throws when --fork-name= is empty', () => {
+    expect(() =>
+      parseSetupCliArgs(['https://github.com/a/b', '--fork-name='])
     ).toThrow('--fork-name requires a value');
   });
 });

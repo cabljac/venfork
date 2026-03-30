@@ -23,7 +23,9 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
       continue;
     }
     if (a.startsWith('--org=')) {
-      organization = a.slice('--org='.length);
+      const val = a.slice('--org='.length);
+      if (!val) throw new Error('--org requires a value');
+      organization = val;
       continue;
     }
     if (a === '--fork-name') {
@@ -34,7 +36,9 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
       continue;
     }
     if (a.startsWith('--fork-name=')) {
-      publicForkRepoName = a.slice('--fork-name='.length);
+      const val = a.slice('--fork-name='.length);
+      if (!val) throw new Error('--fork-name requires a value');
+      publicForkRepoName = val;
       continue;
     }
     positional.push(a);
