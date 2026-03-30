@@ -1,10 +1,50 @@
 import { describe, expect, test } from 'bun:test';
 import {
   DEFAULT_REPO_NAME,
+  normalizeGithubRepoInput,
   parseOwner,
   parseRepoName,
   parseRepoPath,
 } from '../src/utils';
+
+describe('normalizeGithubRepoInput', () => {
+  test('converts owner/repo to SSH URL with .git', () => {
+    expect(normalizeGithubRepoInput('invertase/react-native-firebase')).toBe(
+      'git@github.com:invertase/react-native-firebase.git'
+    );
+  });
+
+  test('trims whitespace', () => {
+    expect(normalizeGithubRepoInput('  org/repo  ')).toBe(
+      'git@github.com:org/repo.git'
+    );
+  });
+
+  test('leaves SSH github URLs unchanged', () => {
+    const u = 'git@github.com:invertase/react-native-firebase.git';
+    expect(normalizeGithubRepoInput(u)).toBe(u);
+  });
+
+  test('leaves SSH without .git unchanged', () => {
+    const u = 'git@github.com:org/project';
+    expect(normalizeGithubRepoInput(u)).toBe(u);
+  });
+
+  test('leaves HTTPS github URLs unchanged', () => {
+    const u = 'https://github.com/vuejs/core.git';
+    expect(normalizeGithubRepoInput(u)).toBe(u);
+  });
+
+  test('does not treat non-github URLs as shorthand', () => {
+    expect(normalizeGithubRepoInput('https://gitlab.com/a/b.git')).toBe(
+      'https://gitlab.com/a/b.git'
+    );
+  });
+
+  test('returns empty when empty', () => {
+    expect(normalizeGithubRepoInput('')).toBe('');
+  });
+});
 
 describe('parseRepoName', () => {
   test('extracts repo name from SSH URL with .git', () => {

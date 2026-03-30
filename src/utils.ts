@@ -1,6 +1,28 @@
 export const DEFAULT_REPO_NAME = 'my-mirror';
 
 /**
+ * If `input` is GitHub `owner/repo` shorthand, returns `git@github.com:owner/repo.git`.
+ * Otherwise returns `input` trimmed (full SSH/HTTPS URLs are left as-is, aside from trim).
+ */
+export function normalizeGithubRepoInput(input: string): string {
+  const t = input.trim();
+  if (!t) {
+    return t;
+  }
+  if (/^https:\/\/github\.com\//i.test(t) || /^git@github\.com:/i.test(t)) {
+    return t;
+  }
+  if (
+    !t.includes('://') &&
+    !t.includes('@') &&
+    /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(t)
+  ) {
+    return `git@github.com:${t}.git`;
+  }
+  return t;
+}
+
+/**
  * Extracts repository name from a GitHub URL
  *
  * @param url - GitHub repository URL (SSH or HTTPS)

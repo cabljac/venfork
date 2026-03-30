@@ -3,6 +3,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { $ } from 'execa';
+import { parseRepoPath } from './utils.js';
 
 /**
  * Venfork configuration structure
@@ -92,10 +93,10 @@ export async function fetchVenforkConfig(
   const tempDir = path.join(os.tmpdir(), `venfork-config-read-${uniqueId}`);
 
   try {
-    // Try to clone just the config branch
+    const repoRef = parseRepoPath(repoUrl) || repoUrl;
     const cloneResult = await $({
       reject: false,
-    })`git clone --branch ${CONFIG_BRANCH} --single-branch --depth 1 ${repoUrl} ${tempDir}`;
+    })`gh repo clone ${repoRef} ${tempDir} -- --branch ${CONFIG_BRANCH} --single-branch --depth 1`;
 
     if (cloneResult.exitCode !== 0) {
       // Config branch doesn't exist

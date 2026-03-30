@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 type ExecaOptions = Record<string, unknown>;
 type MockResponse =
   | { exitCode: number; stdout: string; stderr: string }
-  | (() => Promise<unknown>);
+  | ((command: string) => Promise<unknown>);
 
 // Track execa calls for verification
 const execaCalls: Array<{ command: string; options?: ExecaOptions }> = [];
@@ -104,6 +104,7 @@ import {
   getDefaultBranch,
   getGitHubUsername,
   getRemotes,
+  ghRepoExists,
   hasRemote,
   isGitRepository,
 } from '../src/git';
@@ -141,7 +142,7 @@ describe('checkGhAuth', () => {
   });
 
   test('returns false when command throws error', async () => {
-    mockResponses.set('gh auth status', () =>
+    mockResponses.set('gh auth status', (_command: string) =>
       Promise.reject(new Error('command failed'))
     );
 
@@ -166,7 +167,7 @@ describe('getCurrentBranch', () => {
   });
 
   test('returns empty string on error', async () => {
-    mockResponses.set('git branch', () =>
+    mockResponses.set('git branch', (_command: string) =>
       Promise.reject(new Error('not a git repo'))
     );
 
@@ -215,7 +216,7 @@ describe('getGitHubUsername', () => {
   });
 
   test('returns empty string on error', async () => {
-    mockResponses.set('gh api', () =>
+    mockResponses.set('gh api', (_command: string) =>
       Promise.reject(new Error('not authenticated'))
     );
 
@@ -252,7 +253,7 @@ describe('isGitRepository', () => {
   });
 
   test('returns false on command error', async () => {
-    mockResponses.set('git rev-parse', () =>
+    mockResponses.set('git rev-parse', (_command: string) =>
       Promise.reject(new Error('command failed'))
     );
 
@@ -356,7 +357,7 @@ describe('getRemotes', () => {
   });
 
   test('returns empty object on command error', async () => {
-    mockResponses.set('git remote', () =>
+    mockResponses.set('git remote', (_command: string) =>
       Promise.reject(new Error('command failed'))
     );
 
@@ -413,7 +414,7 @@ describe('hasRemote', () => {
   });
 
   test('returns false on command error', async () => {
-    mockResponses.set('git remote get-url', () =>
+    mockResponses.set('git remote get-url', (_command: string) =>
       Promise.reject(new Error('command failed'))
     );
 
@@ -488,7 +489,9 @@ describe('getDefaultBranch', () => {
   });
 
   test('returns main as fallback on command error', async () => {
-    mockResponses.set('git', () => Promise.reject(new Error('command failed')));
+    mockResponses.set('git', (_command: string) =>
+      Promise.reject(new Error('command failed'))
+    );
 
     const result = await getDefaultBranch();
 
@@ -529,5 +532,45 @@ describe('getDefaultBranch', () => {
     const result = await getDefaultBranch();
 
     expect(result).toBe('main');
+  });
+
+  test('passes cwd to git when provided', async () => {
+    mockResponses.set('git symbolic-ref', {
+      exitCode: 0,
+      stdout: 'refs/remotes/upstream/main',
+      stderr: '',
+    });
+
+    await getDefaultBranch('upstream', '/tmp/my-private-mirror');
+
+    expect(execaCalls[0].options).toEqual(
+      expect.objectContaining({ cwd: '/tmp/my-private-mirror' })
+    );
+    expect(execaCalls[1].options).toEqual(
+      expect.objectContaining({ cwd: '/tmp/my-private-mirror' })
+    );
+  });
+});
+
+describe('ghRepoExists', () => {
+  test('returns true when gh repo view succeeds', async () => {
+    const result = await ghRepoExists('acme/existing');
+
+    expect(result).toBe(true);
+    expect(
+      execaCalls.some((c) => c.command.includes('gh repo view acme/existing'))
+    ).toBe(true);
+  });
+
+  test('returns false when gh repo view fails', async () => {
+    mockResponses.set('gh repo view acme/missing', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Not Found',
+    });
+
+    const result = await ghRepoExists('acme/missing');
+
+    expect(result).toBe(false);
   });
 });
