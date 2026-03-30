@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { rm } from 'node:fs/promises';
+import { access, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import * as p from '@clack/prompts';
@@ -17,18 +17,58 @@ import {
   getDefaultBranch,
   getGitHubUsername,
   getRemotes,
+  ghRepoExists,
   hasRemote,
   isGitRepository,
 } from './git.js';
-import { parseOwner, parseRepoName, parseRepoPath } from './utils.js';
+import {
+  normalizeGithubRepoInput,
+  parseOwner,
+  parseRepoName,
+  parseRepoPath,
+} from './utils.js';
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureVenforkRemotes(
+  cwd: string,
+  publicUrl: string,
+  upstreamUrl: string
+): Promise<void> {
+  const setOrAdd = async (name: string, fetchUrl: string) => {
+    const cur = await $({ cwd, reject: false })`git remote get-url ${name}`;
+    if (cur.exitCode === 0) {
+      const existing = cur.stdout.trim();
+      if (parseRepoPath(existing) !== parseRepoPath(fetchUrl)) {
+        await $({ cwd })`git remote set-url ${name} ${fetchUrl}`;
+      }
+    } else {
+      await $({ cwd })`git remote add ${name} ${fetchUrl}`;
+    }
+  };
+
+  await setOrAdd('public', publicUrl);
+  await setOrAdd('upstream', upstreamUrl);
+  await $({ cwd })`git remote set-url --push upstream DISABLE`;
+}
 
 /**
  * Setup command: Create private mirror and public fork
+ *
+ * @param publicForkRepoName - Optional GitHub repo name for the public fork under `owner` (see `gh repo fork --fork-name`). Defaults to the upstream repo basename. Use when the fork must differ (e.g. same org as upstream).
  */
 export async function setupCommand(
   upstreamUrl?: string,
   privateMirrorName?: string,
-  organization?: string
+  organization?: string,
+  publicForkRepoName?: string
 ): Promise<void> {
   p.intro('🔧 Venfork Setup');
 
@@ -42,15 +82,23 @@ export async function setupCommand(
   let finalUpstreamUrl = upstreamUrl;
   let finalPrivateMirrorName = privateMirrorName;
 
+  const validateUpstreamInput = (value: string): string | undefined => {
+    if (!value?.trim()) {
+      return 'GitHub repository is required';
+    }
+    const canonical = normalizeGithubRepoInput(value);
+    if (!parseRepoPath(canonical)) {
+      return 'Use a GitHub clone URL or owner/repo (e.g. invertase/react-native-firebase)';
+    }
+    return undefined;
+  };
+
   // Prompt for upstream URL only if not provided
   if (!finalUpstreamUrl) {
     const response = await p.text({
-      message: 'Upstream repository URL?',
-      placeholder: 'git@github.com:google/project.git',
-      validate: (value) => {
-        if (!value) return 'Repository URL is required';
-        if (!value.includes('github.com')) return 'Must be a GitHub URL';
-      },
+      message: 'Upstream repository URL or owner/repo?',
+      placeholder: 'invertase/react-native-firebase',
+      validate: validateUpstreamInput,
     });
 
     if (p.isCancel(response)) {
@@ -58,7 +106,17 @@ export async function setupCommand(
       process.exit(0);
     }
 
-    finalUpstreamUrl = response as string;
+    finalUpstreamUrl = normalizeGithubRepoInput(response as string);
+  } else {
+    finalUpstreamUrl = normalizeGithubRepoInput(finalUpstreamUrl);
+  }
+
+  if (!parseRepoPath(finalUpstreamUrl)) {
+    p.log.error(
+      'Invalid upstream repository. Pass a GitHub URL or owner/repo.'
+    );
+    p.outro('❌ Setup failed');
+    process.exit(1);
   }
 
   // Prompt for private mirror name only if not provided
@@ -87,6 +145,18 @@ export async function setupCommand(
     upstreamUrl: finalUpstreamUrl,
     privateMirrorName: finalPrivateMirrorName,
   };
+
+  const upstreamRepoBaseName = parseRepoName(config.upstreamUrl);
+  const forkNameFromCli = publicForkRepoName?.trim();
+  if (forkNameFromCli && !/^[a-zA-Z0-9._-]+$/.test(forkNameFromCli)) {
+    p.log.error(
+      'Invalid --fork-name: use only letters, numbers, periods, hyphens, and underscores.'
+    );
+    p.outro('❌ Setup failed');
+    process.exit(1);
+  }
+  const resolvedPublicForkName = forkNameFromCli || upstreamRepoBaseName;
+  const useForkNameFlag = resolvedPublicForkName !== upstreamRepoBaseName;
 
   const s = p.spinner();
   const username = await getGitHubUsername();
@@ -145,80 +215,159 @@ export async function setupCommand(
   process.on('SIGTERM', signalHandler);
 
   try {
-    // Step 1: Create public fork
-    s.start('Creating public fork of upstream repository');
     const upstreamRepoPath = parseRepoPath(config.upstreamUrl);
-    if (organization) {
-      await $`gh repo fork ${upstreamRepoPath} --clone=false --org ${organization}`;
-    } else {
-      await $`gh repo fork ${upstreamRepoPath} --clone=false`;
-    }
-    s.stop('Public fork created');
-
-    // Get the public fork name (same as upstream repo name)
-    const publicForkName = parseRepoName(config.upstreamUrl);
-
-    // Step 2: Create private mirror repository
-    s.start('Creating private mirror repository');
+    const publicForkName = resolvedPublicForkName;
+    const publicForkFullName = `${owner}/${publicForkName}`;
     const privateMirrorRepoName = organization
       ? `${organization}/${config.privateMirrorName}`
       : config.privateMirrorName;
-    await $`gh repo create ${privateMirrorRepoName} --private --clone=false`;
-    s.stop('Private mirror repository created');
+    const privateMirrorGhPath = organization
+      ? `${organization}/${config.privateMirrorName}`
+      : `${owner}/${config.privateMirrorName}`;
+    const privateCloneUrl = `git@github.com:${owner}/${config.privateMirrorName}.git`;
+    const publicForkUrl = `git@github.com:${owner}/${publicForkName}.git`;
 
-    // Step 3: Clone upstream to temp directory
-    s.start('Cloning upstream repository');
-    await $`git clone ${config.upstreamUrl} ${tempDir}`;
-    s.stop('Upstream cloned');
+    // Step 1: Create public fork (or accept an existing fork under this owner)
+    s.start('Creating public fork of upstream repository');
+    const forkResult = organization
+      ? useForkNameFlag
+        ? await $({
+            reject: false,
+          })`gh repo fork ${upstreamRepoPath} --clone=false --org ${organization} --fork-name ${publicForkName}`
+        : await $({
+            reject: false,
+          })`gh repo fork ${upstreamRepoPath} --clone=false --org ${organization}`
+      : useForkNameFlag
+        ? await $({
+            reject: false,
+          })`gh repo fork ${upstreamRepoPath} --clone=false --fork-name ${publicForkName}`
+        : await $({
+            reject: false,
+          })`gh repo fork ${upstreamRepoPath} --clone=false`;
 
-    // Step 4: Detect default branch from upstream
-    s.start('Detecting default branch');
-    const result = await $({
-      cwd: tempDir,
-      reject: false,
-    })`git symbolic-ref refs/remotes/origin/HEAD`;
-
-    let defaultBranch = 'main';
-    if (result.exitCode === 0) {
-      const match = result.stdout.trim().match(/refs\/remotes\/origin\/(.+)$/);
-      if (match?.[1]) {
-        defaultBranch = match[1];
+    let forkPreexisted = false;
+    if (forkResult.exitCode !== 0) {
+      const exists = await ghRepoExists(publicForkFullName);
+      if (!exists) {
+        throw new Error(
+          forkResult.stderr.trim() ||
+            forkResult.stdout.trim() ||
+            'gh repo fork failed'
+        );
       }
+      forkPreexisted = true;
+      s.stop('Public fork already exists');
+    } else {
+      s.stop('Public fork created');
     }
-    s.stop(`Default branch: ${defaultBranch}`);
 
-    // Step 5: Push default branch to private mirror repo
-    s.start(`Pushing ${defaultBranch} to private mirror repository`);
-    await $({
-      cwd: tempDir,
-    })`git push git@github.com:${owner}/${config.privateMirrorName}.git ${defaultBranch}:${defaultBranch}`;
-    s.stop('Pushed to private mirror repository');
+    // Step 2: Create private mirror (or accept an existing repo)
+    s.start('Creating private mirror repository');
+    const createResult = await $({
+      reject: false,
+    })`gh repo create ${privateMirrorRepoName} --private --clone=false`;
 
-    // Step 6: Clone private mirror repo locally
-    s.start('Cloning private mirror repository locally');
-    await $`git clone git@github.com:${owner}/${config.privateMirrorName}.git`;
-    s.stop('Private mirror repository cloned');
+    let mirrorPreexisted = false;
+    if (createResult.exitCode !== 0) {
+      const exists = await ghRepoExists(privateMirrorGhPath);
+      if (!exists) {
+        throw new Error(
+          createResult.stderr.trim() ||
+            createResult.stdout.trim() ||
+            'gh repo create failed'
+        );
+      }
+      mirrorPreexisted = true;
+      s.stop('Private mirror already exists');
+    } else {
+      s.stop('Private mirror repository created');
+    }
+
+    const needsInitialPopulate = !mirrorPreexisted;
+
+    // Steps 3–5: Seed a brand-new private mirror from upstream
+    if (needsInitialPopulate) {
+      s.start('Cloning upstream repository');
+      await $`gh repo clone ${upstreamRepoPath} ${tempDir}`;
+      s.stop('Upstream cloned');
+
+      s.start('Detecting default branch');
+      const result = await $({
+        cwd: tempDir,
+        reject: false,
+      })`git symbolic-ref refs/remotes/origin/HEAD`;
+
+      let defaultBranch = 'main';
+      if (result.exitCode === 0) {
+        const match = result.stdout
+          .trim()
+          .match(/refs\/remotes\/origin\/(.+)$/);
+        if (match?.[1]) {
+          defaultBranch = match[1];
+        }
+      }
+      s.stop(`Default branch: ${defaultBranch}`);
+
+      s.start(`Pushing ${defaultBranch} to private mirror repository`);
+      await $({
+        cwd: tempDir,
+      })`git push ${privateCloneUrl} ${defaultBranch}:${defaultBranch}`;
+      s.stop('Pushed to private mirror repository');
+    }
+
+    // Step 6: Local clone of the private mirror
+    const repoDir = config.privateMirrorName;
+    s.start('Preparing local private mirror clone');
+    if (await pathExists(repoDir)) {
+      const inGit = await $({
+        cwd: repoDir,
+        reject: false,
+      })`git rev-parse --git-dir`;
+      if (inGit.exitCode !== 0) {
+        throw new Error(
+          `Directory '${repoDir}' already exists and is not a git repository`
+        );
+      }
+      const originResult = await $({
+        cwd: repoDir,
+        reject: false,
+      })`git remote get-url origin`;
+      if (originResult.exitCode !== 0) {
+        throw new Error(
+          `Directory '${repoDir}' exists but has no origin remote configured`
+        );
+      }
+      const existingPath = parseRepoPath(originResult.stdout.trim());
+      const expectedPath = parseRepoPath(privateCloneUrl);
+      if (existingPath !== expectedPath) {
+        throw new Error(
+          `Directory '${repoDir}' exists with origin ${originResult.stdout.trim()}, expected ${privateCloneUrl}`
+        );
+      }
+      s.stop('Using existing local clone');
+    } else {
+      await $`gh repo clone ${privateMirrorGhPath} ${repoDir}`;
+      s.stop('Private mirror repository cloned');
+    }
 
     // Step 7: Configure remotes
     s.start('Configuring git remotes');
-    const repoDir = config.privateMirrorName;
-
-    // Add public fork remote
-    await $({
-      cwd: repoDir,
-    })`git remote add public git@github.com:${owner}/${publicForkName}.git`;
-
-    // Add upstream remote (with push disabled)
-    await $({ cwd: repoDir })`git remote add upstream ${config.upstreamUrl}`;
-    await $({ cwd: repoDir })`git remote set-url --push upstream DISABLE`;
-
+    await ensureVenforkRemotes(repoDir, publicForkUrl, config.upstreamUrl);
     s.stop('Git remotes configured');
 
-    // Step 8: Create and push venfork config branch
+    // Step 8: Venfork config branch
     s.start('Creating venfork configuration');
-    const publicForkUrl = `git@github.com:${owner}/${publicForkName}.git`;
     await createConfigBranch(repoDir, publicForkUrl, config.upstreamUrl);
     s.stop('Venfork configuration created');
+
+    const recovered = forkPreexisted || mirrorPreexisted;
+    if (recovered) {
+      p.log.info(
+        'Repos already existed on GitHub; syncing default branch from upstream into this clone'
+      );
+      const repoAbs = path.resolve(repoDir);
+      await syncCommand(undefined, { cwd: repoAbs, quiet: true });
+    }
 
     // Show remote configuration
     const remotesOutput = await $({ cwd: repoDir })`git remote -v`;
@@ -227,10 +376,10 @@ export async function setupCommand(
     p.note(remotesText.trim(), 'Git Remote Configuration');
 
     p.note(
-      `Private Mirror: https://github.com/${owner}/${config.privateMirrorName} (for internal work)
-Public Fork: https://github.com/${owner}/${publicForkName} (for staging to upstream)
+      `Private Mirror: https://github.com/${privateMirrorGhPath} (for internal work)
+Public Fork: https://github.com/${publicForkFullName} (for staging to upstream)
 Upstream: ${config.upstreamUrl} (read-only)`,
-      'Repositories Created'
+      recovered ? 'Repositories (existing)' : 'Repositories Created'
     );
 
     p.outro(
@@ -261,8 +410,17 @@ export async function cloneCommand(vendorRepoUrl?: string): Promise<void> {
   p.intro('🔧 Venfork Clone');
 
   // Validate vendor repo URL provided
-  if (!vendorRepoUrl) {
+  if (!vendorRepoUrl?.trim()) {
     p.log.error('Vendor repository URL is required');
+    p.outro('❌ Clone failed');
+    process.exit(1);
+  }
+
+  const vendorCloneUrl = normalizeGithubRepoInput(vendorRepoUrl);
+  if (!parseRepoPath(vendorCloneUrl)) {
+    p.log.error(
+      'Invalid vendor repository. Use a GitHub URL or owner/repo (e.g. invertase/project-private).'
+    );
     p.outro('❌ Clone failed');
     process.exit(1);
   }
@@ -277,8 +435,8 @@ export async function cloneCommand(vendorRepoUrl?: string): Promise<void> {
 
   try {
     // Parse vendor repo details
-    const vendorRepoName = parseRepoName(vendorRepoUrl);
-    const owner = parseOwner(vendorRepoUrl);
+    const vendorRepoName = parseRepoName(vendorCloneUrl);
+    const owner = parseOwner(vendorCloneUrl);
 
     if (!owner || !vendorRepoName) {
       throw new Error('Invalid vendor repository URL');
@@ -294,14 +452,15 @@ export async function cloneCommand(vendorRepoUrl?: string): Promise<void> {
       // Directory doesn't exist, good to proceed
     }
 
-    // Step 2: Clone vendor repository
+    // Step 2: Clone vendor repository (gh respects git_protocol and accepts owner/repo)
+    const vendorGhPath = parseRepoPath(vendorCloneUrl);
     s.start('Cloning vendor repository');
-    await $`git clone ${vendorRepoUrl}`;
+    await $`gh repo clone ${vendorGhPath} ${vendorRepoName}`;
     s.stop('Vendor repository cloned');
 
     // Step 3: Try to fetch venfork config
     s.start('Fetching venfork configuration');
-    const config = await fetchVenforkConfig(vendorRepoUrl);
+    const config = await fetchVenforkConfig(vendorCloneUrl);
 
     let publicForkUrl: string;
     let upstreamUrl: string;
@@ -433,29 +592,39 @@ export async function cloneCommand(vendorRepoUrl?: string): Promise<void> {
 /**
  * Sync command: Update default branches of origin and public to match upstream
  */
-export async function syncCommand(targetBranch?: string): Promise<void> {
-  p.intro('🔄 Venfork Sync');
+export async function syncCommand(
+  targetBranch?: string,
+  options?: { cwd?: string; quiet?: boolean }
+): Promise<void> {
+  const cwdOpt = options?.cwd ? { cwd: options.cwd } : {};
+  const quiet = options?.quiet ?? false;
+
+  if (!quiet) {
+    p.intro('🔄 Venfork Sync');
+  }
 
   const s = p.spinner();
 
   try {
     // Step 1: Fetch from upstream
     s.start('Fetching from upstream');
-    await $`git fetch upstream`;
-    await $`git fetch origin`;
-    await $`git fetch public`;
+    await $(cwdOpt)`git fetch upstream`;
+    await $(cwdOpt)`git fetch origin`;
+    await $(cwdOpt)`git fetch public`;
     s.stop('Fetched from all remotes');
 
     // Step 2: Detect default branch if not specified
-    const defaultBranch = targetBranch || (await getDefaultBranch('upstream'));
+    const defaultBranch =
+      targetBranch || (await getDefaultBranch('upstream', options?.cwd));
 
     // Step 3: Check for divergence
     s.start('Checking for divergent commits');
 
     const checkDivergence = async (remote: string): Promise<number> => {
       try {
-        const result =
-          await $`git rev-list --count upstream/${defaultBranch}..${remote}/${defaultBranch}`;
+        const result = await $({
+          ...cwdOpt,
+        })`git rev-list --count upstream/${defaultBranch}..${remote}/${defaultBranch}`;
         return Number.parseInt(result.stdout.trim(), 10);
       } catch {
         // Remote branch might not exist yet (first sync)
@@ -494,25 +663,35 @@ To force sync anyway: git push origin upstream/${defaultBranch}:${defaultBranch}
         '⚠️  Warning'
       );
 
-      p.outro('❌ Sync aborted to prevent data loss');
+      if (!quiet) {
+        p.outro('❌ Sync aborted to prevent data loss');
+      }
       process.exit(1);
     }
 
     // Step 5: Push upstream default branch to origin and public
     s.start(`Syncing ${defaultBranch} to origin and public`);
 
-    await $`git push origin upstream/${defaultBranch}:${defaultBranch} --force`;
-    await $`git push public upstream/${defaultBranch}:${defaultBranch} --force`;
+    await $(
+      cwdOpt
+    )`git push origin upstream/${defaultBranch}:${defaultBranch} --force`;
+    await $(
+      cwdOpt
+    )`git push public upstream/${defaultBranch}:${defaultBranch} --force`;
 
     s.stop('Synced to all remotes');
 
-    p.outro(
-      `✨ Sync complete! origin/${defaultBranch} and public/${defaultBranch} are now up to date with upstream/${defaultBranch}`
-    );
+    if (!quiet) {
+      p.outro(
+        `✨ Sync complete! origin/${defaultBranch} and public/${defaultBranch} are now up to date with upstream/${defaultBranch}`
+      );
+    }
   } catch (error) {
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
-    p.outro('❌ Sync failed');
+    if (!quiet) {
+      p.outro('❌ Sync failed');
+    }
     process.exit(1);
   }
 }
@@ -677,7 +856,7 @@ export async function statusCommand(): Promise<void> {
     if (!hasUpstream) missingRemotes.push('upstream');
 
     p.note(
-      `Run venfork setup <upstream-url> to configure:\n  ${missingRemotes.join(', ')}`,
+      `Run venfork setup <upstream> to configure:\n  ${missingRemotes.join(', ')}`,
       'Next Steps'
     );
     p.outro('⚠️  Setup incomplete');
@@ -691,19 +870,23 @@ export function showHelp(): void {
   p.intro('🔧 Venfork - Private Repository Mirrors for Vendor Development');
 
   p.note(
-    `venfork setup <upstream-url> [name] [--org <organization>]
+    `venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>]
   Create private mirror + public fork for vendor workflow
+  <upstream>: GitHub HTTPS/SSH URL, or shorthand owner/repo (e.g. facebook/react)
 
   Options:
-  • --org <name>  Create repos under organization instead of user account
+  • --org <name>       Create repos under organization instead of user account
+  • --fork-name <name> Public fork repo name under owner (gh repo fork --fork-name).
+                       Use when upstream is already owner/repo so the fork needs a different name.
 
   Creates:
   • Private mirror (yourname/project-private) - internal work
   • Public fork (yourname/project) - staging for upstream
   • Configures remotes: origin, public, upstream
 
-venfork clone <vendor-repo-url>
+venfork clone <vendor-repo>
   Clone an existing vendor setup and configure remotes automatically
+  <vendor-repo>: URL or owner/repo for the private mirror
 
   Auto-detects:
   • Public fork (strips -private suffix)
@@ -727,9 +910,14 @@ venfork stage <branch>
   p.note(
     `# One-time setup
 venfork setup git@github.com:awesome/project.git
+# or shorthand:
+venfork setup awesome/project
 
 # Or for organization repos:
 venfork setup git@github.com:awesome/project.git --org my-company
+
+# Same org as upstream: give the public fork a different repo name
+venfork setup my-org/lib.git my-org-lib-private --org my-org --fork-name lib-public
 
 cd project-private
 

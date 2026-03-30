@@ -13,7 +13,7 @@ interface RmCall {
 type SignalHandler = () => void | Promise<void>;
 type MockResponse =
   | { exitCode: number; stdout: string; stderr: string }
-  | (() => Promise<unknown>);
+  | ((command: string) => Promise<unknown>);
 
 // Track calls to our mocks
 const execaCalls: string[] = [];
@@ -307,6 +307,25 @@ describe('setupCommand - execution tests', () => {
     expect(gitCommands.length).toBeGreaterThanOrEqual(1);
   });
 
+  test('accepts owner/repo shorthand for upstream', async () => {
+    try {
+      await setupCommand('test/repo', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    expect(
+      execaCalls.some(
+        (c) => c.includes('gh repo fork') && c.includes('test/repo')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some(
+        (c) => c.includes('gh repo clone') && c.includes('test/repo')
+      )
+    ).toBe(true);
+  });
+
   test('cleanup called in finally block', async () => {
     try {
       await setupCommand('git@github.com:test/repo.git', 'test-vendor');
@@ -316,6 +335,62 @@ describe('setupCommand - execution tests', () => {
 
     // rm should have been called (from finally block)
     expect(rmCalls.length).toBeGreaterThan(0);
+  });
+});
+
+describe('setupCommand - idempotent recovery', () => {
+  test('skips upstream seed clone and runs sync when private mirror already exists on GitHub', async () => {
+    mockResponses.set('gh repo create', {
+      exitCode: 1,
+      stderr: 'name already exists on this account',
+      stdout: '',
+    });
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // process.exit if a nested command fails unexpectedly
+    }
+
+    const cloneCalls = execaCalls.filter((c) => c.includes('gh repo clone'));
+    expect(cloneCalls.length).toBe(1);
+    expect(cloneCalls[0]).toContain('test-vendor');
+    expect(execaCalls.some((c) => c.includes('git fetch upstream'))).toBe(true);
+  });
+
+  test('still seeds new private mirror and runs sync when public fork already exists', async () => {
+    mockResponses.set('gh repo fork', {
+      exitCode: 1,
+      stderr: 'already forked',
+      stdout: '',
+    });
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // ignore
+    }
+
+    const cloneCalls = execaCalls.filter((c) => c.includes('gh repo clone'));
+    expect(cloneCalls.length).toBe(2);
+    expect(cloneCalls.some((c) => c.includes('test/repo'))).toBe(true);
+    expect(cloneCalls.some((c) => c.includes('test-vendor'))).toBe(true);
+    expect(execaCalls.some((c) => c.includes('git fetch upstream'))).toBe(true);
+  });
+
+  test('fails when private mirror create fails and repo is not found on GitHub', async () => {
+    mockResponses.set('gh repo create', {
+      exitCode: 1,
+      stderr: 'GraphQL: error',
+      stdout: '',
+    });
+    mockResponses.set('gh repo view testuser/test-vendor', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'HTTP 404: Not Found',
+    });
+
+    await expect(
+      setupCommand('git@github.com:test/repo.git', 'test-vendor')
+    ).rejects.toThrow('process.exit called');
   });
 });
 
@@ -502,6 +577,29 @@ describe('setupCommand - organization tests', () => {
     expect(createCalls[0]).toContain('my-org/test-vendor');
   });
 
+  test('passes --fork-name to gh repo fork and uses it for public remote', async () => {
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        'my-org',
+        'repo-staging'
+      );
+    } catch {
+      // Expected
+    }
+
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls[0]).toContain('--fork-name repo-staging');
+    expect(forkCalls[0]).toContain('--org my-org');
+    expect(
+      execaCalls.some(
+        (cmd) => cmd.includes('git remote') && cmd.includes('repo-staging')
+      )
+    ).toBe(true);
+  });
+
   test('uses organization in git URLs when specified', async () => {
     try {
       await setupCommand(
@@ -514,9 +612,12 @@ describe('setupCommand - organization tests', () => {
     }
 
     // Should use org in clone and remote URLs
-    const cloneCalls = execaCalls.filter((cmd) => cmd.includes('git clone'));
-    const remoteCalls = execaCalls.filter((cmd) =>
-      cmd.includes('git remote add')
+    const cloneCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo clone')
+    );
+    const remoteCalls = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('git remote add') || cmd.includes('git remote set-url')
     );
 
     expect(cloneCalls.some((cmd) => cmd.includes('my-org/test-vendor'))).toBe(
@@ -538,7 +639,9 @@ describe('setupCommand - organization tests', () => {
     expect(forkCalls[0]).not.toContain('--org');
 
     // Should use testuser (from mock) in URLs
-    const cloneCalls = execaCalls.filter((cmd) => cmd.includes('git clone'));
+    const cloneCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo clone')
+    );
     expect(cloneCalls.some((cmd) => cmd.includes('testuser/test-vendor'))).toBe(
       true
     );
@@ -567,7 +670,9 @@ describe('setupCommand - VENFORK_ORG environment variable', () => {
     expect(forkCalls[0]).toContain('--org env-org');
 
     // Should use env-org in URLs
-    const cloneCalls = execaCalls.filter((cmd) => cmd.includes('git clone'));
+    const cloneCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo clone')
+    );
     expect(cloneCalls.some((cmd) => cmd.includes('env-org/test-vendor'))).toBe(
       true
     );
@@ -593,7 +698,9 @@ describe('setupCommand - VENFORK_ORG environment variable', () => {
     expect(forkCalls[0]).not.toContain('env-org');
 
     // Should use flag-org in URLs
-    const cloneCalls = execaCalls.filter((cmd) => cmd.includes('git clone'));
+    const cloneCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo clone')
+    );
     expect(cloneCalls.some((cmd) => cmd.includes('flag-org/test-vendor'))).toBe(
       true
     );
@@ -612,7 +719,9 @@ describe('setupCommand - VENFORK_ORG environment variable', () => {
     }
 
     // Should use testuser (after confirmation)
-    const cloneCalls = execaCalls.filter((cmd) => cmd.includes('git clone'));
+    const cloneCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo clone')
+    );
     expect(cloneCalls.some((cmd) => cmd.includes('testuser/test-vendor'))).toBe(
       true
     );
@@ -660,7 +769,7 @@ describe('setupCommand - error paths', () => {
 
   test('handles error in catch block', async () => {
     // Make fork command fail instead of hanging
-    mockResponses.set('gh repo fork', () =>
+    mockResponses.set('gh repo fork', (_command: string) =>
       Promise.reject(new Error('Fork failed'))
     );
 
@@ -697,8 +806,10 @@ describe('cloneCommand', () => {
       // Expected
     }
 
-    // Should clone the repo
-    const cloneCalls = execaCalls.filter((cmd) => cmd.includes('git clone'));
+    // Should clone the repo via gh (owner/repo + target dir)
+    const cloneCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo clone')
+    );
     expect(cloneCalls.length).toBeGreaterThan(0);
     expect(cloneCalls[0]).toContain('acme/project-private');
   });
@@ -795,7 +906,7 @@ describe('syncCommand - error paths', () => {
   });
 
   test('handles fetch errors', async () => {
-    mockResponses.set('git fetch', () =>
+    mockResponses.set('git fetch', (_command: string) =>
       Promise.reject(new Error('Fetch failed'))
     );
 
@@ -809,7 +920,7 @@ describe('syncCommand - error paths', () => {
   });
 
   test('handles push errors', async () => {
-    mockResponses.set('git push', () =>
+    mockResponses.set('git push', (_command: string) =>
       Promise.reject(new Error('Push failed'))
     );
 

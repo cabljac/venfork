@@ -45,7 +45,8 @@ Before using Venfork, ensure you have:
   # Authenticate
   gh auth login
   ```
-- **Git** configured with SSH keys for GitHub
+- **Git** installed locally (used after clone for branches, remotes, and pushes)
+- **Clone URLs:** Venfork uses **`gh repo clone`** for fetching repositories, so transport (SSH vs HTTPS) follows your GitHub CLI config (`gh config get git_protocol`). SSH keys or HTTPS credentials are still required for Git operations such as **`git push`**.
 
 ## Installation
 
@@ -65,9 +66,13 @@ npx venfork setup <repo-url>
 ```bash
 # 1a. One-time setup (first team member, personal account)
 venfork setup git@github.com:awesome/project.git
+# or: venfork setup awesome/project
 
 # Or for organization repos
 venfork setup git@github.com:awesome/project.git --org my-company
+
+# The same setup command is safe to re-run when the GitHub repos already exist
+# (see "Re-running setup" under venfork setup — repairs remotes, config, and syncs).
 
 # 1b. Clone existing setup (other team members)
 venfork clone git@github.com:yourname/project-private.git
@@ -88,13 +93,17 @@ venfork stage feature/new-thing
 
 ## Commands
 
-### `venfork setup <upstream-url> [name] [--org <organization>]`
+### `venfork setup <upstream> [name] [--org <organization>] [--fork-name <repo>]`
 
 Creates the complete vendor workflow setup:
 
+**`<upstream>`** may be a full GitHub clone URL (SSH or HTTPS) or **shorthand** `owner/repo` (e.g. `invertase/react-native-firebase`), which is treated like `git@github.com:owner/repo.git`.
+
+**`--fork-name`** sets the **public fork’s repository name** under your chosen owner/org (passed through to `gh repo fork --fork-name`). Use this when **upstream already lives under the same org** you pass to `--org`: GitHub cannot create a second repo with the same name, so the fork must use a different name (e.g. `my-lib-public` while upstream is `my-lib`).
+
 **What it creates:**
 - **Private mirror** (`yourname/project-private` or `org/project-private`) - For internal work
-- **Public fork** (`yourname/project` or `org/project`) - For staging to upstream
+- **Public fork** (`yourname/project` or `org/project`, or the name from **`--fork-name`**) - For staging to upstream
 - **Config branch** (`venfork-config`) - Stores remote URLs for easy team cloning
 - **Local clone** with three remotes configured:
   - `origin` → private mirror (default push/pull)
@@ -102,14 +111,17 @@ Creates the complete vendor workflow setup:
   - `upstream` → original repo (read-only, push disabled)
 
 **Arguments:**
-- `upstream-url` - GitHub repository URL (SSH or HTTPS)
+- `upstream` - GitHub repository URL (SSH or HTTPS), or shorthand `owner/repo`
 - `name` - (Optional) Name for private mirror repo (default: `{repo}-private`)
 - `--org <organization>` - (Optional) Create repos under organization instead of personal account
+- `--fork-name <repo>` - (Optional) Public fork repo name under that org/user (default: same basename as upstream)
 
 **Examples:**
 ```bash
 # Personal account (default)
 venfork setup git@github.com:vercel/next.js.git
+# Shorthand (same as git@github.com:vercel/next.js.git)
+venfork setup vercel/next.js
 # Creates: yourname/next.js-private (private), yourname/next.js (public fork)
 
 venfork setup https://github.com/vuejs/vue.git vue-internal
@@ -121,11 +133,27 @@ venfork setup git@github.com:client/awesome-project.git --org acme-corp
 
 venfork setup git@github.com:client/project.git internal-mirror --org my-company
 # Creates: my-company/internal-mirror (private), my-company/project (public fork)
+
+# Upstream is already my-org/foo — fork under my-org with a different public repo name
+venfork setup my-org/foo my-foo-private --org my-org --fork-name foo-public
+# Creates: my-org/my-foo-private (private), my-org/foo-public (public fork), upstream = my-org/foo
 ```
 
-### `venfork clone <vendor-repo-url>`
+**Re-running setup (repos already on GitHub):** Run the same command again if you need a fresh local clone, remote fixes, or an updated `venfork-config` branch. Venfork uses `gh repo view` to detect a public fork or private mirror that already exists when `gh repo fork` or `gh repo create` fails, then:
+
+- Skips seeding a **new** private mirror from upstream (no duplicate initial push).
+- Clones the private mirror into `./<private-mirror-name>`, or **reuses** that directory if it is already a git repo whose `origin` points at the expected mirror URL.
+- Ensures `public` and `upstream` remotes exist and point at the right URLs (adds or corrects them).
+- Pushes the `venfork-config` branch again so teammates get current URLs.
+- If **either** GitHub repo was already present, runs **`venfork sync` inside that clone** so default branches on `origin` and `public` match `upstream` (subject to the usual divergence safeguards).
+
+Pure failures (for example name taken by a **different** repo) still abort setup. If recovery sync stops due to divergent default branches, fix or move those commits, then run **`venfork sync`** again from inside the private mirror.
+
+### `venfork clone <vendor-repo>`
 
 Clone an existing vendor setup and automatically configure all remotes.
+
+**`<vendor-repo>`** is the private mirror: full GitHub URL or shorthand `owner/repo`.
 
 **What it does:**
 - Clones the private mirror repository
@@ -142,12 +170,13 @@ Clone an existing vendor setup and automatically configure all remotes.
 - You want automatic remote configuration
 
 **Arguments:**
-- `vendor-repo-url` - GitHub URL of the private vendor repository (SSH or HTTPS)
+- `vendor-repo` - GitHub URL or `owner/repo` of the private vendor repository
 
 **Examples:**
 ```bash
 # Clone existing vendor setup (personal account)
 venfork clone git@github.com:yourname/project-private.git
+venfork clone yourname/project-private
 # Reads config from venfork-config branch (if available)
 # Or auto-detects: public fork at yourname/project
 
@@ -164,6 +193,8 @@ venfork clone git@github.com:acme-corp/awesome-project-private.git
 ### `venfork sync [branch]`
 
 Update the default branches of your private mirror and public fork to match upstream.
+
+Normally you run this from your private mirror directory (or any subfolder of that repo). The same behavior is also used internally when **`venfork setup`** completes in recovery mode (existing GitHub repos), using the new clone’s path automatically.
 
 **Arguments:**
 - `branch` - (Optional) Upstream branch to sync (default: auto-detected, usually `main` or `master`)
@@ -414,9 +445,9 @@ Make sure you're inside the cloned vendor repository directory. Run `venfork sta
 
 ### "Remote not found" (origin/public/upstream)
 
-This means `venfork setup` wasn't run or didn't complete successfully.
+This usually means setup never finished for this clone, or the clone is not the private mirror.
 - Run `venfork status` to see which remotes are missing
-- Re-run `venfork setup` if needed
+- Re-run **`venfork setup <same-upstream-url>`** from an empty parent directory (or a directory where the private mirror folder doesn’t conflict) so remotes and config can be repaired, or use **`venfork clone`** on the private mirror URL instead
 
 ### Divergent Commits Warning
 

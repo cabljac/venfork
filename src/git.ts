@@ -110,22 +110,36 @@ export async function hasRemote(name: string): Promise<boolean> {
 }
 
 /**
+ * Returns true if GitHub repo `owner/name` exists and is visible to the authenticated `gh` user.
+ */
+export async function ghRepoExists(fullName: string): Promise<boolean> {
+  const result = await $({ reject: false })`gh repo view ${fullName}`;
+  return result.exitCode === 0;
+}
+
+/**
  * Gets the default branch for a remote
  *
  * @param remote - Remote name (default: 'upstream')
+ * @param cwd - Optional working directory (must be a git repo with that remote)
  * @returns Default branch name (e.g., 'main', 'master', 'develop')
  *
  * @example
  * await getDefaultBranch('upstream') // "main"
  * await getDefaultBranch('origin') // "master"
  */
-export async function getDefaultBranch(remote = 'upstream'): Promise<string> {
+export async function getDefaultBranch(
+  remote = 'upstream',
+  cwd?: string
+): Promise<string> {
+  const cwdOpt = cwd ? { cwd } : {};
   try {
     // First, try to update the remote HEAD to detect the default branch
-    await $({ reject: false })`git remote set-head ${remote} -a`;
+    await $({ ...cwdOpt, reject: false })`git remote set-head ${remote} -a`;
 
     // Get the symbolic ref for the remote HEAD
     const result = await $({
+      ...cwdOpt,
       reject: false,
     })`git symbolic-ref refs/remotes/${remote}/HEAD`;
 
