@@ -20,7 +20,9 @@ export function normalizeGithubRepoInput(input: string): string {
     const base = t.endsWith('.git') ? t.slice(0, -4) : t;
     return `git@github.com:${base}.git`;
   }
-  return t;
+  // Return empty string for unrecognised formats (e.g. bare github.com/owner/repo)
+  // so callers can treat the result as invalid.
+  return '';
 }
 
 /**

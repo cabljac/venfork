@@ -35,10 +35,12 @@ describe('normalizeGithubRepoInput', () => {
     expect(normalizeGithubRepoInput(u)).toBe(u);
   });
 
-  test('does not treat non-github URLs as shorthand', () => {
-    expect(normalizeGithubRepoInput('https://gitlab.com/a/b.git')).toBe(
-      'https://gitlab.com/a/b.git'
-    );
+  test('returns empty string for non-github URLs', () => {
+    expect(normalizeGithubRepoInput('https://gitlab.com/a/b.git')).toBe('');
+  });
+
+  test('returns empty string for bare github.com/owner/repo without scheme', () => {
+    expect(normalizeGithubRepoInput('github.com/owner/repo')).toBe('');
   });
 
   test('returns empty when empty', () => {
