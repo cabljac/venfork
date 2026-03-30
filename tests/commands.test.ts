@@ -132,12 +132,13 @@ function getMockExecaResponse(command: string) {
   return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
 }
 
-// Mock fs.rm BEFORE any imports
+// Mock fs.rm and fs.access BEFORE any imports
 mock.module('node:fs/promises', () => ({
   rm: mock((path: string, options: { recursive: boolean; force: boolean }) => {
     rmCalls.push({ path, options });
     return Promise.resolve();
   }),
+  access: mock(() => Promise.reject(new Error('ENOENT'))),
 }));
 
 // Mock prompts BEFORE any imports
