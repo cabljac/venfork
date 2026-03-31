@@ -209,7 +209,8 @@ venfork sync develop   # Sync develop branch with upstream/develop
 1. Fetches latest changes from all remotes (upstream, origin, public)
 2. Checks for divergent commits (warns if found to prevent data loss)
 3. Force pushes upstream's default branch to origin and public
-4. **Does not affect your current working branch or feature branches**
+4. If scheduled sync workflow is enabled, re-applies one deterministic top commit for `.github/workflows/sync.yml`
+5. **Does not affect your current working branch or feature branches**
 
 **Important:**
 - This keeps your default branches (main/master) in sync with upstream
@@ -255,8 +256,9 @@ venfork stage bugfix/issue-123
 **What it does:**
 1. Verifies branch exists
 2. Shows staging details and confirmation
-3. Pushes to public fork
-4. Provides PR creation link
+3. Rebuilds branch history on top of upstream while removing internal workflow commits
+4. Pushes sanitized history to public fork
+5. Provides PR creation link
 
 ## Environment Variables
 
