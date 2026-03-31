@@ -4,7 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
-import { createConfigBranch, fetchVenforkConfig } from './config.js';
+import {
+  createConfigBranch,
+  fetchVenforkConfig,
+  readVenforkConfigFromRepo,
+  updateVenforkConfig,
+} from './config.js';
 import {
   AuthenticationError,
   BranchNotFoundError,
@@ -27,6 +32,7 @@ import {
   parseRepoName,
   parseRepoPath,
 } from './utils.js';
+import { generateSyncWorkflow, getSyncWorkflowPath } from './workflow.js';
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -37,31 +43,9 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-const SYNC_WORKFLOW_PATH = '.github/workflows/sync.yml';
+const SYNC_WORKFLOW_PATH = getSyncWorkflowPath();
 const WORKFLOW_COMMIT_MESSAGE =
   'chore: add/update scheduled sync workflow (venfork)';
-
-// Keep this workflow body deterministic so the "+1 commit" is stable and easy to detect.
-const SYNC_WORKFLOW_CONTENT = `name: Venfork Sync
-on:
-  schedule:
-    - cron: '0 * * * *'
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-jobs:
-  sync:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout mirror
-        uses: actions/checkout@v4
-      - name: Install venfork
-        run: npm install -g venfork
-      - name: Sync from upstream
-        run: venfork sync
-`;
 
 async function commitSubject(
   ref: string,
@@ -109,42 +93,48 @@ async function isWorkflowCommit(ref: string, cwd?: string): Promise<boolean> {
   return commitTouchesWorkflowPath(ref, cwd);
 }
 
-async function hasWorkflowAtRef(ref: string, cwd?: string): Promise<boolean> {
-  const cwdOpt = cwd ? { cwd } : {};
-  const result = await $({
-    ...cwdOpt,
-    reject: false,
-  })`git show ${ref}:${SYNC_WORKFLOW_PATH}`;
-  return result.exitCode === 0;
-}
-
-async function shouldKeepScheduledWorkflowCommit(
-  defaultBranch: string,
-  cwd?: string
-): Promise<boolean> {
-  // Preserve scheduling whenever any synced default branch currently carries
-  // the internal workflow marker (message or workflow file presence).
-  const refs = [`origin/${defaultBranch}`, `public/${defaultBranch}`];
-
-  for (const ref of refs) {
-    if (
-      (await isWorkflowCommit(ref, cwd)) ||
-      (await hasWorkflowAtRef(ref, cwd))
-    ) {
+function isValidCronExpression(cron: string): boolean {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    return false;
+  }
+  return parts.every((part) => {
+    if (part === '*') {
       return true;
     }
-  }
-  return false;
+    if (/^\d+$/.test(part)) {
+      return true;
+    }
+    if (/^\*\/\d+$/.test(part)) {
+      return true;
+    }
+    if (/^\d+-\d+$/.test(part)) {
+      return true;
+    }
+    if (/^\d+(,\d+)+$/.test(part)) {
+      return true;
+    }
+    return false;
+  });
+}
+
+async function isScheduleEnabled(cwd?: string): Promise<boolean> {
+  const repoDir = cwd ?? process.cwd();
+  const config = await readVenforkConfigFromRepo(repoDir);
+  return Boolean(config?.schedule?.enabled);
 }
 
 async function applyScheduledWorkflowCommit(
   defaultBranch: string,
+  cron: string,
   cwd?: string
 ): Promise<void> {
   const repoDir = cwd ?? process.cwd();
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-sync-'));
 
   try {
+    // Re-stamp from upstream so the private mirror default branch is always
+    // `upstream + exactly one deterministic internal workflow commit`.
     await $({
       cwd: repoDir,
     })`git worktree add --detach ${tempDir} upstream/${defaultBranch}`;
@@ -153,7 +143,7 @@ async function applyScheduledWorkflowCommit(
     });
     await writeFile(
       path.join(tempDir, SYNC_WORKFLOW_PATH),
-      SYNC_WORKFLOW_CONTENT
+      generateSyncWorkflow(cron)
     );
     await $({ cwd: tempDir })`git add ${SYNC_WORKFLOW_PATH}`;
     await $({
@@ -163,9 +153,6 @@ async function applyScheduledWorkflowCommit(
     await $({
       cwd: tempDir,
     })`git push origin HEAD:${defaultBranch} --force`;
-    await $({
-      cwd: tempDir,
-    })`git push public HEAD:${defaultBranch} --force`;
   } finally {
     await $({
       cwd: repoDir,
@@ -175,42 +162,87 @@ async function applyScheduledWorkflowCommit(
   }
 }
 
-async function buildPublicStageHeadWithoutWorkflowCommits(
-  branch: string,
-  upstreamDefaultBranch: string
-): Promise<string> {
-  const revListResult =
-    await $`git rev-list --reverse upstream/${upstreamDefaultBranch}..${branch}`;
-  const candidateCommits = revListResult.stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
+async function updateWorkflowOnOriginDefault(
+  defaultBranch: string,
+  workflowContent: string | null,
+  cwd?: string
+): Promise<boolean> {
+  const repoDir = cwd ?? process.cwd();
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-workflow-'));
 
-  const commitsToApply: string[] = [];
-  for (const commit of candidateCommits) {
-    if (!(await isWorkflowCommit(commit))) {
-      commitsToApply.push(commit);
-    }
-  }
-
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-stage-'));
   try {
-    await $`git worktree add --detach ${tempDir} upstream/${upstreamDefaultBranch}`;
-    for (const commit of commitsToApply) {
-      const cherryPick = await $({
+    await $({
+      cwd: repoDir,
+    })`git worktree add --detach ${tempDir} origin/${defaultBranch}`;
+
+    if (workflowContent === null) {
+      await $({
         cwd: tempDir,
         reject: false,
-      })`git cherry-pick ${commit}`;
-      if (cherryPick.exitCode !== 0) {
-        throw new Error(
-          `Failed to stage '${branch}' cleanly while removing internal workflow commits. Rebase '${branch}' on upstream/${upstreamDefaultBranch} and retry.`
-        );
-      }
+      })`git rm --quiet --ignore-unmatch ${SYNC_WORKFLOW_PATH}`;
+    } else {
+      await mkdir(path.join(tempDir, '.github', 'workflows'), {
+        recursive: true,
+      });
+      await writeFile(path.join(tempDir, SYNC_WORKFLOW_PATH), workflowContent);
+      await $({ cwd: tempDir })`git add ${SYNC_WORKFLOW_PATH}`;
+    }
+
+    const stagedDiff = await $({
+      cwd: tempDir,
+      reject: false,
+    })`git diff --cached --quiet`;
+    if (stagedDiff.exitCode === 0) {
+      return false;
+    }
+
+    await $({
+      cwd: tempDir,
+    })`git commit -m ${WORKFLOW_COMMIT_MESSAGE}`;
+    await $({
+      cwd: tempDir,
+    })`git push origin HEAD:${defaultBranch} --force`;
+    return true;
+  } finally {
+    await $({
+      cwd: repoDir,
+      reject: false,
+    })`git worktree remove --force ${tempDir}`;
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function buildPublicStageHeadWithoutWorkflowCommit(
+  branch: string,
+  defaultBranch: string,
+  cwd?: string
+): Promise<string> {
+  const repoDir = cwd ?? process.cwd();
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-stage-'));
+  try {
+    await $({
+      cwd: repoDir,
+    })`git worktree add --detach ${tempDir} ${branch}`;
+    const rebaseResult = await $({
+      cwd: tempDir,
+      reject: false,
+    })`git rebase --onto upstream/${defaultBranch} origin/${defaultBranch}`;
+    if (rebaseResult.exitCode !== 0) {
+      await $({
+        cwd: tempDir,
+        reject: false,
+      })`git rebase --abort`;
+      throw new Error(
+        `Failed to stage '${branch}' because removing the internal workflow commit caused rebase conflicts. Rebase '${branch}' on upstream/${defaultBranch} and retry.`
+      );
     }
     const headResult = await $({ cwd: tempDir })`git rev-parse HEAD`;
     return headResult.stdout.trim();
   } finally {
-    await $({ reject: false })`git worktree remove --force ${tempDir}`;
+    await $({
+      cwd: repoDir,
+      reject: false,
+    })`git worktree remove --force ${tempDir}`;
     await rm(tempDir, { recursive: true, force: true });
   }
 }
@@ -800,10 +832,9 @@ export async function syncCommand(
     // Step 2: Detect default branch if not specified
     const defaultBranch =
       targetBranch || (await getDefaultBranch('upstream', options?.cwd));
-    const keepWorkflowCommit = await shouldKeepScheduledWorkflowCommit(
-      defaultBranch,
-      options?.cwd
-    );
+    const repoDir = options?.cwd ?? process.cwd();
+    const config = await readVenforkConfigFromRepo(repoDir);
+    const scheduleConfig = config?.schedule;
 
     // Step 3: Check for divergence
     s.start('Checking for divergent commits');
@@ -881,11 +912,15 @@ To force sync anyway: git push origin upstream/${defaultBranch}:${defaultBranch}
     s.stop('Synced to all remotes');
 
     // Step 6: Enforce mirror "+1 commit" model for scheduled sync workflow.
-    // If scheduling is enabled, we always normalize to exactly one deterministic
-    // top commit that manages .github/workflows/sync.yml.
-    if (keepWorkflowCommit) {
+    // Scheduling config lives on `venfork-config`; when enabled we re-stamp
+    // one deterministic workflow commit on top of upstream.
+    if (scheduleConfig?.enabled && scheduleConfig.cron) {
       s.start('Re-applying scheduled sync workflow commit');
-      await applyScheduledWorkflowCommit(defaultBranch, options?.cwd);
+      await applyScheduledWorkflowCommit(
+        defaultBranch,
+        scheduleConfig.cron,
+        options?.cwd
+      );
       s.stop('Scheduled workflow commit normalized');
     }
 
@@ -900,6 +935,110 @@ To force sync anyway: git push origin upstream/${defaultBranch}:${defaultBranch}
     if (!quiet) {
       p.outro('❌ Sync failed');
     }
+    process.exit(1);
+  }
+}
+
+/**
+ * Schedule command: Configure automated sync via GitHub Actions workflow.
+ */
+export async function scheduleCommand(
+  action?: string,
+  value?: string
+): Promise<void> {
+  p.intro('⏰ Venfork Schedule');
+  const repoDir = process.cwd();
+  const s = p.spinner();
+
+  try {
+    const defaultBranch = await getDefaultBranch('upstream');
+
+    if (action === 'set') {
+      const cron = value?.trim();
+      if (!cron) {
+        p.log.error('Cron expression is required');
+        p.outro('Usage: venfork schedule set "<cron>"');
+        process.exit(1);
+      }
+      if (!isValidCronExpression(cron)) {
+        p.log.error('Invalid cron expression (expected 5 fields)');
+        p.outro('Usage: venfork schedule set "<cron>"');
+        process.exit(1);
+      }
+
+      s.start('Updating schedule in venfork-config');
+      await updateVenforkConfig(repoDir, {
+        schedule: { enabled: true, cron },
+      });
+      s.stop('Schedule configuration updated');
+
+      await $`git fetch origin`;
+      s.start('Updating workflow on default branch');
+      await updateWorkflowOnOriginDefault(
+        defaultBranch,
+        generateSyncWorkflow(cron),
+        repoDir
+      );
+      s.stop('Workflow updated');
+
+      p.outro(
+        `✨ Scheduled sync enabled\n\nBranch: ${defaultBranch}\nCron: ${cron}\nWorkflow: ${SYNC_WORKFLOW_PATH}`
+      );
+      return;
+    }
+
+    if (action === 'disable') {
+      s.start('Disabling schedule in venfork-config');
+      const currentConfig = await readVenforkConfigFromRepo(repoDir);
+      if (!currentConfig) {
+        throw new Error('venfork-config branch not found or invalid');
+      }
+      await updateVenforkConfig(repoDir, {
+        schedule: {
+          enabled: false,
+          cron: currentConfig.schedule?.cron || '0 * * * *',
+        },
+      });
+      s.stop('Schedule configuration updated');
+
+      await $`git fetch origin`;
+      s.start('Removing workflow from default branch');
+      await updateWorkflowOnOriginDefault(defaultBranch, null, repoDir);
+      s.stop('Workflow removed');
+
+      p.outro(
+        `✨ Scheduled sync disabled\n\nBranch: ${defaultBranch}\nWorkflow removed: ${SYNC_WORKFLOW_PATH}`
+      );
+      return;
+    }
+
+    if (action === 'status' || !action) {
+      s.start('Reading schedule configuration');
+      const config = await readVenforkConfigFromRepo(repoDir);
+      s.stop('Configuration loaded');
+      if (!config) {
+        throw new Error('venfork-config branch not found or invalid');
+      }
+      const schedule = config.schedule;
+      const enabled = Boolean(schedule?.enabled);
+      const cron = schedule?.cron || '(not set)';
+      p.note(
+        `Branch: ${defaultBranch}\nEnabled: ${enabled ? 'yes' : 'no'}\nCron: ${cron}\nWorkflow: ${SYNC_WORKFLOW_PATH}`,
+        'Schedule Status'
+      );
+      p.outro('✨ Schedule status shown');
+      return;
+    }
+
+    p.log.error(`Unknown schedule action: ${action}`);
+    p.outro(
+      'Usage: venfork schedule <status|set <cron>|disable>\nExample: venfork schedule set "0 */6 * * *"'
+    );
+    process.exit(1);
+  } catch (error) {
+    s.stop('Error occurred');
+    p.log.error(error instanceof Error ? error.message : String(error));
+    p.outro('❌ Schedule command failed');
     process.exit(1);
   }
 }
@@ -978,24 +1117,35 @@ This makes your work visible and ready for PR to upstream.
       process.exit(0);
     }
 
+    const repoDir = process.cwd();
+
     // Step 5: Detect upstream default branch for staging + PR URL
     const upstreamDefaultBranch = await getDefaultBranch('upstream');
+    const scheduleEnabled = await isScheduleEnabled(repoDir);
 
-    // Step 6: Build a sanitized public branch history that excludes internal
-    // workflow commits from PRs (upstream should only see real user changes).
-    s.start('Preparing sanitized branch for public staging');
-    const stageHead = await buildPublicStageHeadWithoutWorkflowCommits(
-      branch,
-      upstreamDefaultBranch
-    );
-    s.stop('Prepared sanitized branch');
+    // Step 6: If schedule is enabled, strip the internal workflow commit before
+    // publishing. Otherwise keep normal direct branch push behavior.
+    if (scheduleEnabled) {
+      await $`git fetch upstream`;
+      await $`git fetch origin`;
+      s.start('Preparing sanitized branch for public staging');
+      const stageHead = await buildPublicStageHeadWithoutWorkflowCommit(
+        branch,
+        upstreamDefaultBranch,
+        repoDir
+      );
+      s.stop('Prepared sanitized branch');
 
-    // Step 7: Push sanitized ref to public fork
-    s.start('Pushing to public fork');
-    await $`git push public ${stageHead}:refs/heads/${branch} --force`;
-    s.stop('Push successful');
+      s.start('Pushing sanitized branch to public fork');
+      await $`git push public ${stageHead}:refs/heads/${branch} --force`;
+      s.stop('Push successful');
+    } else {
+      s.start('Pushing to public fork');
+      await $`git push public ${branch}`;
+      s.stop('Push successful');
+    }
 
-    // Step 8: Show PR creation link
+    // Step 7: Show PR creation link
     const prUrl = `https://github.com/${upstreamRepoPath}/compare/${upstreamDefaultBranch}...${publicRepoPath.split('/')[0]}:${branch}?expand=1`;
 
     p.note(
@@ -1116,12 +1266,16 @@ venfork status
 
 venfork sync [branch]
   Update default branches of origin and public to match upstream
-  Keeps an internal deterministic +1 workflow commit when scheduling is enabled
+  Re-stamps private default branch as upstream + one internal workflow commit when schedule is enabled
   Syncs main/master branch without affecting your current work
+
+venfork schedule <status|set <cron>|disable>
+  Manage scheduled sync config stored in venfork-config
+  Set writes/removes ${SYNC_WORKFLOW_PATH} on the private mirror default branch
 
 venfork stage <branch>
   Push branch to public fork for PR to upstream
-  Strips internal workflow commits so PR history contains only upstream + user changes
+  When schedule is enabled, strips internal workflow commit before public push
   This is when your work becomes visible to the client`,
     'Available Commands'
   );

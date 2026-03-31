@@ -1,94 +1,107 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { $ } from 'execa';
 import { parseRepoPath } from './utils.js';
 
 /**
- * Venfork configuration structure
+ * Venfork configuration structure.
  */
 export interface VenforkConfig {
   version: string;
   publicForkUrl: string;
   upstreamUrl: string;
+  schedule?: {
+    cron: string;
+    enabled: boolean;
+  };
 }
 
 const CONFIG_BRANCH = 'venfork-config';
 const CONFIG_DIR = '.venfork';
 const CONFIG_FILE = 'config.json';
+const UPDATE_CONFIG_COMMIT_MESSAGE = 'chore: update venfork configuration';
 
 /**
- * Creates and pushes a venfork config branch to the origin remote
- *
- * @param repoDir - Local repository directory
- * @param publicForkUrl - URL of the public fork repository
- * @param upstreamUrl - URL of the upstream repository
+ * Creates and pushes a venfork config branch to the origin remote.
  */
 export async function createConfigBranch(
   repoDir: string,
   publicForkUrl: string,
   upstreamUrl: string
 ): Promise<void> {
-  // Create config object
   const config: VenforkConfig = {
     version: '1',
     publicForkUrl,
     upstreamUrl,
   };
 
-  // Generate unique temp directory
+  await writeConfigBranch(repoDir, config, 'Initialize venfork configuration');
+}
+
+async function writeConfigBranch(
+  repoDir: string,
+  config: VenforkConfig,
+  commitMessage: string
+): Promise<void> {
   const uniqueId = randomBytes(8).toString('hex');
   const tempDir = path.join(os.tmpdir(), `venfork-config-${uniqueId}`);
 
   try {
-    // Create temp directory structure
     await mkdir(path.join(tempDir, CONFIG_DIR), { recursive: true });
-
-    // Write config file
     await writeFile(
       path.join(tempDir, CONFIG_DIR, CONFIG_FILE),
       JSON.stringify(config, null, 2)
     );
 
-    // Initialize git repo in temp directory
     await $({ cwd: tempDir })`git init`;
     await $({ cwd: tempDir })`git checkout --orphan ${CONFIG_BRANCH}`;
-
-    // Commit the config
     await $({ cwd: tempDir })`git add ${CONFIG_DIR}/${CONFIG_FILE}`;
-    await $({
-      cwd: tempDir,
-    })`git commit -m ${'Initialize venfork configuration'}`;
+    await $({ cwd: tempDir })`git commit -m ${commitMessage}`;
 
-    // Get the origin remote URL from the main repo
     const remoteResult = await $({ cwd: repoDir })`git remote get-url origin`;
     const originUrl = remoteResult.stdout.trim();
-
-    // Push to origin
     await $({
       cwd: tempDir,
     })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH} --force`;
   } finally {
-    // Clean up temp directory
     try {
       await rm(tempDir, { recursive: true, force: true });
     } catch {
-      // Ignore cleanup errors
+      // Ignore cleanup errors.
     }
   }
 }
 
+function normalizeConfig(config: VenforkConfig): VenforkConfig | null {
+  if (!config.version || !config.publicForkUrl || !config.upstreamUrl) {
+    return null;
+  }
+
+  if (config.schedule) {
+    const cron = config.schedule.cron?.trim();
+    if (!cron || typeof config.schedule.enabled !== 'boolean') {
+      return null;
+    }
+    return {
+      ...config,
+      schedule: {
+        cron,
+        enabled: config.schedule.enabled,
+      },
+    };
+  }
+
+  return config;
+}
+
 /**
- * Fetches and reads the venfork config from a repository
- *
- * @param repoUrl - Repository URL to fetch config from
- * @returns Config object if found, null otherwise
+ * Fetches and reads the venfork config from a remote repository.
  */
 export async function fetchVenforkConfig(
   repoUrl: string
 ): Promise<VenforkConfig | null> {
-  // Generate unique temp directory
   const uniqueId = randomBytes(8).toString('hex');
   const tempDir = path.join(os.tmpdir(), `venfork-config-read-${uniqueId}`);
 
@@ -99,34 +112,83 @@ export async function fetchVenforkConfig(
     })`gh repo clone ${repoRef} ${tempDir} -- --branch ${CONFIG_BRANCH} --single-branch --depth 1`;
 
     if (cloneResult.exitCode !== 0) {
-      // Config branch doesn't exist
       return null;
     }
 
-    // Read the config file
-    const configPath = path.join(tempDir, CONFIG_DIR, CONFIG_FILE);
-    const readResult = await $({ reject: false })`cat ${configPath}`;
-
-    if (readResult.exitCode !== 0) {
-      return null;
-    }
-
-    const config = JSON.parse(readResult.stdout) as VenforkConfig;
-
-    // Validate config structure
-    if (!config.version || !config.publicForkUrl || !config.upstreamUrl) {
-      return null;
-    }
-
-    return config;
+    const rawConfig = await readFile(
+      path.join(tempDir, CONFIG_DIR, CONFIG_FILE),
+      'utf-8'
+    );
+    const config = JSON.parse(rawConfig) as VenforkConfig;
+    return normalizeConfig(config);
   } catch {
     return null;
   } finally {
-    // Clean up temp directory
     try {
       await rm(tempDir, { recursive: true, force: true });
     } catch {
-      // Ignore cleanup errors
+      // Ignore cleanup errors.
     }
   }
+}
+
+/**
+ * Reads venfork configuration from the local repo's orphan `venfork-config` branch.
+ */
+export async function readVenforkConfigFromRepo(
+  repoDir: string
+): Promise<VenforkConfig | null> {
+  const fetchResult = await $({
+    cwd: repoDir,
+    reject: false,
+  })`git fetch origin ${CONFIG_BRANCH}`;
+  if (fetchResult.exitCode !== 0) {
+    return null;
+  }
+
+  const showResult = await $({
+    cwd: repoDir,
+    reject: false,
+  })`git show FETCH_HEAD:${CONFIG_DIR}/${CONFIG_FILE}`;
+  if (showResult.exitCode !== 0) {
+    return null;
+  }
+
+  try {
+    const config = JSON.parse(showResult.stdout) as VenforkConfig;
+    return normalizeConfig(config);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Updates and force-pushes `venfork-config` with a shallow merge patch.
+ */
+export async function updateVenforkConfig(
+  repoDir: string,
+  patch: Partial<VenforkConfig>
+): Promise<VenforkConfig> {
+  const current = await readVenforkConfigFromRepo(repoDir);
+  if (!current) {
+    throw new Error('venfork-config branch not found or invalid');
+  }
+
+  const merged: VenforkConfig = {
+    ...current,
+    ...patch,
+    schedule: patch.schedule
+      ? {
+          ...current.schedule,
+          ...patch.schedule,
+        }
+      : current.schedule,
+  };
+
+  if (merged.schedule && !merged.schedule.cron?.trim()) {
+    throw new Error('schedule.cron is required when schedule is configured');
+  }
+
+  await writeConfigBranch(repoDir, merged, UPDATE_CONFIG_COMMIT_MESSAGE);
+  return merged;
 }

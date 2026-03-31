@@ -149,6 +149,7 @@ mock.module('node:fs/promises', () => ({
     writeFileCalls.push({ path, content });
     return Promise.resolve();
   }),
+  readFile: mock(() => Promise.reject(new Error('ENOENT'))),
   rm: mock((path: string, options: { recursive: boolean; force: boolean }) => {
     rmCalls.push({ path, options });
     return Promise.resolve();
@@ -176,6 +177,7 @@ mock.module('@clack/prompts', () => ({
 // Import commands (will use mocked execa, fs, and prompts)
 import {
   cloneCommand,
+  scheduleCommand,
   setupCommand,
   showHelp,
   stageCommand,
@@ -483,9 +485,14 @@ describe('syncCommand', () => {
   });
 
   test('re-applies deterministic workflow commit when scheduling is enabled', async () => {
-    mockResponses.set('git show origin/main:.github/workflows/sync.yml', {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,
-      stdout: 'name: existing',
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
       stderr: '',
     });
 
@@ -514,41 +521,23 @@ describe('syncCommand', () => {
       execaCalls.some((cmd) =>
         cmd.includes('git push public HEAD:main --force')
       )
-    ).toBe(true);
+    ).toBe(false);
     expect(
-      writeFileCalls.some((w) => w.path.includes('.github/workflows/sync.yml'))
+      writeFileCalls.some((w) =>
+        w.path.includes('.github/workflows/venfork-sync.yml')
+      )
     ).toBe(true);
   });
 
   test('skips workflow commit normalization when scheduling is disabled', async () => {
-    mockResponses.set('git show origin/main:.github/workflows/sync.yml', {
-      exitCode: 1,
-      stdout: '',
-      stderr: 'missing',
-    });
-    mockResponses.set('git show public/main:.github/workflows/sync.yml', {
-      exitCode: 1,
-      stdout: '',
-      stderr: 'missing',
-    });
-    mockResponses.set('git log -1 --format=%s origin/main', {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,
-      stdout: 'normal commit',
-      stderr: '',
-    });
-    mockResponses.set('git log -1 --format=%s public/main', {
-      exitCode: 0,
-      stdout: 'normal commit',
-      stderr: '',
-    });
-    mockResponses.set('git show --name-only --pretty=format: origin/main', {
-      exitCode: 0,
-      stdout: 'README.md',
-      stderr: '',
-    });
-    mockResponses.set('git show --name-only --pretty=format: public/main', {
-      exitCode: 0,
-      stdout: 'README.md',
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: false, cron: '0 */6 * * *' },
+      }),
       stderr: '',
     });
 
@@ -603,19 +592,14 @@ describe('stageCommand', () => {
   });
 
   test('omits workflow commits from public staging history', async () => {
-    mockResponses.set('git rev-list --reverse upstream/main..feature-branch', {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,
-      stdout: 'workflowsha\nusersha',
-      stderr: '',
-    });
-    mockResponses.set('git log -1 --format=%s workflowsha', {
-      exitCode: 0,
-      stdout: 'chore: add/update scheduled sync workflow (venfork)',
-      stderr: '',
-    });
-    mockResponses.set('git log -1 --format=%s usersha', {
-      exitCode: 0,
-      stdout: 'feat: user change',
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
       stderr: '',
     });
 
@@ -626,10 +610,75 @@ describe('stageCommand', () => {
     }
 
     expect(
-      execaCalls.some((cmd) => cmd.includes('git cherry-pick workflowsha'))
-    ).toBe(false);
+      execaCalls.some((cmd) =>
+        cmd.includes('git rebase --onto upstream/main origin/main')
+      )
+    ).toBe(true);
     expect(
-      execaCalls.some((cmd) => cmd.includes('git cherry-pick usersha'))
+      execaCalls.some(
+        (cmd) => cmd.includes('git push public') && cmd.includes('--force')
+      )
+    ).toBe(true);
+  });
+});
+
+describe('scheduleCommand', () => {
+  test('sets schedule and writes workflow/config updates', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+      }),
+      stderr: '',
+    });
+
+    try {
+      await scheduleCommand('set', '0 */6 * * *');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git show FETCH_HEAD:.venfork/config.json')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('git push') &&
+          cmd.includes('venfork-config:venfork-config')
+      )
+    ).toBe(true);
+    expect(
+      writeFileCalls.some((w) =>
+        w.path.includes('.github/workflows/venfork-sync.yml')
+      )
+    ).toBe(true);
+  });
+
+  test('disables schedule and removes workflow from default branch', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+
+    try {
+      await scheduleCommand('disable');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) => cmd.includes('git rm --quiet --ignore-unmatch'))
     ).toBe(true);
   });
 });

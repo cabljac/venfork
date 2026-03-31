@@ -209,7 +209,7 @@ venfork sync develop   # Sync develop branch with upstream/develop
 1. Fetches latest changes from all remotes (upstream, origin, public)
 2. Checks for divergent commits (warns if found to prevent data loss)
 3. Force pushes upstream's default branch to origin and public
-4. If scheduled sync workflow is enabled, re-applies one deterministic top commit for `.github/workflows/sync.yml`
+4. If scheduled sync is enabled, re-applies one deterministic top commit for `.github/workflows/venfork-sync.yml` on the private mirror default branch
 5. **Does not affect your current working branch or feature branches**
 
 **Important:**
@@ -259,6 +259,22 @@ venfork stage bugfix/issue-123
 3. Rebuilds branch history on top of upstream while removing internal workflow commits
 4. Pushes sanitized history to public fork
 5. Provides PR creation link
+
+### `venfork schedule <status|set <cron>|disable>`
+
+Manage automated sync configuration stored in `venfork-config`.
+
+**Examples:**
+```bash
+venfork schedule status
+venfork schedule set "0 */6 * * *"
+venfork schedule disable
+```
+
+**What it does:**
+1. Stores schedule state (`enabled`, `cron`) in `.venfork/config.json` on `venfork-config`
+2. `set` writes/updates `.github/workflows/venfork-sync.yml` on the private mirror default branch
+3. `disable` removes the managed workflow file from that branch
 
 ## Environment Variables
 
