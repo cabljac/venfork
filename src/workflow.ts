@@ -6,22 +6,11 @@ export function getSyncWorkflowPath(): string {
 }
 
 function escapeCronForYaml(cron: string): string {
+  // Double single quotes for YAML single-quoted scalars and normalize lines.
   return cron
     .replace(/'/g, "''")
     .replace(/[\r\n]+/g, ' ')
     .trim();
-}
-
-/**
- * Escapes a cron expression for safe inclusion in a single-quoted YAML scalar.
- * Throws if the expression contains characters that cannot appear in a valid cron.
- */
-function escapeCronForYaml(cron: string): string {
-  if (/[\r\n]/.test(cron)) {
-    throw new Error('Cron expression must not contain newline characters');
-  }
-  // Double single quotes for YAML single-quoted scalars.
-  return cron.replace(/'/g, "''");
 }
 
 /**
