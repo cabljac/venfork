@@ -12,4 +12,9 @@ describe('workflow helpers', () => {
     expect(workflow).toContain('workflow_dispatch');
     expect(workflow).toContain('run: venfork sync');
   });
+
+  test('escapes cron safely for yaml single-quoted string', () => {
+    const workflow = generateSyncWorkflow("0 */6 * * *'\n# injected");
+    expect(workflow).toContain("cron: '0 */6 * * *'' # injected'");
+  });
 });

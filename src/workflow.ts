@@ -5,6 +5,13 @@ export function getSyncWorkflowPath(): string {
   return WORKFLOW_FILENAME;
 }
 
+function escapeCronForYaml(cron: string): string {
+  return cron
+    .replace(/'/g, "''")
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
+}
+
 /**
  * Escapes a cron expression for safe inclusion in a single-quoted YAML scalar.
  * Throws if the expression contains characters that cannot appear in a valid cron.

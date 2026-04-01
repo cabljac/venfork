@@ -514,7 +514,7 @@ describe('syncCommand', () => {
     ).toBe(true);
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git push origin HEAD:main --force')
+        cmd.includes('git push origin HEAD:main --force-with-lease')
       )
     ).toBe(true);
     expect(

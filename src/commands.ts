@@ -76,22 +76,22 @@ async function commitTouchesWorkflowPath(
   if (filesResult.exitCode !== 0) {
     return false;
   }
-  const files = filesResult.stdout
+  const changedFiles = filesResult.stdout
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
-  if (files.length === 0) {
+  if (!changedFiles.length) {
     return false;
   }
-  // Only treat as a workflow-only commit when every changed path is the managed workflow path.
-  return files.every((filePath) => filePath === SYNC_WORKFLOW_PATH);
+  return changedFiles.every((filePath) => filePath === SYNC_WORKFLOW_PATH);
 }
 
 /**
  * Internal workflow commit marker used by the mirror "+1 commit" model.
  *
  * We identify this commit by its deterministic message and also accept commits
- * that change only the managed workflow file, so historical repos can still be normalized.
+ * that change only the managed workflow file, so historical repos can still
+ * be normalized.
  */
 async function isWorkflowCommit(ref: string, cwd?: string): Promise<boolean> {
   const subject = await commitSubject(ref, cwd);
