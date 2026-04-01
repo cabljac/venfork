@@ -237,7 +237,7 @@ venfork status
 - Check which remotes are configured
 - See your current branch
 
-### `venfork stage <branch>`
+### `venfork stage <branch> [--create-pr] [--copy-pr-body]`
 
 Push a branch to the public fork, making it visible and ready for PR to upstream.
 
@@ -250,13 +250,17 @@ Push a branch to the public fork, making it visible and ready for PR to upstream
 ```bash
 venfork stage feature-auth
 venfork stage bugfix/issue-123
+venfork stage feature-auth --create-pr
+venfork stage feature-auth --create-pr --copy-pr-body
 ```
 
 **What it does:**
 1. Verifies branch exists
 2. Shows staging details and confirmation
 3. Pushes to public fork
-4. Provides PR creation link
+4. Optionally creates a draft PR to upstream (`--create-pr`)
+5. Optionally copies title/body from private origin PR (`--copy-pr-body`, requires `--create-pr`)
+6. Provides PR creation link
 
 ## Environment Variables
 
