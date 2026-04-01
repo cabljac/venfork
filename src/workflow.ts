@@ -6,13 +6,26 @@ export function getSyncWorkflowPath(): string {
 }
 
 /**
+ * Escapes a cron expression for safe inclusion in a single-quoted YAML scalar.
+ * Throws if the expression contains characters that cannot appear in a valid cron.
+ */
+function escapeCronForYaml(cron: string): string {
+  if (/[\r\n]/.test(cron)) {
+    throw new Error('Cron expression must not contain newline characters');
+  }
+  // Double single quotes for YAML single-quoted scalars.
+  return cron.replace(/'/g, "''");
+}
+
+/**
  * Generates deterministic GitHub Actions workflow YAML for scheduled sync.
  */
 export function generateSyncWorkflow(cron: string): string {
+  const safeCron = escapeCronForYaml(cron);
   return `name: ${WORKFLOW_NAME}
 on:
   schedule:
-    - cron: '${cron}'
+    - cron: '${safeCron}'
   workflow_dispatch:
 
 permissions:

@@ -76,16 +76,22 @@ async function commitTouchesWorkflowPath(
   if (filesResult.exitCode !== 0) {
     return false;
   }
-  return filesResult.stdout.split('\n').some((line) => {
-    return line.trim() === SYNC_WORKFLOW_PATH;
-  });
+  const files = filesResult.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (files.length === 0) {
+    return false;
+  }
+  // Only treat as a workflow-only commit when every changed path is the managed workflow path.
+  return files.every((filePath) => filePath === SYNC_WORKFLOW_PATH);
 }
 
 /**
  * Internal workflow commit marker used by the mirror "+1 commit" model.
  *
  * We identify this commit by its deterministic message and also accept commits
- * that touch the managed workflow file, so historical repos can still be normalized.
+ * that change only the managed workflow file, so historical repos can still be normalized.
  */
 async function isWorkflowCommit(ref: string, cwd?: string): Promise<boolean> {
   const subject = await commitSubject(ref, cwd);
@@ -216,7 +222,7 @@ async function applyScheduledWorkflowCommit(
 
     await $({
       cwd: tempDir,
-    })`git push origin HEAD:${defaultBranch} --force`;
+    })`git push origin HEAD:${defaultBranch} --force-with-lease`;
   } finally {
     await $({
       cwd: repoDir,
@@ -265,7 +271,7 @@ async function updateWorkflowOnOriginDefault(
     })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${WORKFLOW_COMMIT_MESSAGE}`;
     await $({
       cwd: tempDir,
-    })`git push origin HEAD:${defaultBranch} --force`;
+    })`git push origin HEAD:${defaultBranch} --force-with-lease`;
     return true;
   } finally {
     await $({
@@ -916,8 +922,7 @@ export async function syncCommand(
         let userFacingDivergence = 0;
         for (const commit of divergentCommits) {
           if (!(await isWorkflowCommit(commit, options?.cwd))) {
-            userFacingDivergence = 1;
-            break;
+            userFacingDivergence += 1;
           }
         }
         return userFacingDivergence;
