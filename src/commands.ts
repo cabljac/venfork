@@ -46,6 +46,8 @@ async function pathExists(filePath: string): Promise<boolean> {
 const SYNC_WORKFLOW_PATH = getSyncWorkflowPath();
 const WORKFLOW_COMMIT_MESSAGE =
   'chore: add/update scheduled sync workflow (venfork)';
+const VENFORK_BOT_NAME = 'venfork-bot';
+const VENFORK_BOT_EMAIL = 'venfork-bot@users.noreply.github.com';
 
 async function commitSubject(
   ref: string,
@@ -93,28 +95,80 @@ async function isWorkflowCommit(ref: string, cwd?: string): Promise<boolean> {
   return commitTouchesWorkflowPath(ref, cwd);
 }
 
+function isValidCronField(field: string, min: number, max: number): boolean {
+  if (field === '*') {
+    return true;
+  }
+
+  const isValidNumber = (value: string): boolean => {
+    if (!/^\d+$/.test(value)) {
+      return false;
+    }
+    const parsed = Number.parseInt(value, 10);
+    return parsed >= min && parsed <= max;
+  };
+
+  const isValidRange = (value: string): boolean => {
+    const [start, end] = value.split('-');
+    if (!start || !end || !isValidNumber(start) || !isValidNumber(end)) {
+      return false;
+    }
+    return Number.parseInt(start, 10) <= Number.parseInt(end, 10);
+  };
+
+  const stepParts = field.split('/');
+  if (stepParts.length > 2) {
+    return false;
+  }
+  if (stepParts.length === 2) {
+    const [base, step] = stepParts;
+    if (
+      !base ||
+      !step ||
+      !isValidNumber(step) ||
+      Number.parseInt(step, 10) <= 0
+    ) {
+      return false;
+    }
+    if (base === '*') {
+      return true;
+    }
+    if (base.includes(',')) {
+      return false;
+    }
+    return base.includes('-') ? isValidRange(base) : isValidNumber(base);
+  }
+
+  if (field.includes(',')) {
+    return field
+      .split(',')
+      .every((part) =>
+        part.includes('-') ? isValidRange(part) : isValidNumber(part)
+      );
+  }
+  if (field.includes('-')) {
+    return isValidRange(field);
+  }
+  return isValidNumber(field);
+}
+
 function isValidCronExpression(cron: string): boolean {
   const parts = cron.trim().split(/\s+/);
   if (parts.length !== 5) {
     return false;
   }
-  return parts.every((part) => {
-    if (part === '*') {
-      return true;
-    }
-    if (/^\d+$/.test(part)) {
-      return true;
-    }
-    if (/^\*\/\d+$/.test(part)) {
-      return true;
-    }
-    if (/^\d+-\d+$/.test(part)) {
-      return true;
-    }
-    if (/^\d+(,\d+)+$/.test(part)) {
-      return true;
-    }
-    return false;
+
+  const ranges = [
+    { min: 0, max: 59 }, // minute
+    { min: 0, max: 23 }, // hour
+    { min: 1, max: 31 }, // day of month
+    { min: 1, max: 12 }, // month
+    { min: 0, max: 7 }, // day of week
+  ];
+
+  return parts.every((part, index) => {
+    const range = ranges[index];
+    return isValidCronField(part, range.min, range.max);
   });
 }
 
@@ -122,6 +176,16 @@ async function isScheduleEnabled(cwd?: string): Promise<boolean> {
   const repoDir = cwd ?? process.cwd();
   const config = await readVenforkConfigFromRepo(repoDir);
   return Boolean(config?.schedule?.enabled);
+}
+
+async function remoteBranchExists(
+  remote: string,
+  branch: string
+): Promise<boolean> {
+  const result = await $({
+    reject: false,
+  })`git ls-remote --exit-code --heads ${remote} ${branch}`;
+  return result.exitCode === 0;
 }
 
 async function applyScheduledWorkflowCommit(
@@ -148,7 +212,7 @@ async function applyScheduledWorkflowCommit(
     await $({ cwd: tempDir })`git add ${SYNC_WORKFLOW_PATH}`;
     await $({
       cwd: tempDir,
-    })`git commit --allow-empty -m ${WORKFLOW_COMMIT_MESSAGE}`;
+    })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit --allow-empty -m ${WORKFLOW_COMMIT_MESSAGE}`;
 
     await $({
       cwd: tempDir,
@@ -198,7 +262,7 @@ async function updateWorkflowOnOriginDefault(
 
     await $({
       cwd: tempDir,
-    })`git commit -m ${WORKFLOW_COMMIT_MESSAGE}`;
+    })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${WORKFLOW_COMMIT_MESSAGE}`;
     await $({
       cwd: tempDir,
     })`git push origin HEAD:${defaultBranch} --force`;
@@ -852,7 +916,8 @@ export async function syncCommand(
         let userFacingDivergence = 0;
         for (const commit of divergentCommits) {
           if (!(await isWorkflowCommit(commit, options?.cwd))) {
-            userFacingDivergence += 1;
+            userFacingDivergence = 1;
+            break;
           }
         }
         return userFacingDivergence;
@@ -1137,7 +1202,11 @@ This makes your work visible and ready for PR to upstream.
       s.stop('Prepared sanitized branch');
 
       s.start('Pushing sanitized branch to public fork');
-      await $`git push public ${stageHead}:refs/heads/${branch} --force`;
+      if (await remoteBranchExists('public', branch)) {
+        await $`git push public ${stageHead}:refs/heads/${branch} --force-with-lease=refs/heads/${branch}`;
+      } else {
+        await $`git push public ${stageHead}:refs/heads/${branch}`;
+      }
       s.stop('Push successful');
     } else {
       s.start('Pushing to public fork');

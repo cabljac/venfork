@@ -22,6 +22,8 @@ const CONFIG_BRANCH = 'venfork-config';
 const CONFIG_DIR = '.venfork';
 const CONFIG_FILE = 'config.json';
 const UPDATE_CONFIG_COMMIT_MESSAGE = 'chore: update venfork configuration';
+const VENFORK_BOT_NAME = 'venfork-bot';
+const VENFORK_BOT_EMAIL = 'venfork-bot@users.noreply.github.com';
 
 /**
  * Creates and pushes a venfork config branch to the origin remote.
@@ -58,7 +60,9 @@ async function writeConfigBranch(
     await $({ cwd: tempDir })`git init`;
     await $({ cwd: tempDir })`git checkout --orphan ${CONFIG_BRANCH}`;
     await $({ cwd: tempDir })`git add ${CONFIG_DIR}/${CONFIG_FILE}`;
-    await $({ cwd: tempDir })`git commit -m ${commitMessage}`;
+    await $({
+      cwd: tempDir,
+    })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${commitMessage}`;
 
     const remoteResult = await $({ cwd: repoDir })`git remote get-url origin`;
     const originUrl = remoteResult.stdout.trim();

@@ -508,7 +508,7 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git commit --allow-empty -m chore: add/update scheduled sync workflow (venfork)'
+          'commit --allow-empty -m chore: add/update scheduled sync workflow (venfork)'
         )
       )
     ).toBe(true);
