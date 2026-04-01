@@ -10,6 +10,7 @@ import {
   syncCommand,
 } from './commands.js';
 import { parseSetupCliArgs } from './setup-args.js';
+import { parseStageCliArgs } from './stage-args.js';
 
 /**
  * Main CLI entry point
@@ -45,9 +46,14 @@ async function main(): Promise<void> {
     case 'sync':
       await syncCommand(args[1]);
       break;
-    case 'stage':
-      await stageCommand(args[1]);
+    case 'stage': {
+      const parsed = parseStageCliArgs(args.slice(1));
+      await stageCommand(parsed.branch || '', {
+        createPr: parsed.createPr,
+        copyPrBody: parsed.copyPrBody,
+      });
       break;
+    }
     case 'status':
       await statusCommand();
       break;

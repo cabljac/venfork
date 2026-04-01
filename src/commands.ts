@@ -59,6 +59,44 @@ async function ensureVenforkRemotes(
   await $({ cwd })`git remote set-url --push upstream DISABLE`;
 }
 
+async function getPrivateOriginPrForBranch(
+  branch: string
+): Promise<{ title: string; body: string } | null> {
+  const originResult = await $({
+    reject: false,
+  })`git remote get-url origin`;
+  if (originResult.exitCode !== 0) {
+    return null;
+  }
+
+  const originUrl = originResult.stdout.trim();
+  const originRepoPath = parseRepoPath(originUrl);
+  const originOwner = parseOwner(originUrl);
+  if (!originRepoPath || !originOwner) {
+    return null;
+  }
+
+  const prsResult = await $({
+    reject: false,
+  })`gh pr list --repo ${originRepoPath} --head ${`${originOwner}:${branch}`} --state open --limit 1 --json title,body`;
+  if (prsResult.exitCode !== 0) {
+    return null;
+  }
+
+  try {
+    const prs = JSON.parse(prsResult.stdout) as Array<{
+      title: string;
+      body: string;
+    }>;
+    if (!prs.length) {
+      return null;
+    }
+    return prs[0];
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Setup command: Create private mirror and public fork
  *
@@ -705,7 +743,10 @@ To force sync anyway: git push origin upstream/${defaultBranch}:${defaultBranch}
 /**
  * Stage command: Push branch to public fork for PR to upstream
  */
-export async function stageCommand(branch: string): Promise<void> {
+export async function stageCommand(
+  branch: string,
+  options?: { createPr?: boolean; copyPrBody?: boolean }
+): Promise<void> {
   p.intro('📤 Venfork Stage');
 
   // Check GitHub CLI authentication
@@ -716,7 +757,7 @@ export async function stageCommand(branch: string): Promise<void> {
 
   if (!branch) {
     p.log.error('Branch name is required');
-    p.outro('Usage: venfork stage <branch>');
+    p.outro('Usage: venfork stage <branch> [--create-pr] [--copy-pr-body]');
     process.exit(1);
   }
 
@@ -742,6 +783,7 @@ export async function stageCommand(branch: string): Promise<void> {
     }
     const publicUrl = publicUrlResult.stdout.trim();
     const publicRepoPath = parseRepoPath(publicUrl);
+    const publicOwner = parseOwner(publicUrl);
 
     // Step 3: Get upstream URL for PR link
     const upstreamUrlResult = await $({
@@ -786,9 +828,39 @@ This makes your work visible and ready for PR to upstream.
 
     // Step 7: Show PR creation link
     const prUrl = `https://github.com/${upstreamRepoPath}/compare/${upstreamDefaultBranch}...${publicRepoPath.split('/')[0]}:${branch}?expand=1`;
+    let createdPrUrl: string | null = null;
+
+    const shouldCreatePr = options?.createPr ?? false;
+    const shouldCopyPrBody = options?.copyPrBody ?? false;
+    if (shouldCopyPrBody && !shouldCreatePr) {
+      throw new Error('--copy-pr-body requires --create-pr');
+    }
+
+    if (shouldCreatePr) {
+      s.start('Creating draft PR to upstream');
+      const copied = shouldCopyPrBody
+        ? await getPrivateOriginPrForBranch(branch)
+        : null;
+      const title = copied?.title || `Stage ${branch} for upstream`;
+      const body =
+        copied?.body ||
+        `Staged from private mirror branch \`${branch}\` via \`venfork stage --create-pr\`.`;
+
+      const createResult = await $({
+        reject: false,
+      })`gh pr create --repo ${upstreamRepoPath} --head ${`${publicOwner}:${branch}`} --base ${upstreamDefaultBranch} --title ${title} --body ${body} --draft`;
+      if (createResult.exitCode === 0) {
+        createdPrUrl = createResult.stdout.trim() || null;
+        s.stop('Draft PR created');
+      } else {
+        s.stop('Draft PR not created');
+      }
+    }
 
     p.note(
-      `Your branch is now on the public fork!\n\nCreate a pull request to upstream:\n  ${prUrl}`,
+      createdPrUrl
+        ? `Your branch is now on the public fork!\n\nDraft PR created:\n  ${createdPrUrl}\n\nCompare URL:\n  ${prUrl}`
+        : `Your branch is now on the public fork!\n\nCreate a pull request to upstream:\n  ${prUrl}`,
       'Next Steps'
     );
 
@@ -907,8 +979,10 @@ venfork sync [branch]
   Update default branches of origin and public to match upstream
   Syncs main/master branch without affecting your current work
 
-venfork stage <branch>
+venfork stage <branch> [--create-pr] [--copy-pr-body]
   Push branch to public fork for PR to upstream
+  Optional: create draft upstream PR automatically
+  Optional: copy title/body from private origin PR when creating PR
   This is when your work becomes visible to the client`,
     'Available Commands'
   );

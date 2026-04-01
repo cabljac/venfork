@@ -503,6 +503,48 @@ describe('stageCommand', () => {
     // Process.exit should have been called
     expect(process.exit).toHaveBeenCalled();
   });
+
+  test('creates draft PR when createPr option is enabled', async () => {
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(execaCalls.some((cmd) => cmd.includes('gh pr create --repo'))).toBe(
+      true
+    );
+    expect(execaCalls.some((cmd) => cmd.includes('--draft'))).toBe(true);
+  });
+
+  test('copies private PR body when copyPrBody is enabled', async () => {
+    mockResponses.set(
+      'gh pr list --repo test/repo --head test:feature-branch',
+      {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          { title: 'Internal PR title', body: 'Internal PR body' },
+        ]),
+        stderr: '',
+      }
+    );
+
+    try {
+      await stageCommand('feature-branch', {
+        createPr: true,
+        copyPrBody: true,
+      });
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) => cmd.includes('gh pr list --repo test/repo'))
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) => cmd.includes('--title Internal PR title'))
+    ).toBe(true);
+  });
 });
 
 describe('statusCommand', () => {
