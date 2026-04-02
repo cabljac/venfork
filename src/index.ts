@@ -9,8 +9,10 @@ import {
   stageCommand,
   statusCommand,
   syncCommand,
+  workflowsCommand,
 } from './commands.js';
 import { parseSetupCliArgs } from './setup-args.js';
+import { parseWorkflowsCliArgs } from './workflows-args.js';
 
 /**
  * Main CLI entry point
@@ -55,6 +57,11 @@ async function main(): Promise<void> {
     case 'status':
       await statusCommand();
       break;
+    case 'workflows': {
+      const parsed = parseWorkflowsCliArgs(args.slice(1));
+      await workflowsCommand(parsed.action, parsed.workflows);
+      break;
+    }
     default:
       p.log.error(`Unknown command: ${command}`);
       showHelp();

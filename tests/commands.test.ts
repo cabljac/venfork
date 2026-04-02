@@ -183,6 +183,7 @@ import {
   stageCommand,
   statusCommand,
   syncCommand,
+  workflowsCommand,
 } from '../src/commands.js';
 
 /**
@@ -716,6 +717,59 @@ describe('showHelp', () => {
 
     // Should not throw and should complete successfully
     expect(true).toBe(true);
+  });
+});
+
+describe('workflowsCommand', () => {
+  test('shows status from config branch', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        enabledWorkflows: ['ci.yml'],
+      }),
+      stderr: '',
+    });
+
+    try {
+      await workflowsCommand('status', []);
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git show FETCH_HEAD:.venfork/config.json')
+      )
+    ).toBe(true);
+  });
+
+  test('updates enabledWorkflows in config branch', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+      }),
+      stderr: '',
+    });
+
+    try {
+      await workflowsCommand('allow', ['ci.yml', 'lint.yml']);
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('git push') &&
+          cmd.includes('venfork-config:venfork-config')
+      )
+    ).toBe(true);
   });
 });
 

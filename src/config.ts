@@ -16,6 +16,7 @@ export interface VenforkConfig {
     cron: string;
     enabled: boolean;
   };
+  enabledWorkflows?: string[];
 }
 
 const CONFIG_BRANCH = 'venfork-config';
@@ -24,6 +25,10 @@ const CONFIG_FILE = 'config.json';
 const UPDATE_CONFIG_COMMIT_MESSAGE = 'chore: update venfork configuration';
 const VENFORK_BOT_NAME = 'venfork-bot';
 const VENFORK_BOT_EMAIL = 'venfork-bot@users.noreply.github.com';
+
+export type VenforkConfigPatch = Partial<VenforkConfig> & {
+  enabledWorkflows?: string[] | null;
+};
 
 /**
  * Creates and pushes a venfork config branch to the origin remote.
@@ -83,21 +88,38 @@ function normalizeConfig(config: VenforkConfig): VenforkConfig | null {
     return null;
   }
 
-  if (config.schedule) {
-    const cron = config.schedule.cron?.trim();
-    if (!cron || typeof config.schedule.enabled !== 'boolean') {
+  const normalized: VenforkConfig = {
+    ...config,
+  };
+
+  if (normalized.schedule) {
+    const cron = normalized.schedule.cron?.trim();
+    if (!cron || typeof normalized.schedule.enabled !== 'boolean') {
       return null;
     }
-    return {
-      ...config,
-      schedule: {
-        cron,
-        enabled: config.schedule.enabled,
-      },
+    normalized.schedule = {
+      cron,
+      enabled: normalized.schedule.enabled,
     };
   }
 
-  return config;
+  if (normalized.enabledWorkflows) {
+    const cleaned = Array.from(
+      new Set(
+        normalized.enabledWorkflows
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0)
+          .sort()
+      )
+    );
+    if (cleaned.length > 0) {
+      normalized.enabledWorkflows = cleaned;
+    } else {
+      delete normalized.enabledWorkflows;
+    }
+  }
+
+  return normalized;
 }
 
 /**
@@ -171,7 +193,7 @@ export async function readVenforkConfigFromRepo(
  */
 export async function updateVenforkConfig(
   repoDir: string,
-  patch: Partial<VenforkConfig>
+  patch: VenforkConfigPatch
 ): Promise<VenforkConfig> {
   const current = await readVenforkConfigFromRepo(repoDir);
   if (!current) {
@@ -188,6 +210,12 @@ export async function updateVenforkConfig(
         }
       : current.schedule,
   };
+
+  if (patch.enabledWorkflows === null) {
+    delete merged.enabledWorkflows;
+  } else if (patch.enabledWorkflows !== undefined) {
+    merged.enabledWorkflows = patch.enabledWorkflows;
+  }
 
   if (merged.schedule && !merged.schedule.cron?.trim()) {
     throw new Error('schedule.cron is required when schedule is configured');
