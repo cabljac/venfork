@@ -25,8 +25,19 @@ describe('parseWorkflowsCliArgs', () => {
     });
   });
 
+  test('parses block values', () => {
+    expect(parseWorkflowsCliArgs(['block', 'deploy.yml', 'e2e.yml'])).toEqual({
+      action: 'block',
+      workflows: ['deploy.yml', 'e2e.yml'],
+    });
+  });
+
   test('throws for allow without values', () => {
     expect(() => parseWorkflowsCliArgs(['allow'])).toThrow();
+  });
+
+  test('throws for block without values', () => {
+    expect(() => parseWorkflowsCliArgs(['block'])).toThrow();
   });
 
   test('throws for unknown action', () => {

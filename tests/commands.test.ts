@@ -771,6 +771,32 @@ describe('workflowsCommand', () => {
       )
     ).toBe(true);
   });
+
+  test('updates disabledWorkflows in config branch', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+      }),
+      stderr: '',
+    });
+
+    try {
+      await workflowsCommand('block', ['deploy.yml']);
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('git push') &&
+          cmd.includes('venfork-config:venfork-config')
+      )
+    ).toBe(true);
+  });
 });
 
 describe('setupCommand - organization tests', () => {

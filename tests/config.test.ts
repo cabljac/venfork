@@ -122,4 +122,21 @@ describe('updateVenforkConfig', () => {
     expect(writeFileCalls.length).toBeGreaterThan(0);
     expect(writeFileCalls[0].content).toContain('"schedule"');
   });
+
+  test('stores normalized enabled/disabled workflow policy', async () => {
+    const updated = await updateVenforkConfig('/tmp/repo', {
+      enabledWorkflows: [' ci.yml ', 'lint.yml', 'ci.yml'],
+      disabledWorkflows: ['deploy.yml', ' deploy.yml '],
+    });
+
+    expect(updated.enabledWorkflows).toEqual(['ci.yml', 'lint.yml']);
+    expect(updated.disabledWorkflows).toEqual(['deploy.yml']);
+    expect(writeFileCalls.length).toBeGreaterThan(0);
+    expect(writeFileCalls[writeFileCalls.length - 1].content).toContain(
+      '"enabledWorkflows"'
+    );
+    expect(writeFileCalls[writeFileCalls.length - 1].content).toContain(
+      '"disabledWorkflows"'
+    );
+  });
 });

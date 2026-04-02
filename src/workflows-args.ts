@@ -1,5 +1,5 @@
 export type ParsedWorkflowsArgs = {
-  action: 'status' | 'allow' | 'clear';
+  action: 'status' | 'allow' | 'block' | 'clear';
   workflows: string[];
 };
 
@@ -19,7 +19,7 @@ export function parseWorkflowsCliArgs(
     return { action: 'clear', workflows: [] };
   }
 
-  if (actionRaw === 'allow') {
+  if (actionRaw === 'allow' || actionRaw === 'block') {
     const values = workflowsArgs.slice(1).flatMap((entry) =>
       entry
         .split(',')
@@ -28,13 +28,13 @@ export function parseWorkflowsCliArgs(
     );
     if (values.length === 0) {
       throw new Error(
-        'Usage: venfork workflows allow <workflow-file> [more-workflow-files]'
+        `Usage: venfork workflows ${actionRaw} <workflow-file> [more-workflow-files]`
       );
     }
-    return { action: 'allow', workflows: values };
+    return { action: actionRaw, workflows: values };
   }
 
   throw new Error(
-    'Usage: venfork workflows <status|allow|clear> [workflow-file ...]'
+    'Usage: venfork workflows <status|allow|block|clear> [workflow-file ...]'
   );
 }

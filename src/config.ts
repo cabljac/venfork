@@ -17,6 +17,7 @@ export interface VenforkConfig {
     enabled: boolean;
   };
   enabledWorkflows?: string[];
+  disabledWorkflows?: string[];
 }
 
 const CONFIG_BRANCH = 'venfork-config';
@@ -26,8 +27,12 @@ const UPDATE_CONFIG_COMMIT_MESSAGE = 'chore: update venfork configuration';
 const VENFORK_BOT_NAME = 'venfork-bot';
 const VENFORK_BOT_EMAIL = 'venfork-bot@users.noreply.github.com';
 
-export type VenforkConfigPatch = Partial<VenforkConfig> & {
+export type VenforkConfigPatch = Omit<
+  Partial<VenforkConfig>,
+  'enabledWorkflows' | 'disabledWorkflows'
+> & {
   enabledWorkflows?: string[] | null;
+  disabledWorkflows?: string[] | null;
 };
 
 /**
@@ -119,6 +124,22 @@ function normalizeConfig(config: VenforkConfig): VenforkConfig | null {
     }
   }
 
+  if (normalized.disabledWorkflows) {
+    const cleaned = Array.from(
+      new Set(
+        normalized.disabledWorkflows
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0)
+          .sort()
+      )
+    );
+    if (cleaned.length > 0) {
+      normalized.disabledWorkflows = cleaned;
+    } else {
+      delete normalized.disabledWorkflows;
+    }
+  }
+
   return normalized;
 }
 
@@ -200,13 +221,19 @@ export async function updateVenforkConfig(
     throw new Error('venfork-config branch not found or invalid');
   }
 
+  const {
+    enabledWorkflows: _enabledWorkflowsPatch,
+    disabledWorkflows: _disabledWorkflowsPatch,
+    ...basePatch
+  } = patch;
+
   const merged: VenforkConfig = {
     ...current,
-    ...patch,
-    schedule: patch.schedule
+    ...basePatch,
+    schedule: basePatch.schedule
       ? {
           ...current.schedule,
-          ...patch.schedule,
+          ...basePatch.schedule,
         }
       : current.schedule,
   };
@@ -217,10 +244,21 @@ export async function updateVenforkConfig(
     merged.enabledWorkflows = patch.enabledWorkflows;
   }
 
+  if (patch.disabledWorkflows === null) {
+    delete merged.disabledWorkflows;
+  } else if (patch.disabledWorkflows !== undefined) {
+    merged.disabledWorkflows = patch.disabledWorkflows;
+  }
+
   if (merged.schedule && !merged.schedule.cron?.trim()) {
     throw new Error('schedule.cron is required when schedule is configured');
   }
 
-  await writeConfigBranch(repoDir, merged, UPDATE_CONFIG_COMMIT_MESSAGE);
-  return merged;
+  const normalized = normalizeConfig(merged);
+  if (!normalized) {
+    throw new Error('Updated venfork config is invalid');
+  }
+
+  await writeConfigBranch(repoDir, normalized, UPDATE_CONFIG_COMMIT_MESSAGE);
+  return normalized;
 }

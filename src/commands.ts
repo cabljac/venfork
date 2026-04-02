@@ -50,7 +50,7 @@ const WORKFLOWS_DIR = '.github/workflows';
 const VENFORK_BOT_NAME = 'venfork-bot';
 const VENFORK_BOT_EMAIL = 'venfork-bot@users.noreply.github.com';
 
-function normalizeWorkflowAllowlist(entries: string[]): string[] {
+function normalizeWorkflowList(entries: string[]): string[] {
   return Array.from(
     new Set(
       entries
@@ -224,11 +224,13 @@ async function applyScheduledWorkflowCommit(
   defaultBranch: string,
   cron: string,
   enabledWorkflows: string[],
+  disabledWorkflows: string[],
   cwd?: string
 ): Promise<void> {
   const repoDir = cwd ?? process.cwd();
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-sync-'));
-  const allowlist = normalizeWorkflowAllowlist(enabledWorkflows);
+  const allowlist = normalizeWorkflowList(enabledWorkflows);
+  const blocklist = normalizeWorkflowList(disabledWorkflows);
 
   try {
     // Re-stamp from upstream so the private mirror default branch is always
@@ -245,16 +247,20 @@ async function applyScheduledWorkflowCommit(
     );
     await $({ cwd: tempDir })`git add ${SYNC_WORKFLOW_PATH}`;
 
-    // If a workflow allowlist is configured, keep only allowed upstream
-    // workflow files plus the venfork-managed sync workflow.
-    if (allowlist.length > 0) {
+    // Filter upstream workflow files as part of the managed "+1" commit.
+    // Precedence: enabledWorkflows allowlist > disabledWorkflows blocklist.
+    if (allowlist.length > 0 || blocklist.length > 0) {
       const workflowFiles = await listWorkflowFiles(tempDir);
       for (const workflowFile of workflowFiles) {
         if (workflowFile === SYNC_WORKFLOW_PATH) {
           continue;
         }
         const base = path.basename(workflowFile);
-        if (!allowlist.includes(base)) {
+        const shouldKeep =
+          allowlist.length > 0
+            ? allowlist.includes(base)
+            : !blocklist.includes(base);
+        if (!shouldKeep) {
           await $({
             cwd: tempDir,
             reject: false,
@@ -953,6 +959,7 @@ export async function syncCommand(
     const config = await readVenforkConfigFromRepo(repoDir);
     const scheduleConfig = config?.schedule;
     const enabledWorkflows = config?.enabledWorkflows ?? [];
+    const disabledWorkflows = config?.disabledWorkflows ?? [];
 
     // Step 3: Check for divergence
     s.start('Checking for divergent commits');
@@ -1038,6 +1045,7 @@ To force sync anyway: git push origin upstream/${defaultBranch}:${defaultBranch}
         defaultBranch,
         scheduleConfig.cron,
         enabledWorkflows,
+        disabledWorkflows,
         options?.cwd
       );
       s.stop('Scheduled workflow commit normalized');
@@ -1166,7 +1174,7 @@ export async function scheduleCommand(
  * Workflows command: manage workflow allowlist in venfork-config.
  */
 export async function workflowsCommand(
-  action: 'status' | 'allow' | 'clear',
+  action: 'status' | 'allow' | 'block' | 'clear',
   workflows: string[]
 ): Promise<void> {
   p.intro('🧩 Venfork Workflows');
@@ -1179,37 +1187,63 @@ export async function workflowsCommand(
         throw new Error('venfork-config branch not found or invalid');
       }
       const allowlist = config.enabledWorkflows ?? [];
-      if (allowlist.length === 0) {
+      const blocklist = config.disabledWorkflows ?? [];
+      if (allowlist.length === 0 && blocklist.length === 0) {
         p.note(
-          'No workflow allowlist configured. Mirror keeps all upstream workflows unless schedule logic modifies them.',
+          'No workflow policy configured. Mirror keeps all upstream workflows unless schedule logic modifies them.',
           'Workflows Status'
         );
       } else {
-        p.note(
-          allowlist.map((name) => `- ${name}`).join('\n'),
-          'Allowed workflow files'
-        );
+        const lines = [
+          `enabledWorkflows: ${allowlist.length > 0 ? 'set' : 'not set'}`,
+          `disabledWorkflows: ${blocklist.length > 0 ? 'set' : 'not set'}`,
+          allowlist.length > 0
+            ? `Allowed files:\n${allowlist.map((name) => `- ${name}`).join('\n')}`
+            : '',
+          blocklist.length > 0
+            ? `Blocked files:\n${blocklist.map((name) => `- ${name}`).join('\n')}`
+            : '',
+          allowlist.length > 0
+            ? 'Precedence: enabledWorkflows allowlist overrides disabledWorkflows.'
+            : '',
+        ].filter((line) => line.length > 0);
+        p.note(lines.join('\n'), 'Workflow Policy');
       }
       p.outro('✨ Workflows status shown');
       return;
     }
 
     if (action === 'clear') {
-      await updateVenforkConfig(repoDir, { enabledWorkflows: null });
+      await updateVenforkConfig(repoDir, {
+        enabledWorkflows: null,
+        disabledWorkflows: null,
+      });
       p.outro(
-        '✨ Workflow allowlist cleared. Run `venfork sync` to apply on the private mirror default branch.'
+        '✨ Workflow policy cleared. Run `venfork sync` to apply on the private mirror default branch.'
       );
       return;
     }
 
-    const normalized = normalizeWorkflowAllowlist(workflows);
-    await updateVenforkConfig(repoDir, { enabledWorkflows: normalized });
+    const normalized = normalizeWorkflowList(workflows);
+    if (action === 'allow') {
+      await updateVenforkConfig(repoDir, { enabledWorkflows: normalized });
+      p.note(
+        normalized.map((name) => `- ${name}`).join('\n'),
+        'Allowed workflow files'
+      );
+      p.outro(
+        '✨ Workflow allowlist updated. Run `venfork sync` to apply on the private mirror default branch.'
+      );
+      return;
+    }
+
+    await updateVenforkConfig(repoDir, { disabledWorkflows: normalized });
     p.note(
       normalized.map((name) => `- ${name}`).join('\n'),
-      'Allowed workflow files'
+      'Blocked workflow files'
     );
     p.outro(
-      '✨ Workflow allowlist updated. Run `venfork sync` to apply on the private mirror default branch.'
+      '✨ Workflow blocklist updated. Run `venfork sync` to apply on the private mirror default branch.'
     );
   } catch (error) {
     p.log.error(error instanceof Error ? error.message : String(error));
@@ -1446,7 +1480,7 @@ venfork status
 venfork sync [branch]
   Update default branches of origin and public to match upstream
   Re-stamps private default branch as upstream + one internal workflow commit when schedule is enabled
-  Applies workflow allowlist filtering when enabledWorkflows is configured
+  Applies workflow filtering from enabledWorkflows/disabledWorkflows policy
   Syncs main/master branch without affecting your current work
 
 venfork schedule <status|set <cron>|disable>
@@ -1458,8 +1492,8 @@ venfork stage <branch>
   When schedule is enabled, strips internal workflow commit before public push
   This is when your work becomes visible to the client
 
-venfork workflows <status|allow|clear> [workflow-file ...]
-  Configure enabledWorkflows allowlist for mirror workflows in venfork-config`,
+venfork workflows <status|allow|block|clear> [workflow-file ...]
+  Configure workflow allowlist/blocklist policy in venfork-config`,
     'Available Commands'
   );
 
