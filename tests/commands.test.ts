@@ -449,12 +449,12 @@ describe('syncCommand', () => {
 
     expect(
       pushCalls.some((cmd) =>
-        cmd.includes('git push origin upstream/main:main')
+        cmd.includes('git push origin upstream/main:refs/heads/main')
       )
     ).toBe(true);
     expect(
       pushCalls.some((cmd) =>
-        cmd.includes('git push public upstream/main:main')
+        cmd.includes('git push public upstream/main:refs/heads/main')
       )
     ).toBe(true);
   });

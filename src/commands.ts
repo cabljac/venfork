@@ -1014,7 +1014,7 @@ This suggests commits were made directly to the default branch.
 Force syncing will LOSE these commits.
 
 To preserve them: manually rebase or cherry-pick before running sync.
-To force sync anyway: git push origin upstream/${defaultBranch}:${defaultBranch} -f`,
+To force sync anyway: git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} -f`,
         '⚠️  Warning'
       );
 
@@ -1029,10 +1029,10 @@ To force sync anyway: git push origin upstream/${defaultBranch}:${defaultBranch}
 
     await $(
       cwdOpt
-    )`git push origin upstream/${defaultBranch}:${defaultBranch} --force-with-lease`;
+    )`git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} --force-with-lease`;
     await $(
       cwdOpt
-    )`git push public upstream/${defaultBranch}:${defaultBranch} --force-with-lease`;
+    )`git push public upstream/${defaultBranch}:refs/heads/${defaultBranch} --force-with-lease`;
 
     s.stop('Synced to all remotes');
 
