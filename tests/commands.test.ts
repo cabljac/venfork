@@ -9,6 +9,10 @@ interface RmCall {
   path: string;
   options: { recursive: boolean; force: boolean };
 }
+interface WriteFileCall {
+  path: string;
+  content: string;
+}
 
 type SignalHandler = () => void | Promise<void>;
 type MockResponse =
@@ -18,10 +22,12 @@ type MockResponse =
 // Track calls to our mocks
 const execaCalls: string[] = [];
 const rmCalls: RmCall[] = [];
+const writeFileCalls: WriteFileCall[] = [];
 const signalHandlers = new Map<string, SignalHandler>();
 let shouldHangOnFork = false;
 const mockResponses: Map<string, MockResponse> = new Map();
 let confirmResponse = true; // Default to true for most tests
+let tempDirCounter = 0;
 
 // Store originals
 const originalProcessOn = process.on;
@@ -134,6 +140,16 @@ function getMockExecaResponse(command: string) {
 
 // Mock fs.rm and fs.access BEFORE any imports
 mock.module('node:fs/promises', () => ({
+  mkdtemp: mock((prefix: string) => {
+    tempDirCounter += 1;
+    return Promise.resolve(`${prefix}${tempDirCounter}`);
+  }),
+  mkdir: mock(() => Promise.resolve()),
+  writeFile: mock((path: string, content: string) => {
+    writeFileCalls.push({ path, content });
+    return Promise.resolve();
+  }),
+  readFile: mock(() => Promise.reject(new Error('ENOENT'))),
   rm: mock((path: string, options: { recursive: boolean; force: boolean }) => {
     rmCalls.push({ path, options });
     return Promise.resolve();
@@ -161,11 +177,13 @@ mock.module('@clack/prompts', () => ({
 // Import commands (will use mocked execa, fs, and prompts)
 import {
   cloneCommand,
+  scheduleCommand,
   setupCommand,
   showHelp,
   stageCommand,
   statusCommand,
   syncCommand,
+  workflowsCommand,
 } from '../src/commands.js';
 
 /**
@@ -193,10 +211,12 @@ beforeEach(() => {
   // Clear tracking arrays
   execaCalls.length = 0;
   rmCalls.length = 0;
+  writeFileCalls.length = 0;
   signalHandlers.clear();
   shouldHangOnFork = false;
   mockResponses.clear();
   confirmResponse = true; // Reset to true for each test
+  tempDirCounter = 0;
 
   // Clear VENFORK_ORG environment variable
   delete process.env.VENFORK_ORG;
@@ -429,12 +449,12 @@ describe('syncCommand', () => {
 
     expect(
       pushCalls.some((cmd) =>
-        cmd.includes('git push origin upstream/main:main')
+        cmd.includes('git push origin upstream/main:refs/heads/main')
       )
     ).toBe(true);
     expect(
       pushCalls.some((cmd) =>
-        cmd.includes('git push public upstream/main:main')
+        cmd.includes('git push public upstream/main:refs/heads/main')
       )
     ).toBe(true);
   });
@@ -460,9 +480,77 @@ describe('syncCommand', () => {
 
     // Should call git rev-list to check divergence
     const revListCalls = execaCalls.filter((cmd) =>
-      cmd.includes('git rev-list --count')
+      cmd.includes('git rev-list upstream/main..')
     );
     expect(revListCalls.length).toBeGreaterThanOrEqual(2); // Check origin and public
+  });
+
+  test('re-applies deterministic workflow commit when scheduling is enabled', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) => cmd.includes('git worktree add --detach'))
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'commit --allow-empty -m chore: add/update scheduled sync workflow (venfork)'
+        )
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git push origin HEAD:main --force-with-lease')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git push public HEAD:main --force')
+      )
+    ).toBe(false);
+    expect(
+      writeFileCalls.some((w) =>
+        w.path.includes('.github/workflows/venfork-sync.yml')
+      )
+    ).toBe(true);
+  });
+
+  test('skips workflow commit normalization when scheduling is disabled', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: false, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) => cmd.includes('git worktree add --detach'))
+    ).toBe(false);
   });
 });
 
@@ -503,6 +591,97 @@ describe('stageCommand', () => {
     // Process.exit should have been called
     expect(process.exit).toHaveBeenCalled();
   });
+
+  test('omits workflow commits from public staging history', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git rebase --onto upstream/main origin/main')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some(
+        (cmd) => cmd.includes('git push public') && cmd.includes('--force')
+      )
+    ).toBe(true);
+  });
+});
+
+describe('scheduleCommand', () => {
+  test('sets schedule and writes workflow/config updates', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+      }),
+      stderr: '',
+    });
+
+    try {
+      await scheduleCommand('set', '0 */6 * * *');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git show FETCH_HEAD:.venfork/config.json')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('git push') &&
+          cmd.includes('venfork-config:venfork-config')
+      )
+    ).toBe(true);
+    expect(
+      writeFileCalls.some((w) =>
+        w.path.includes('.github/workflows/venfork-sync.yml')
+      )
+    ).toBe(true);
+  });
+
+  test('disables schedule and removes workflow from default branch', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+
+    try {
+      await scheduleCommand('disable');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) => cmd.includes('git rm --quiet --ignore-unmatch'))
+    ).toBe(true);
+  });
 });
 
 describe('statusCommand', () => {
@@ -538,6 +717,85 @@ describe('showHelp', () => {
 
     // Should not throw and should complete successfully
     expect(true).toBe(true);
+  });
+});
+
+describe('workflowsCommand', () => {
+  test('shows status from config branch', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        enabledWorkflows: ['ci.yml'],
+      }),
+      stderr: '',
+    });
+
+    try {
+      await workflowsCommand('status', []);
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git show FETCH_HEAD:.venfork/config.json')
+      )
+    ).toBe(true);
+  });
+
+  test('updates enabledWorkflows in config branch', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+      }),
+      stderr: '',
+    });
+
+    try {
+      await workflowsCommand('allow', ['ci.yml', 'lint.yml']);
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('git push') &&
+          cmd.includes('venfork-config:venfork-config')
+      )
+    ).toBe(true);
+  });
+
+  test('updates disabledWorkflows in config branch', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+      }),
+      stderr: '',
+    });
+
+    try {
+      await workflowsCommand('block', ['deploy.yml']);
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('git push') &&
+          cmd.includes('venfork-config:venfork-config')
+      )
+    ).toBe(true);
   });
 });
 
@@ -874,9 +1132,9 @@ describe('cloneCommand - error paths', () => {
 describe('syncCommand - error paths', () => {
   test('aborts when origin has divergent commits', async () => {
     // Mock rev-list to show origin has divergent commits
-    mockResponses.set('git rev-list --count upstream/main..origin/main', {
+    mockResponses.set('git rev-list upstream/main..origin/main', {
       exitCode: 0,
-      stdout: '3',
+      stdout: 'abc123\n',
       stderr: '',
     });
 
@@ -891,9 +1149,9 @@ describe('syncCommand - error paths', () => {
 
   test('aborts when public has divergent commits', async () => {
     // Mock rev-list to show public has divergent commits
-    mockResponses.set('git rev-list --count upstream/main..public/main', {
+    mockResponses.set('git rev-list upstream/main..public/main', {
       exitCode: 0,
-      stdout: '2',
+      stdout: 'def456\n',
       stderr: '',
     });
 

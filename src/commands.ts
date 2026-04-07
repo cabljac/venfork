@@ -1,10 +1,15 @@
 import { randomBytes } from 'node:crypto';
-import { access, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
-import { createConfigBranch, fetchVenforkConfig } from './config.js';
+import {
+  createConfigBranch,
+  fetchVenforkConfig,
+  readVenforkConfigFromRepo,
+  updateVenforkConfig,
+} from './config.js';
 import {
   AuthenticationError,
   BranchNotFoundError,
@@ -27,6 +32,7 @@ import {
   parseRepoName,
   parseRepoPath,
 } from './utils.js';
+import { generateSyncWorkflow, getSyncWorkflowPath } from './workflow.js';
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -34,6 +40,333 @@ async function pathExists(filePath: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+const SYNC_WORKFLOW_PATH = getSyncWorkflowPath();
+const WORKFLOW_COMMIT_MESSAGE =
+  'chore: add/update scheduled sync workflow (venfork)';
+const WORKFLOWS_DIR = '.github/workflows';
+const VENFORK_BOT_NAME = 'venfork-bot';
+const VENFORK_BOT_EMAIL = 'venfork-bot@users.noreply.github.com';
+
+function normalizeWorkflowList(entries: string[]): string[] {
+  return Array.from(
+    new Set(
+      entries
+        .map((entry) => path.basename(entry.trim()))
+        .filter((entry) => entry.length > 0)
+        .sort()
+    )
+  );
+}
+
+async function commitSubject(
+  ref: string,
+  cwd?: string
+): Promise<string | null> {
+  const cwdOpt = cwd ? { cwd } : {};
+  const result = await $({
+    ...cwdOpt,
+    reject: false,
+  })`git log -1 --format=%s ${ref}`;
+  if (result.exitCode !== 0) {
+    return null;
+  }
+  return result.stdout.trim();
+}
+
+async function commitTouchesWorkflowPath(
+  ref: string,
+  cwd?: string
+): Promise<boolean> {
+  const cwdOpt = cwd ? { cwd } : {};
+  const filesResult = await $({
+    ...cwdOpt,
+    reject: false,
+  })`git show --name-only --pretty=format: ${ref}`;
+  if (filesResult.exitCode !== 0) {
+    return false;
+  }
+  const changedFiles = filesResult.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (!changedFiles.length) {
+    return false;
+  }
+  return changedFiles.every((filePath) => filePath === SYNC_WORKFLOW_PATH);
+}
+
+/**
+ * Internal workflow commit marker used by the mirror "+1 commit" model.
+ *
+ * We identify this commit by its deterministic message and also accept commits
+ * that change only the managed workflow file, so historical repos can still
+ * be normalized.
+ */
+async function isWorkflowCommit(ref: string, cwd?: string): Promise<boolean> {
+  const subject = await commitSubject(ref, cwd);
+  if (subject === WORKFLOW_COMMIT_MESSAGE) {
+    return true;
+  }
+  return commitTouchesWorkflowPath(ref, cwd);
+}
+
+function isValidCronField(field: string, min: number, max: number): boolean {
+  if (field === '*') {
+    return true;
+  }
+
+  const isValidNumber = (value: string): boolean => {
+    if (!/^\d+$/.test(value)) {
+      return false;
+    }
+    const parsed = Number.parseInt(value, 10);
+    return parsed >= min && parsed <= max;
+  };
+
+  const isValidRange = (value: string): boolean => {
+    const [start, end] = value.split('-');
+    if (!start || !end || !isValidNumber(start) || !isValidNumber(end)) {
+      return false;
+    }
+    return Number.parseInt(start, 10) <= Number.parseInt(end, 10);
+  };
+
+  const stepParts = field.split('/');
+  if (stepParts.length > 2) {
+    return false;
+  }
+  if (stepParts.length === 2) {
+    const [base, step] = stepParts;
+    if (
+      !base ||
+      !step ||
+      !isValidNumber(step) ||
+      Number.parseInt(step, 10) <= 0
+    ) {
+      return false;
+    }
+    if (base === '*') {
+      return true;
+    }
+    if (base.includes(',')) {
+      return false;
+    }
+    return base.includes('-') ? isValidRange(base) : isValidNumber(base);
+  }
+
+  if (field.includes(',')) {
+    return field
+      .split(',')
+      .every((part) =>
+        part.includes('-') ? isValidRange(part) : isValidNumber(part)
+      );
+  }
+  if (field.includes('-')) {
+    return isValidRange(field);
+  }
+  return isValidNumber(field);
+}
+
+function isValidCronExpression(cron: string): boolean {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    return false;
+  }
+
+  const ranges = [
+    { min: 0, max: 59 }, // minute
+    { min: 0, max: 23 }, // hour
+    { min: 1, max: 31 }, // day of month
+    { min: 1, max: 12 }, // month
+    { min: 0, max: 7 }, // day of week
+  ];
+
+  return parts.every((part, index) => {
+    const range = ranges[index];
+    return isValidCronField(part, range.min, range.max);
+  });
+}
+
+async function isScheduleEnabled(cwd?: string): Promise<boolean> {
+  const repoDir = cwd ?? process.cwd();
+  const config = await readVenforkConfigFromRepo(repoDir);
+  return Boolean(config?.schedule?.enabled);
+}
+
+async function listWorkflowFiles(cwd: string): Promise<string[]> {
+  const result = await $({
+    cwd,
+    reject: false,
+  })`git ls-tree -r --name-only HEAD ${WORKFLOWS_DIR}`;
+  if (result.exitCode !== 0 || !result.stdout.trim()) {
+    return [];
+  }
+  return result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+async function remoteBranchExists(
+  remote: string,
+  branch: string
+): Promise<boolean> {
+  const result = await $({
+    reject: false,
+  })`git ls-remote --exit-code --heads ${remote} ${branch}`;
+  return result.exitCode === 0;
+}
+
+async function applyScheduledWorkflowCommit(
+  defaultBranch: string,
+  cron: string,
+  enabledWorkflows: string[],
+  disabledWorkflows: string[],
+  cwd?: string
+): Promise<void> {
+  const repoDir = cwd ?? process.cwd();
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-sync-'));
+  const allowlist = normalizeWorkflowList(enabledWorkflows);
+  const blocklist = normalizeWorkflowList(disabledWorkflows);
+
+  try {
+    // Re-stamp from upstream so the private mirror default branch is always
+    // `upstream + exactly one deterministic internal workflow commit`.
+    await $({
+      cwd: repoDir,
+    })`git worktree add --detach ${tempDir} upstream/${defaultBranch}`;
+    await mkdir(path.join(tempDir, '.github', 'workflows'), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(tempDir, SYNC_WORKFLOW_PATH),
+      generateSyncWorkflow(cron)
+    );
+    await $({ cwd: tempDir })`git add ${SYNC_WORKFLOW_PATH}`;
+
+    // Filter upstream workflow files as part of the managed "+1" commit.
+    // Precedence: enabledWorkflows allowlist > disabledWorkflows blocklist.
+    if (allowlist.length > 0 || blocklist.length > 0) {
+      const workflowFiles = await listWorkflowFiles(tempDir);
+      for (const workflowFile of workflowFiles) {
+        if (workflowFile === SYNC_WORKFLOW_PATH) {
+          continue;
+        }
+        const base = path.basename(workflowFile);
+        const shouldKeep =
+          allowlist.length > 0
+            ? allowlist.includes(base)
+            : !blocklist.includes(base);
+        if (!shouldKeep) {
+          await $({
+            cwd: tempDir,
+            reject: false,
+          })`git rm --quiet --ignore-unmatch ${workflowFile}`;
+        }
+      }
+    }
+
+    await $({
+      cwd: tempDir,
+    })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit --allow-empty -m ${WORKFLOW_COMMIT_MESSAGE}`;
+
+    await $({
+      cwd: tempDir,
+    })`git push origin HEAD:${defaultBranch} --force-with-lease`;
+  } finally {
+    await $({
+      cwd: repoDir,
+      reject: false,
+    })`git worktree remove --force ${tempDir}`;
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function updateWorkflowOnOriginDefault(
+  defaultBranch: string,
+  workflowContent: string | null,
+  cwd?: string
+): Promise<boolean> {
+  const repoDir = cwd ?? process.cwd();
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-workflow-'));
+
+  try {
+    await $({
+      cwd: repoDir,
+    })`git worktree add --detach ${tempDir} origin/${defaultBranch}`;
+
+    if (workflowContent === null) {
+      await $({
+        cwd: tempDir,
+        reject: false,
+      })`git rm --quiet --ignore-unmatch ${SYNC_WORKFLOW_PATH}`;
+    } else {
+      await mkdir(path.join(tempDir, '.github', 'workflows'), {
+        recursive: true,
+      });
+      await writeFile(path.join(tempDir, SYNC_WORKFLOW_PATH), workflowContent);
+      await $({ cwd: tempDir })`git add ${SYNC_WORKFLOW_PATH}`;
+    }
+
+    const stagedDiff = await $({
+      cwd: tempDir,
+      reject: false,
+    })`git diff --cached --quiet`;
+    if (stagedDiff.exitCode === 0) {
+      return false;
+    }
+
+    await $({
+      cwd: tempDir,
+    })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${WORKFLOW_COMMIT_MESSAGE}`;
+    await $({
+      cwd: tempDir,
+    })`git push origin HEAD:${defaultBranch} --force-with-lease`;
+    return true;
+  } finally {
+    await $({
+      cwd: repoDir,
+      reject: false,
+    })`git worktree remove --force ${tempDir}`;
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function buildPublicStageHeadWithoutWorkflowCommit(
+  branch: string,
+  defaultBranch: string,
+  cwd?: string
+): Promise<string> {
+  const repoDir = cwd ?? process.cwd();
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-stage-'));
+  try {
+    await $({
+      cwd: repoDir,
+    })`git worktree add --detach ${tempDir} ${branch}`;
+    const rebaseResult = await $({
+      cwd: tempDir,
+      reject: false,
+    })`git rebase --onto upstream/${defaultBranch} origin/${defaultBranch}`;
+    if (rebaseResult.exitCode !== 0) {
+      await $({
+        cwd: tempDir,
+        reject: false,
+      })`git rebase --abort`;
+      throw new Error(
+        `Failed to stage '${branch}' because removing the internal workflow commit caused rebase conflicts. Rebase '${branch}' on upstream/${defaultBranch} and retry.`
+      );
+    }
+    const headResult = await $({ cwd: tempDir })`git rev-parse HEAD`;
+    return headResult.stdout.trim();
+  } finally {
+    await $({
+      cwd: repoDir,
+      reject: false,
+    })`git worktree remove --force ${tempDir}`;
+    await rm(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -622,6 +955,11 @@ export async function syncCommand(
     // Step 2: Detect default branch if not specified
     const defaultBranch =
       targetBranch || (await getDefaultBranch('upstream', options?.cwd));
+    const repoDir = options?.cwd ?? process.cwd();
+    const config = await readVenforkConfigFromRepo(repoDir);
+    const scheduleConfig = config?.schedule;
+    const enabledWorkflows = config?.enabledWorkflows ?? [];
+    const disabledWorkflows = config?.disabledWorkflows ?? [];
 
     // Step 3: Check for divergence
     s.start('Checking for divergent commits');
@@ -630,8 +968,19 @@ export async function syncCommand(
       try {
         const result = await $({
           ...cwdOpt,
-        })`git rev-list --count upstream/${defaultBranch}..${remote}/${defaultBranch}`;
-        return Number.parseInt(result.stdout.trim(), 10);
+        })`git rev-list upstream/${defaultBranch}..${remote}/${defaultBranch}`;
+        const divergentCommits = result.stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
+
+        let userFacingDivergence = 0;
+        for (const commit of divergentCommits) {
+          if (!(await isWorkflowCommit(commit, options?.cwd))) {
+            userFacingDivergence += 1;
+          }
+        }
+        return userFacingDivergence;
       } catch {
         // Remote branch might not exist yet (first sync)
         return 0;
@@ -665,7 +1014,7 @@ This suggests commits were made directly to the default branch.
 Force syncing will LOSE these commits.
 
 To preserve them: manually rebase or cherry-pick before running sync.
-To force sync anyway: git push origin upstream/${defaultBranch}:${defaultBranch} -f`,
+To force sync anyway: git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} -f`,
         '⚠️  Warning'
       );
 
@@ -680,12 +1029,27 @@ To force sync anyway: git push origin upstream/${defaultBranch}:${defaultBranch}
 
     await $(
       cwdOpt
-    )`git push origin upstream/${defaultBranch}:${defaultBranch} --force`;
+    )`git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} --force-with-lease`;
     await $(
       cwdOpt
-    )`git push public upstream/${defaultBranch}:${defaultBranch} --force`;
+    )`git push public upstream/${defaultBranch}:refs/heads/${defaultBranch} --force-with-lease`;
 
     s.stop('Synced to all remotes');
+
+    // Step 6: Enforce mirror "+1 commit" model for scheduled sync workflow.
+    // Scheduling config lives on `venfork-config`; when enabled we re-stamp
+    // one deterministic workflow commit on top of upstream.
+    if (scheduleConfig?.enabled && scheduleConfig.cron) {
+      s.start('Re-applying scheduled sync workflow commit');
+      await applyScheduledWorkflowCommit(
+        defaultBranch,
+        scheduleConfig.cron,
+        enabledWorkflows,
+        disabledWorkflows,
+        options?.cwd
+      );
+      s.stop('Scheduled workflow commit normalized');
+    }
 
     if (!quiet) {
       p.outro(
@@ -698,6 +1062,192 @@ To force sync anyway: git push origin upstream/${defaultBranch}:${defaultBranch}
     if (!quiet) {
       p.outro('❌ Sync failed');
     }
+    process.exit(1);
+  }
+}
+
+/**
+ * Schedule command: Configure automated sync via GitHub Actions workflow.
+ */
+export async function scheduleCommand(
+  action?: string,
+  value?: string
+): Promise<void> {
+  p.intro('⏰ Venfork Schedule');
+  const repoDir = process.cwd();
+  const s = p.spinner();
+
+  try {
+    const defaultBranch = await getDefaultBranch('upstream');
+
+    if (action === 'set') {
+      const cron = value?.trim();
+      if (!cron) {
+        p.log.error('Cron expression is required');
+        p.outro('Usage: venfork schedule set "<cron>"');
+        process.exit(1);
+      }
+      if (!isValidCronExpression(cron)) {
+        p.log.error('Invalid cron expression (expected 5 fields)');
+        p.outro('Usage: venfork schedule set "<cron>"');
+        process.exit(1);
+      }
+
+      s.start('Updating schedule in venfork-config');
+      await updateVenforkConfig(repoDir, {
+        schedule: { enabled: true, cron },
+      });
+      s.stop('Schedule configuration updated');
+
+      await $`git fetch origin`;
+      s.start('Updating workflow on default branch');
+      await updateWorkflowOnOriginDefault(
+        defaultBranch,
+        generateSyncWorkflow(cron),
+        repoDir
+      );
+      s.stop('Workflow updated');
+
+      p.outro(
+        `✨ Scheduled sync enabled\n\nBranch: ${defaultBranch}\nCron: ${cron}\nWorkflow: ${SYNC_WORKFLOW_PATH}`
+      );
+      return;
+    }
+
+    if (action === 'disable') {
+      s.start('Disabling schedule in venfork-config');
+      const currentConfig = await readVenforkConfigFromRepo(repoDir);
+      if (!currentConfig) {
+        throw new Error('venfork-config branch not found or invalid');
+      }
+      await updateVenforkConfig(repoDir, {
+        schedule: {
+          enabled: false,
+          cron: currentConfig.schedule?.cron || '0 * * * *',
+        },
+      });
+      s.stop('Schedule configuration updated');
+
+      await $`git fetch origin`;
+      s.start('Removing workflow from default branch');
+      await updateWorkflowOnOriginDefault(defaultBranch, null, repoDir);
+      s.stop('Workflow removed');
+
+      p.outro(
+        `✨ Scheduled sync disabled\n\nBranch: ${defaultBranch}\nWorkflow removed: ${SYNC_WORKFLOW_PATH}`
+      );
+      return;
+    }
+
+    if (action === 'status' || !action) {
+      s.start('Reading schedule configuration');
+      const config = await readVenforkConfigFromRepo(repoDir);
+      s.stop('Configuration loaded');
+      if (!config) {
+        throw new Error('venfork-config branch not found or invalid');
+      }
+      const schedule = config.schedule;
+      const enabled = Boolean(schedule?.enabled);
+      const cron = schedule?.cron || '(not set)';
+      p.note(
+        `Branch: ${defaultBranch}\nEnabled: ${enabled ? 'yes' : 'no'}\nCron: ${cron}\nWorkflow: ${SYNC_WORKFLOW_PATH}`,
+        'Schedule Status'
+      );
+      p.outro('✨ Schedule status shown');
+      return;
+    }
+
+    p.log.error(`Unknown schedule action: ${action}`);
+    p.outro(
+      'Usage: venfork schedule <status|set <cron>|disable>\nExample: venfork schedule set "0 */6 * * *"'
+    );
+    process.exit(1);
+  } catch (error) {
+    s.stop('Error occurred');
+    p.log.error(error instanceof Error ? error.message : String(error));
+    p.outro('❌ Schedule command failed');
+    process.exit(1);
+  }
+}
+
+/**
+ * Workflows command: manage workflow allowlist in venfork-config.
+ */
+export async function workflowsCommand(
+  action: 'status' | 'allow' | 'block' | 'clear',
+  workflows: string[]
+): Promise<void> {
+  p.intro('🧩 Venfork Workflows');
+  const repoDir = process.cwd();
+
+  try {
+    if (action === 'status') {
+      const config = await readVenforkConfigFromRepo(repoDir);
+      if (!config) {
+        throw new Error('venfork-config branch not found or invalid');
+      }
+      const allowlist = config.enabledWorkflows ?? [];
+      const blocklist = config.disabledWorkflows ?? [];
+      if (allowlist.length === 0 && blocklist.length === 0) {
+        p.note(
+          'No workflow policy configured. Mirror keeps all upstream workflows unless schedule logic modifies them.',
+          'Workflows Status'
+        );
+      } else {
+        const lines = [
+          `enabledWorkflows: ${allowlist.length > 0 ? 'set' : 'not set'}`,
+          `disabledWorkflows: ${blocklist.length > 0 ? 'set' : 'not set'}`,
+          allowlist.length > 0
+            ? `Allowed files:\n${allowlist.map((name) => `- ${name}`).join('\n')}`
+            : '',
+          blocklist.length > 0
+            ? `Blocked files:\n${blocklist.map((name) => `- ${name}`).join('\n')}`
+            : '',
+          allowlist.length > 0
+            ? 'Precedence: enabledWorkflows allowlist overrides disabledWorkflows.'
+            : '',
+        ].filter((line) => line.length > 0);
+        p.note(lines.join('\n'), 'Workflow Policy');
+      }
+      p.outro('✨ Workflows status shown');
+      return;
+    }
+
+    if (action === 'clear') {
+      await updateVenforkConfig(repoDir, {
+        enabledWorkflows: null,
+        disabledWorkflows: null,
+      });
+      p.outro(
+        '✨ Workflow policy cleared. Run `venfork sync` to apply on the private mirror default branch.'
+      );
+      return;
+    }
+
+    const normalized = normalizeWorkflowList(workflows);
+    if (action === 'allow') {
+      await updateVenforkConfig(repoDir, { enabledWorkflows: normalized });
+      p.note(
+        normalized.map((name) => `- ${name}`).join('\n'),
+        'Allowed workflow files'
+      );
+      p.outro(
+        '✨ Workflow allowlist updated. Run `venfork sync` to apply on the private mirror default branch.'
+      );
+      return;
+    }
+
+    await updateVenforkConfig(repoDir, { disabledWorkflows: normalized });
+    p.note(
+      normalized.map((name) => `- ${name}`).join('\n'),
+      'Blocked workflow files'
+    );
+    p.outro(
+      '✨ Workflow blocklist updated. Run `venfork sync` to apply on the private mirror default branch.'
+    );
+  } catch (error) {
+    p.log.error(error instanceof Error ? error.message : String(error));
+    p.outro('❌ Workflows command failed');
     process.exit(1);
   }
 }
@@ -776,13 +1326,37 @@ This makes your work visible and ready for PR to upstream.
       process.exit(0);
     }
 
-    // Step 5: Push to public fork
-    s.start('Pushing to public fork');
-    await $`git push public ${branch}`;
-    s.stop('Push successful');
+    const repoDir = process.cwd();
 
-    // Step 6: Detect upstream default branch for PR URL
+    // Step 5: Detect upstream default branch for staging + PR URL
     const upstreamDefaultBranch = await getDefaultBranch('upstream');
+    const scheduleEnabled = await isScheduleEnabled(repoDir);
+
+    // Step 6: If schedule is enabled, strip the internal workflow commit before
+    // publishing. Otherwise keep normal direct branch push behavior.
+    if (scheduleEnabled) {
+      await $`git fetch upstream`;
+      await $`git fetch origin`;
+      s.start('Preparing sanitized branch for public staging');
+      const stageHead = await buildPublicStageHeadWithoutWorkflowCommit(
+        branch,
+        upstreamDefaultBranch,
+        repoDir
+      );
+      s.stop('Prepared sanitized branch');
+
+      s.start('Pushing sanitized branch to public fork');
+      if (await remoteBranchExists('public', branch)) {
+        await $`git push public ${stageHead}:refs/heads/${branch} --force-with-lease=refs/heads/${branch}`;
+      } else {
+        await $`git push public ${stageHead}:refs/heads/${branch}`;
+      }
+      s.stop('Push successful');
+    } else {
+      s.start('Pushing to public fork');
+      await $`git push public ${branch}`;
+      s.stop('Push successful');
+    }
 
     // Step 7: Show PR creation link
     const prUrl = `https://github.com/${upstreamRepoPath}/compare/${upstreamDefaultBranch}...${publicRepoPath.split('/')[0]}:${branch}?expand=1`;
@@ -905,11 +1479,21 @@ venfork status
 
 venfork sync [branch]
   Update default branches of origin and public to match upstream
+  Re-stamps private default branch as upstream + one internal workflow commit when schedule is enabled
+  Applies workflow filtering from enabledWorkflows/disabledWorkflows policy
   Syncs main/master branch without affecting your current work
+
+venfork schedule <status|set <cron>|disable>
+  Manage scheduled sync config stored in venfork-config
+  Set writes/removes ${SYNC_WORKFLOW_PATH} on the private mirror default branch
 
 venfork stage <branch>
   Push branch to public fork for PR to upstream
-  This is when your work becomes visible to the client`,
+  When schedule is enabled, strips internal workflow commit before public push
+  This is when your work becomes visible to the client
+
+venfork workflows <status|allow|block|clear> [workflow-file ...]
+  Configure workflow allowlist/blocklist policy in venfork-config`,
     'Available Commands'
   );
 

@@ -3,13 +3,16 @@
 import * as p from '@clack/prompts';
 import {
   cloneCommand,
+  scheduleCommand,
   setupCommand,
   showHelp,
   stageCommand,
   statusCommand,
   syncCommand,
+  workflowsCommand,
 } from './commands.js';
 import { parseSetupCliArgs } from './setup-args.js';
+import { parseWorkflowsCliArgs } from './workflows-args.js';
 
 /**
  * Main CLI entry point
@@ -45,12 +48,20 @@ async function main(): Promise<void> {
     case 'sync':
       await syncCommand(args[1]);
       break;
+    case 'schedule':
+      await scheduleCommand(args[1], args[2]);
+      break;
     case 'stage':
       await stageCommand(args[1]);
       break;
     case 'status':
       await statusCommand();
       break;
+    case 'workflows': {
+      const parsed = parseWorkflowsCliArgs(args.slice(1));
+      await workflowsCommand(parsed.action, parsed.workflows);
+      break;
+    }
     default:
       p.log.error(`Unknown command: ${command}`);
       showHelp();

@@ -208,8 +208,12 @@ venfork sync develop   # Sync develop branch with upstream/develop
 **What it does:**
 1. Fetches latest changes from all remotes (upstream, origin, public)
 2. Checks for divergent commits (warns if found to prevent data loss)
-3. Force pushes upstream's default branch to origin and public
-4. **Does not affect your current working branch or feature branches**
+3. Pushes upstream's default branch to origin and public
+4. If scheduled sync is enabled, re-applies one deterministic top commit for `.github/workflows/venfork-sync.yml` on the private mirror default branch
+5. If workflow policy is configured, that managed commit filters `.github/workflows` using:
+   - `enabledWorkflows` allowlist (highest precedence)
+   - otherwise `disabledWorkflows` blocklist
+6. **Does not affect your current working branch or feature branches**
 
 **Important:**
 - This keeps your default branches (main/master) in sync with upstream
@@ -255,8 +259,45 @@ venfork stage bugfix/issue-123
 **What it does:**
 1. Verifies branch exists
 2. Shows staging details and confirmation
-3. Pushes to public fork
-4. Provides PR creation link
+3. Rebuilds branch history on top of upstream while removing internal workflow commits
+4. Pushes sanitized history to public fork
+5. Provides PR creation link
+
+### `venfork schedule <status|set <cron>|disable>`
+
+Manage automated sync configuration stored in `venfork-config`.
+
+**Examples:**
+```bash
+venfork schedule status
+venfork schedule set "0 */6 * * *"
+venfork schedule disable
+```
+
+**What it does:**
+1. Stores schedule state (`enabled`, `cron`) in `.venfork/config.json` on `venfork-config`
+2. `set` writes/updates `.github/workflows/venfork-sync.yml` on the private mirror default branch
+3. `disable` removes the managed workflow file from that branch
+
+### `venfork workflows <status|allow|block|clear> [workflow-file ...]`
+
+Manage which upstream workflow files should remain active in the private mirror when managed sync commit logic runs.
+
+**Examples:**
+```bash
+venfork workflows status
+venfork workflows allow ci.yml lint.yml
+venfork workflows block deploy.yml e2e.yml
+venfork workflows clear
+```
+
+**What it does:**
+1. Stores `enabledWorkflows` / `disabledWorkflows` in `.venfork/config.json` on `venfork-config`
+2. `allow` sets the allowlist by workflow filename
+3. `block` sets the blocklist by workflow filename
+4. `clear` removes both lists
+5. Precedence: if `enabledWorkflows` is non-empty, it is used and `disabledWorkflows` is ignored
+6. Changes apply to the mirror default branch on next `venfork sync` (when schedule is enabled)
 
 ## Environment Variables
 
