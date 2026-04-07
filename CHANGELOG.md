@@ -1,5 +1,25 @@
 # venfork
 
+## [0.4.0](https://github.com/cabljac/venfork/compare/v0.3.0...v0.4.0) (2026-04-07)
+
+
+### Features
+
+* **commands:** Enhance sync and staging workflows by adding scheduled sync commit handling ([7213e15](https://github.com/cabljac/venfork/commit/7213e15d8bd1f129a50947c6ea023d1342d1ea81))
+* configurable scheduled sync via GitHub Actions (+1 workflow commit model) ([bbc771c](https://github.com/cabljac/venfork/commit/bbc771cc2402732bfe3df9f33e98a817d4c2f696))
+* **schedule:** Implement scheduled sync management and update workflow configuration ([cf7799e](https://github.com/cabljac/venfork/commit/cf7799ecb72c157b2e8477a16db515223fcaa59f))
+* **workflows:** add mirror workflow allowlist controls ([35e8190](https://github.com/cabljac/venfork/commit/35e81904f837478dde13615a0793cd45bbd29f32))
+* **workflows:** introduce allowlist and blocklist for workflow management ([972043a](https://github.com/cabljac/venfork/commit/972043a557d631a1f51bb10ac57df7101bd93aa7))
+
+
+### Bug Fixes
+
+* apply review feedback - workflow-only commit detection, divergence count, force-with-lease, cron YAML escaping ([9d4778d](https://github.com/cabljac/venfork/commit/9d4778dbbf3f7ef95c8a6debbcda8277d1f91b06))
+* **commands, workflow:** Improve file change detection and cron string handling in workflow generation ([87f29be](https://github.com/cabljac/venfork/commit/87f29beed399a7a608de8aa95ba16b430f086bb5))
+* **commands, workflow:** Remove unused import and simplify cron escaping function ([cde295e](https://github.com/cabljac/venfork/commit/cde295ec2b3d6563b78e1a284fa03fed828bd218))
+* **commands:** Enhance cron expression validation and add remote branch existence check ([75b0707](https://github.com/cabljac/venfork/commit/75b0707582ca10663f929d37a70d5ffba3cba22e))
+* **commands:** Update git push commands to use refs/heads for branch references ([aa98038](https://github.com/cabljac/venfork/commit/aa98038f56743babfdc3fadee93808a90c8f2c48))
+
 ## [0.3.0](https://github.com/cabljac/venfork/compare/v0.2.0...v0.3.0) (2026-03-30)
 
 
