@@ -1,5 +1,12 @@
 # venfork
 
+## [0.4.1](https://github.com/cabljac/venfork/compare/v0.4.0...v0.4.1) (2026-04-08)
+
+
+### Bug Fixes
+
+* **README:** Clarify behavior of `venfork sync` and default branch management with scheduled sync ([1a68f0e](https://github.com/cabljac/venfork/commit/1a68f0ed9e32ea01505e4bb960d95423686b1027))
+
 ## [0.4.0](https://github.com/cabljac/venfork/compare/v0.3.0...v0.4.0) (2026-04-07)
 
 
