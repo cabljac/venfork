@@ -785,6 +785,22 @@ export async function stageCommand(
     const publicRepoPath = parseRepoPath(publicUrl);
     const publicOwner = parseOwner(publicUrl);
 
+    if (!publicRepoPath) {
+      p.log.error(
+        "Could not determine the GitHub repository path from the 'public' remote URL. " +
+          "Please ensure the 'public' remote points to a valid github.com repository.",
+      );
+      process.exit(1);
+    }
+
+    if (options?.createPr && !publicOwner) {
+      p.log.error(
+        "Could not determine the GitHub owner from the 'public' remote URL required for --create-pr. " +
+          "Please ensure the 'public' remote points to a valid github.com repository.",
+      );
+      process.exit(1);
+    }
+
     // Step 3: Get upstream URL for PR link
     const upstreamUrlResult = await $({
       reject: false,
@@ -854,6 +870,10 @@ This makes your work visible and ready for PR to upstream.
         s.stop('Draft PR created');
       } else {
         s.stop('Draft PR not created');
+        const stderr = createResult.stderr?.toString().trim();
+        if (stderr) {
+          p.log.warn(`gh pr create failed: ${stderr}`);
+        }
       }
     }
 
