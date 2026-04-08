@@ -145,7 +145,7 @@ venfork setup my-org/foo my-foo-private --org my-org --fork-name foo-public
 - Clones the private mirror into `./<private-mirror-name>`, or **reuses** that directory if it is already a git repo whose `origin` points at the expected mirror URL.
 - Ensures `public` and `upstream` remotes exist and point at the right URLs (adds or corrects them).
 - Pushes the `venfork-config` branch again so teammates get current URLs.
-- If **either** GitHub repo was already present, runs **`venfork sync` inside that clone** so default branches on `origin` and `public` match `upstream` (subject to the usual divergence safeguards).
+- If **either** GitHub repo was already present, runs **`venfork sync` inside that clone** so defaults are normalized from `upstream` (subject to divergence safeguards): `public` matches upstream, while `origin` may include one managed workflow commit when scheduled sync is enabled.
 
 Pure failures (for example name taken by a **different** repo) still abort setup. If recovery sync stops due to divergent default branches, fix or move those commits, then run **`venfork sync`** again from inside the private mirror.
 
@@ -192,7 +192,9 @@ venfork clone git@github.com:acme-corp/awesome-project-private.git
 
 ### `venfork sync [branch]`
 
-Update the default branches of your private mirror and public fork to match upstream.
+Update default branches from upstream. With scheduled sync enabled, the private mirror uses a managed `+1` model:
+- `public/<default>` matches `upstream/<default>`
+- `origin/<default>` is `upstream/<default>` plus one deterministic managed workflow commit
 
 Normally you run this from your private mirror directory (or any subfolder of that repo). The same behavior is also used internally when **`venfork setup`** completes in recovery mode (existing GitHub repos), using the new clone’s path automatically.
 
@@ -216,7 +218,8 @@ venfork sync develop   # Sync develop branch with upstream/develop
 6. **Does not affect your current working branch or feature branches**
 
 **Important:**
-- This keeps your default branches (main/master) in sync with upstream
+- With scheduled sync enabled, mirror default branch follows the `upstream + 1 managed commit` model
+- Public default branch remains aligned with upstream
 - Your current work on feature branches is completely unaffected
 - If divergent commits are detected, sync will abort to prevent data loss
 
