@@ -859,6 +859,26 @@ describe('setupCommand - organization tests', () => {
     ).toBe(true);
   });
 
+  test('handles owner/repo shorthand with --org and --fork-name', async () => {
+    try {
+      await setupCommand(
+        'firebase/extensions',
+        'firebase-extensions-private',
+        'invertase',
+        'firebase-extensions'
+      );
+    } catch {
+      // Expected
+    }
+
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls[0]).toContain('gh repo fork firebase/extensions');
+    expect(forkCalls[0]).not.toContain("gh repo fork ''");
+    expect(forkCalls[0]).toContain('--org invertase');
+    expect(forkCalls[0]).toContain('--fork-name firebase-extensions');
+  });
+
   test('uses organization in git URLs when specified', async () => {
     try {
       await setupCommand(

@@ -137,6 +137,9 @@ venfork setup git@github.com:client/project.git internal-mirror --org my-company
 # Upstream is already my-org/foo — fork under my-org with a different public repo name
 venfork setup my-org/foo my-foo-private --org my-org --fork-name foo-public
 # Creates: my-org/my-foo-private (private), my-org/foo-public (public fork), upstream = my-org/foo
+
+# Shorthand also works with --org + --fork-name (equivalent to git@github.com:firebase/extensions.git)
+venfork setup firebase/extensions firebase-extensions-private --org invertase --fork-name firebase-extensions
 ```
 
 **Re-running setup (repos already on GitHub):** Run the same command again if you need a fresh local clone, remote fixes, or an updated `venfork-config` branch. Venfork uses `gh repo view` to detect a public fork or private mirror that already exists when `gh repo fork` or `gh repo create` fails, then:

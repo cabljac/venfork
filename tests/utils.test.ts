@@ -99,6 +99,16 @@ describe('parseRepoName', () => {
 });
 
 describe('parseRepoPath', () => {
+  test('accepts owner/repo shorthand directly', () => {
+    expect(parseRepoPath('firebase/extensions')).toBe('firebase/extensions');
+  });
+
+  test('accepts owner/repo.git shorthand directly', () => {
+    expect(parseRepoPath('firebase/extensions.git')).toBe(
+      'firebase/extensions'
+    );
+  });
+
   test('extracts owner/repo from SSH URL with .git', () => {
     expect(parseRepoPath('git@github.com:facebook/react.git')).toBe(
       'facebook/react'
