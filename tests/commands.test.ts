@@ -653,7 +653,9 @@ describe('stageCommand', () => {
     ).toBe(true);
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git rev-list --reverse upstream/main..feature-branch')
+        cmd.includes(
+          'git rev-list --reverse --no-merges upstream/main..feature-branch'
+        )
       )
     ).toBe(true);
     expect(
@@ -680,11 +682,14 @@ describe('stageCommand', () => {
       }),
       stderr: '',
     });
-    mockResponses.set('git rev-list --reverse upstream/main..feature-branch', {
-      exitCode: 0,
-      stdout: 'feat111\nwf222\nfeat333',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git rev-list --reverse --no-merges upstream/main..feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'feat111\nwf222\nfeat333',
+        stderr: '',
+      }
+    );
     // Feature commits — not workflow-only.
     mockResponses.set('git log -1 --format=%s feat111', {
       exitCode: 0,
@@ -730,6 +735,65 @@ describe('stageCommand', () => {
     expect(pickCalls.some((cmd) => cmd.includes('feat111'))).toBe(true);
     expect(pickCalls.some((cmd) => cmd.includes('feat333'))).toBe(true);
     expect(pickCalls.some((cmd) => cmd.includes('wf222'))).toBe(false);
+  });
+
+  test('linearizes history with --no-merges so merge commits are skipped', async () => {
+    // Simulates a feature branch that merged origin/<default> back in after a
+    // sync rewrite. The merge commit exists only to resolve a workflow-file
+    // conflict; cherry-picking it onto upstream would fail ("is a merge but
+    // no -m option was given"), and its content is already covered by
+    // cherry-picking the linearized first-parent feature commits.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+    // `--no-merges` makes git omit the merge commit from the list. We assert
+    // venfork passes that flag and only cherry-picks the non-merge commits.
+    mockResponses.set(
+      'git rev-list --reverse --no-merges upstream/main..feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'feat111\nfeat222',
+        stderr: '',
+      }
+    );
+    for (const sha of ['feat111', 'feat222']) {
+      mockResponses.set(`git log -1 --format=%s ${sha}`, {
+        exitCode: 0,
+        stdout: `feat: work ${sha}`,
+        stderr: '',
+      });
+      mockResponses.set(`git show --name-only --pretty=format: ${sha}`, {
+        exitCode: 0,
+        stdout: 'src/feature.ts',
+        stderr: '',
+      });
+    }
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git rev-list --reverse --no-merges upstream/main..feature-branch'
+        )
+      )
+    ).toBe(true);
+    const pickCalls = execaCalls.filter((cmd) =>
+      cmd.includes('git cherry-pick --allow-empty')
+    );
+    expect(pickCalls.some((cmd) => cmd.includes('feat111'))).toBe(true);
+    expect(pickCalls.some((cmd) => cmd.includes('feat222'))).toBe(true);
   });
 });
 
