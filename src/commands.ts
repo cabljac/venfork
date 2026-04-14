@@ -338,6 +338,61 @@ async function updateWorkflowOnOriginDefault(
   }
 }
 
+/**
+ * Files a merge commit resolves *differently* from both parents.
+ *
+ * `git diff-tree --cc` omits hunks where the merge result matches either
+ * parent verbatim, so an empty list means the merge contains no human-authored
+ * conflict resolution we could lose by skipping the merge commit. A non-empty
+ * list whose entries are all under `.github/workflows/` is also safe: the
+ * public fork has no managed workflow file, so a workflow-file resolution is
+ * irrelevant there. Anything else indicates a real "evil merge" whose content
+ * would be lost if we dropped the merge during stage.
+ */
+async function mergeCommitEvilFiles(
+  ref: string,
+  cwd: string
+): Promise<string[]> {
+  const result = await $({
+    cwd,
+    reject: false,
+  })`git diff-tree --cc --name-only --no-commit-id ${ref}`;
+  if (result.exitCode !== 0) {
+    return [];
+  }
+  return result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+async function assertNoEvilMerges(
+  branch: string,
+  defaultBranch: string,
+  cwd: string
+): Promise<void> {
+  const mergeListResult = await $({
+    cwd,
+  })`git rev-list --merges upstream/${defaultBranch}..${branch}`;
+  const mergeCommits = mergeListResult.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const mergeRef of mergeCommits) {
+    const evilFiles = await mergeCommitEvilFiles(mergeRef, cwd);
+    const hasNonWorkflowEvil = evilFiles.some(
+      (filePath) => !filePath.startsWith(`${WORKFLOWS_DIR}/`)
+    );
+    if (hasNonWorkflowEvil) {
+      const shortRef = mergeRef.slice(0, 9);
+      throw new Error(
+        `Failed to stage '${branch}': merge commit ${shortRef} contains manual conflict resolutions (${evilFiles.join(', ')}) that would be lost when linearizing history for the public fork. Rebase '${branch}' onto upstream/${defaultBranch} (dropping merges) and retry.`
+      );
+    }
+  }
+}
+
 async function buildPublicStageHeadWithoutWorkflowCommit(
   branch: string,
   defaultBranch: string,
@@ -352,6 +407,11 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
     // previously-rewritten managed commits from leaking into the public fork
     // when they're still reachable from older feature branches whose base
     // predates a `venfork sync` rewrite of origin's default branch.
+    // Abort before doing any work if the branch contains a merge commit with
+    // manual conflict resolutions outside `.github/workflows/`. `--no-merges`
+    // below would silently drop those resolutions, losing work.
+    await assertNoEvilMerges(branch, defaultBranch, repoDir);
+
     await $({
       cwd: repoDir,
     })`git worktree add --detach ${tempDir} upstream/${defaultBranch}`;
