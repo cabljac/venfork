@@ -737,12 +737,109 @@ describe('stageCommand', () => {
     expect(pickCalls.some((cmd) => cmd.includes('wf222'))).toBe(false);
   });
 
+  test('aborts when a merge commit has evil resolutions outside .github/workflows', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-list --merges upstream/main..feature-branch', {
+      exitCode: 0,
+      stdout: 'evilmrg\n',
+      stderr: '',
+    });
+    mockResponses.set('git diff-tree --cc --name-only --no-commit-id evilmrg', {
+      exitCode: 0,
+      // A manual resolution outside .github/workflows — real work that
+      // would be lost if we silently linearized the merge away.
+      stdout: 'src/conflicted.ts',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected - process.exit(1) via error path
+    }
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+    // Guard must run before the worktree is created, so no cherry-picks happen.
+    expect(
+      execaCalls.some((cmd) => cmd.includes('git worktree add --detach'))
+    ).toBe(false);
+    expect(execaCalls.some((cmd) => cmd.includes('git cherry-pick'))).toBe(
+      false
+    );
+  });
+
+  test('allows merge commits whose evil files are all under .github/workflows', async () => {
+    // The common shape: feature branch merges origin/<default> back in purely
+    // to resolve the managed `venfork-sync.yml` conflict. The merge is "evil"
+    // for that file only, which is irrelevant on the public fork.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-list --merges upstream/main..feature-branch', {
+      exitCode: 0,
+      stdout: 'wfmrg42\n',
+      stderr: '',
+    });
+    mockResponses.set('git diff-tree --cc --name-only --no-commit-id wfmrg42', {
+      exitCode: 0,
+      stdout: '.github/workflows/venfork-sync.yml',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-list --reverse --no-merges upstream/main..feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'feat111',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git log -1 --format=%s feat111', {
+      exitCode: 0,
+      stdout: 'feat: real feature work',
+      stderr: '',
+    });
+    mockResponses.set('git show --name-only --pretty=format: feat111', {
+      exitCode: 0,
+      stdout: 'src/feature.ts',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // Stage should proceed past the guard and into the cherry-pick loop.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git cherry-pick --allow-empty feat111')
+      )
+    ).toBe(true);
+  });
+
   test('linearizes history with --no-merges so merge commits are skipped', async () => {
     // Simulates a feature branch that merged origin/<default> back in after a
     // sync rewrite. The merge commit exists only to resolve a workflow-file
     // conflict; cherry-picking it onto upstream would fail ("is a merge but
-    // no -m option was given"), and its content is already covered by
-    // cherry-picking the linearized first-parent feature commits.
+    // no -m option was given"), and its content is already covered by the
+    // cherry-picked non-merge commits reachable from both sides of the merge.
     mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,
       stdout: JSON.stringify({
