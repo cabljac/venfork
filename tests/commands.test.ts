@@ -642,9 +642,18 @@ describe('stageCommand', () => {
       // Expected in mocked environment
     }
 
+    // Stage builds a detached worktree at upstream/<default> and cherry-picks
+    // non-workflow branch commits onto it.
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('git worktree add --detach') &&
+          cmd.includes('upstream/main')
+      )
+    ).toBe(true);
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git rebase --onto upstream/main origin/main')
+        cmd.includes('git rev-list --reverse upstream/main..feature-branch')
       )
     ).toBe(true);
     expect(
@@ -652,6 +661,75 @@ describe('stageCommand', () => {
         (cmd) => cmd.includes('git push public') && cmd.includes('--force')
       )
     ).toBe(true);
+  });
+
+  test('filters workflow commits by identity, not by position in origin/main', async () => {
+    // Reproduces the bug where a feature branch reachable from an older
+    // origin/main still carried the historical managed workflow commit. After
+    // a later `venfork sync` rewrites origin/main with a *new* managed commit,
+    // the old workflow commit was still reachable from the feature branch. The
+    // previous rebase-based implementation would replay it onto upstream and
+    // leak it to the public fork. The cherry-pick loop must drop it.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-list --reverse upstream/main..feature-branch', {
+      exitCode: 0,
+      stdout: 'feat111\nwf222\nfeat333',
+      stderr: '',
+    });
+    // Feature commits — not workflow-only.
+    mockResponses.set('git log -1 --format=%s feat111', {
+      exitCode: 0,
+      stdout: 'feat: real feature work',
+      stderr: '',
+    });
+    mockResponses.set('git show --name-only --pretty=format: feat111', {
+      exitCode: 0,
+      stdout: 'src/index.ts',
+      stderr: '',
+    });
+    mockResponses.set('git log -1 --format=%s feat333', {
+      exitCode: 0,
+      stdout: 'feat: more real feature work',
+      stderr: '',
+    });
+    mockResponses.set('git show --name-only --pretty=format: feat333', {
+      exitCode: 0,
+      stdout: 'src/other.ts',
+      stderr: '',
+    });
+    // A leftover workflow-only commit (touches only .github/workflows/*).
+    mockResponses.set('git log -1 --format=%s wf222', {
+      exitCode: 0,
+      stdout: 'chore(venfork): hourly sync public fork via dedicated PAT',
+      stderr: '',
+    });
+    mockResponses.set('git show --name-only --pretty=format: wf222', {
+      exitCode: 0,
+      stdout: '.github/workflows/venfork-sync.yml',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    const pickCalls = execaCalls.filter((cmd) =>
+      cmd.includes('git cherry-pick --allow-empty')
+    );
+    expect(pickCalls.some((cmd) => cmd.includes('feat111'))).toBe(true);
+    expect(pickCalls.some((cmd) => cmd.includes('feat333'))).toBe(true);
+    expect(pickCalls.some((cmd) => cmd.includes('wf222'))).toBe(false);
   });
 });
 

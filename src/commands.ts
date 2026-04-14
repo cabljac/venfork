@@ -346,22 +346,47 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
   const repoDir = cwd ?? process.cwd();
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-stage-'));
   try {
+    // Start a detached worktree at upstream/<defaultBranch> and cherry-pick
+    // every branch commit that isn't an internal workflow commit. A
+    // content-based filter (rather than `rebase --onto origin`) keeps
+    // previously-rewritten managed commits from leaking into the public fork
+    // when they're still reachable from older feature branches whose base
+    // predates a `venfork sync` rewrite of origin's default branch.
     await $({
       cwd: repoDir,
-    })`git worktree add --detach ${tempDir} ${branch}`;
-    const rebaseResult = await $({
-      cwd: tempDir,
-      reject: false,
-    })`git rebase --onto upstream/${defaultBranch} origin/${defaultBranch}`;
-    if (rebaseResult.exitCode !== 0) {
-      await $({
+    })`git worktree add --detach ${tempDir} upstream/${defaultBranch}`;
+
+    const revListResult = await $({
+      cwd: repoDir,
+    })`git rev-list --reverse upstream/${defaultBranch}..${branch}`;
+    const branchCommits = revListResult.stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    const commitsToPick: string[] = [];
+    for (const commit of branchCommits) {
+      if (!(await isWorkflowCommit(commit, repoDir))) {
+        commitsToPick.push(commit);
+      }
+    }
+
+    for (const commit of commitsToPick) {
+      const pickResult = await $({
         cwd: tempDir,
         reject: false,
-      })`git rebase --abort`;
-      throw new Error(
-        `Failed to stage '${branch}' because removing the internal workflow commit caused rebase conflicts. Rebase '${branch}' on upstream/${defaultBranch} and retry.`
-      );
+      })`git cherry-pick --allow-empty ${commit}`;
+      if (pickResult.exitCode !== 0) {
+        await $({
+          cwd: tempDir,
+          reject: false,
+        })`git cherry-pick --abort`;
+        throw new Error(
+          `Failed to stage '${branch}' because cherry-picking ${commit} onto upstream/${defaultBranch} caused conflicts. Rebase '${branch}' on upstream/${defaultBranch} and retry.`
+        );
+      }
     }
+
     const headResult = await $({ cwd: tempDir })`git rev-parse HEAD`;
     return headResult.stdout.trim();
   } finally {
