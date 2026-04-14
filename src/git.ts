@@ -118,6 +118,22 @@ export async function ghRepoExists(fullName: string): Promise<boolean> {
 }
 
 /**
+ * Returns true when `repoFullName` exists and is a fork of `upstreamFullName`.
+ */
+export async function ghRepoIsForkOf(
+  repoFullName: string,
+  upstreamFullName: string
+): Promise<boolean> {
+  const result = await $({
+    reject: false,
+  })`gh repo view ${repoFullName} --json isFork,parent --jq '.isFork and .parent.nameWithOwner == "${upstreamFullName}"'`;
+  if (result.exitCode !== 0) {
+    return false;
+  }
+  return result.stdout.trim() === 'true';
+}
+
+/**
  * Gets the default branch for a remote
  *
  * @param remote - Remote name (default: 'upstream')

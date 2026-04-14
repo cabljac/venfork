@@ -105,6 +105,7 @@ import {
   getGitHubUsername,
   getRemotes,
   ghRepoExists,
+  ghRepoIsForkOf,
   hasRemote,
   isGitRepository,
 } from '../src/git';
@@ -570,6 +571,59 @@ describe('ghRepoExists', () => {
     });
 
     const result = await ghRepoExists('acme/missing');
+
+    expect(result).toBe(false);
+  });
+});
+
+describe('ghRepoIsForkOf', () => {
+  test('returns true when repo is a fork of expected upstream', async () => {
+    mockResponses.set(
+      'gh repo view invertase/firebase-extensions --json isFork,parent',
+      {
+        exitCode: 0,
+        stdout: 'true',
+        stderr: '',
+      }
+    );
+
+    const result = await ghRepoIsForkOf(
+      'invertase/firebase-extensions',
+      'firebase/extensions'
+    );
+
+    expect(result).toBe(true);
+  });
+
+  test('returns false when repo is not a fork of expected upstream', async () => {
+    mockResponses.set(
+      'gh repo view invertase/extensions --json isFork,parent',
+      {
+        exitCode: 0,
+        stdout: 'false',
+        stderr: '',
+      }
+    );
+
+    const result = await ghRepoIsForkOf(
+      'invertase/extensions',
+      'firebase/extensions'
+    );
+
+    expect(result).toBe(false);
+  });
+
+  test('returns false when gh repo view fails', async () => {
+    mockResponses.set('gh repo view invertase/missing --json isFork,parent', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Not Found',
+    });
+
+    const result = await ghRepoIsForkOf(
+      'invertase/missing',
+      'firebase/extensions'
+    );
 
     expect(result).toBe(false);
   });
