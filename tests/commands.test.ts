@@ -123,6 +123,16 @@ function getMockExecaResponse(command: string) {
       stderr: '',
     });
   }
+  if (
+    command.includes('gh repo view') &&
+    command.includes('--json isFork,parent')
+  ) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: 'true',
+      stderr: '',
+    });
+  }
   if (command.includes('gh repo view')) {
     // Checking if public fork exists
     return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
@@ -395,6 +405,28 @@ describe('setupCommand - idempotent recovery', () => {
     expect(cloneCalls.some((c) => c.includes('test/repo'))).toBe(true);
     expect(cloneCalls.some((c) => c.includes('test-vendor'))).toBe(true);
     expect(execaCalls.some((c) => c.includes('git fetch upstream'))).toBe(true);
+  });
+
+  test('fails when default-name repo exists but is not a fork of upstream', async () => {
+    mockResponses.set('gh repo fork', {
+      exitCode: 1,
+      stderr: 'already exists',
+      stdout: '',
+    });
+    mockResponses.set('--json isFork,parent', {
+      exitCode: 0,
+      stdout: 'false',
+      stderr: '',
+    });
+
+    await expect(
+      setupCommand(
+        'git@github.com:firebase/extensions.git',
+        'firebase-extensions-private',
+        'invertase',
+        'firebase-extensions'
+      )
+    ).rejects.toThrow('process.exit called');
   });
 
   test('fails when private mirror create fails and repo is not found on GitHub', async () => {

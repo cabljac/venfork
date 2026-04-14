@@ -23,6 +23,7 @@ import {
   getGitHubUsername,
   getRemotes,
   ghRepoExists,
+  ghRepoIsForkOf,
   hasRemote,
   isGitRepository,
 } from './git.js';
@@ -592,6 +593,15 @@ export async function setupCommand(
           forkResult.stderr.trim() ||
             forkResult.stdout.trim() ||
             'gh repo fork failed'
+        );
+      }
+      const isExpectedFork = await ghRepoIsForkOf(
+        publicForkFullName,
+        upstreamRepoPath
+      );
+      if (!isExpectedFork) {
+        throw new Error(
+          `Cannot reuse ${publicForkFullName} as public fork: it is not a fork of ${upstreamRepoPath}. Choose a different --fork-name.`
         );
       }
       forkPreexisted = true;
