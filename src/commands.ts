@@ -356,9 +356,13 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
       cwd: repoDir,
     })`git worktree add --detach ${tempDir} upstream/${defaultBranch}`;
 
+    // `--no-merges` linearizes the history: merge commits (typically used to
+    // pull origin/<default> back into a feature branch after a sync rewrite)
+    // don't survive cherry-pick onto upstream anyway, and their content is
+    // already covered by cherry-picking the first-parent commits.
     const revListResult = await $({
       cwd: repoDir,
-    })`git rev-list --reverse upstream/${defaultBranch}..${branch}`;
+    })`git rev-list --reverse --no-merges upstream/${defaultBranch}..${branch}`;
     const branchCommits = revListResult.stdout
       .split('\n')
       .map((line) => line.trim())
