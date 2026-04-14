@@ -96,15 +96,17 @@ async function commitTouchesWorkflowPath(
   if (!changedFiles.length) {
     return false;
   }
-  return changedFiles.every((filePath) => filePath === SYNC_WORKFLOW_PATH);
+  return changedFiles.every((filePath) =>
+    filePath.startsWith(`${WORKFLOWS_DIR}/`)
+  );
 }
 
 /**
  * Internal workflow commit marker used by the mirror "+1 commit" model.
  *
  * We identify this commit by its deterministic message and also accept commits
- * that change only the managed workflow file, so historical repos can still
- * be normalized.
+ * that only touch files under `.github/workflows/`, so historical repos where
+ * venfork rollout bundled extra workflow files can still be normalized.
  */
 async function isWorkflowCommit(ref: string, cwd?: string): Promise<boolean> {
   const subject = await commitSubject(ref, cwd);
