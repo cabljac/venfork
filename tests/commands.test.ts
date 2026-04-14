@@ -1216,6 +1216,72 @@ describe('syncCommand - error paths', () => {
     expect(process.exit).toHaveBeenCalledWith(1);
   });
 
+  test('treats commits touching only .github/workflows files as managed', async () => {
+    // Divergent commit that touches both sync.yml and venfork-sync.yml (e.g. a
+    // historical venfork rollout commit). All changed files are under
+    // .github/workflows, so the commit should be filtered out and sync should
+    // proceed past the divergence guard.
+    mockResponses.set('git rev-list upstream/main..origin/main', {
+      exitCode: 0,
+      stdout: 'abc123\n',
+      stderr: '',
+    });
+    mockResponses.set('git log -1 --format=%s abc123', {
+      exitCode: 0,
+      stdout: 'chore(workflows): Add workflows for venfork sync',
+      stderr: '',
+    });
+    mockResponses.set('git show --name-only --pretty=format: abc123', {
+      exitCode: 0,
+      stdout: '.github/workflows/sync.yml\n.github/workflows/venfork-sync.yml',
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // Sync should have proceeded to the push step, not aborted.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git push origin upstream/main:refs/heads/main')
+      )
+    ).toBe(true);
+  });
+
+  test('still aborts when divergent commit touches files outside .github/workflows', async () => {
+    mockResponses.set('git rev-list upstream/main..origin/main', {
+      exitCode: 0,
+      stdout: 'deadbee\n',
+      stderr: '',
+    });
+    mockResponses.set('git log -1 --format=%s deadbee', {
+      exitCode: 0,
+      stdout: 'feat: real work on main',
+      stderr: '',
+    });
+    mockResponses.set('git show --name-only --pretty=format: deadbee', {
+      exitCode: 0,
+      stdout: '.github/workflows/sync.yml\nsrc/index.ts',
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected - process.exit(1) throws in tests
+    }
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git push origin upstream/main:refs/heads/main')
+      )
+    ).toBe(false);
+  });
+
   test('handles fetch errors', async () => {
     mockResponses.set('git fetch', (_command: string) =>
       Promise.reject(new Error('Fetch failed'))
