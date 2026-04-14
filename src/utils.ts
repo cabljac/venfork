@@ -52,7 +52,18 @@ export function parseRepoName(url: string): string {
  * parseRepoPath("https://github.com/vercel/next.js.git") // "vercel/next.js"
  */
 export function parseRepoPath(url: string): string {
-  const match = url.match(/github\.com[:/](.+?)(?:\.git)?$/);
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  // Accept already-short owner/repo input too, so callers that need
+  // a GH repo path stay robust even if normalization is skipped.
+  if (/^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+(?:\.git)?$/.test(trimmed)) {
+    return trimmed.endsWith('.git') ? trimmed.slice(0, -4) : trimmed;
+  }
+
+  const match = trimmed.match(/github\.com[:/](.+?)(?:\.git)?$/);
   return match?.[1] || '';
 }
 
