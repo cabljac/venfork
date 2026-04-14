@@ -356,10 +356,12 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
       cwd: repoDir,
     })`git worktree add --detach ${tempDir} upstream/${defaultBranch}`;
 
-    // `--no-merges` linearizes the history: merge commits (typically used to
-    // pull origin/<default> back into a feature branch after a sync rewrite)
-    // don't survive cherry-pick onto upstream anyway, and their content is
-    // already covered by cherry-picking the first-parent commits.
+    // Skip merge commits: `git cherry-pick` on a merge fails without
+    // `-m <parent>`, and merges are commonly used on venfork feature branches
+    // to pull `origin/<default>` back in after a sync rewrite. `--no-merges`
+    // still walks *both* sides of any merge, so non-merge content from either
+    // side is cherry-picked as normal (workflow commits introduced via the
+    // merged-in side are then filtered by `isWorkflowCommit` below).
     const revListResult = await $({
       cwd: repoDir,
     })`git rev-list --reverse --no-merges upstream/${defaultBranch}..${branch}`;
