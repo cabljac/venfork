@@ -777,6 +777,43 @@ describe('stageCommand', () => {
     );
   });
 
+  test('aborts when merge commit inspection fails', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-list --merges upstream/main..feature-branch', {
+      exitCode: 0,
+      stdout: 'badmrg\n',
+      stderr: '',
+    });
+    mockResponses.set('git diff-tree --cc --name-only --no-commit-id badmrg', {
+      exitCode: 128,
+      stdout: '',
+      stderr: 'fatal: bad object badmrg',
+    });
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected - process.exit(1) via error path
+    }
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(
+      execaCalls.some((cmd) => cmd.includes('git worktree add --detach'))
+    ).toBe(false);
+    expect(execaCalls.some((cmd) => cmd.includes('git cherry-pick'))).toBe(
+      false
+    );
+  });
+
   test('allows merge commits whose evil files are all under .github/workflows', async () => {
     // The common shape: feature branch merges origin/<default> back in purely
     // to resolve the managed `venfork-sync.yml` conflict. The merge is "evil"
