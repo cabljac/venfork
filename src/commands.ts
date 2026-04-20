@@ -358,7 +358,9 @@ async function mergeCommitEvilFiles(
     reject: false,
   })`git diff-tree --cc --name-only --no-commit-id ${ref}`;
   if (result.exitCode !== 0) {
-    return [];
+    const gitError =
+      result.stderr.trim() || result.stdout.trim() || 'git diff-tree failed';
+    throw new Error(`Failed to inspect merge commit ${ref}: ${gitError}`);
   }
   return result.stdout
     .split('\n')
