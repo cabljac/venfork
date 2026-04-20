@@ -761,11 +761,9 @@ describe('stageCommand', () => {
       stderr: '',
     });
 
-    try {
-      await stageCommand('feature-branch');
-    } catch {
-      // Expected - process.exit(1) via error path
-    }
+    await expect(stageCommand('feature-branch')).rejects.toThrow(
+      'process.exit called'
+    );
 
     expect(process.exit).toHaveBeenCalledWith(1);
     // Guard must run before the worktree is created, so no cherry-picks happen.
@@ -790,20 +788,21 @@ describe('stageCommand', () => {
     });
     mockResponses.set('git rev-list --merges upstream/main..feature-branch', {
       exitCode: 0,
-      stdout: 'badmrg\n',
+      stdout: 'bad-merge-commit\n',
       stderr: '',
     });
-    mockResponses.set('git diff-tree --cc --name-only --no-commit-id badmrg', {
-      exitCode: 128,
-      stdout: '',
-      stderr: 'fatal: bad object badmrg',
-    });
+    mockResponses.set(
+      'git diff-tree --cc --name-only --no-commit-id bad-merge-commit',
+      {
+        exitCode: 128,
+        stdout: '',
+        stderr: 'fatal: bad object bad-merge-commit',
+      }
+    );
 
-    try {
-      await stageCommand('feature-branch');
-    } catch {
-      // Expected - process.exit(1) via error path
-    }
+    await expect(stageCommand('feature-branch')).rejects.toThrow(
+      'process.exit called'
+    );
 
     expect(process.exit).toHaveBeenCalledWith(1);
     expect(
