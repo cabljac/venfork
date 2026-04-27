@@ -282,6 +282,16 @@ venfork schedule disable
 2. `set` writes/updates `.github/workflows/venfork-sync.yml` on the private mirror default branch
 3. `disable` removes the managed workflow file from that branch
 
+**Authenticating cross-repo pushes**
+
+A scheduled run pushes to two different repos: the private mirror (`origin`) and the public fork (`public`). The default `GITHUB_TOKEN` available inside the workflow is scoped only to the mirror, so it cannot authenticate the push to the public fork. To enable the workflow to push cross-repo, set a `VENFORK_PUSH_TOKEN` secret on the **private mirror** repo using a token that has `contents:write` on both the mirror and the public fork:
+
+```bash
+gh secret set VENFORK_PUSH_TOKEN --repo <owner>/<mirror> --body "$(gh auth token)"
+```
+
+A fine-grained PAT scoped to just those two repos is also fine. If `VENFORK_PUSH_TOKEN` is unset, the generated workflow falls back to the default `GITHUB_TOKEN` — sync to the public fork will fail in that case (same behavior as before this token was wired in).
+
 ### `venfork workflows <status|allow|block|clear> [workflow-file ...]`
 
 Manage which upstream workflow files should remain active in the private mirror when managed sync commit logic runs.

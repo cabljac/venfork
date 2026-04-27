@@ -1108,8 +1108,21 @@ export async function scheduleCommand(
       );
       s.stop('Workflow updated');
 
+      let mirrorPath = '<owner>/<mirror>';
+      try {
+        const originUrl = (
+          await $({ cwd: repoDir })`git remote get-url origin`
+        ).stdout.trim();
+        const parsed = parseRepoPath(originUrl);
+        if (parsed) {
+          mirrorPath = parsed;
+        }
+      } catch {
+        // Best-effort: fall back to placeholder.
+      }
+
       p.outro(
-        `✨ Scheduled sync enabled\n\nBranch: ${defaultBranch}\nCron: ${cron}\nWorkflow: ${SYNC_WORKFLOW_PATH}`
+        `✨ Scheduled sync enabled\n\nBranch: ${defaultBranch}\nCron: ${cron}\nWorkflow: ${SYNC_WORKFLOW_PATH}\n\nNext: set the cross-repo push token so the workflow can push to the public fork:\n  gh secret set VENFORK_PUSH_TOKEN --repo ${mirrorPath} --body "$(gh auth token)"\n(skip if VENFORK_PUSH_TOKEN is already configured)`
       );
       return;
     }
