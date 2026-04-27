@@ -654,7 +654,7 @@ describe('stageCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git rev-list --reverse --no-merges upstream/main..feature-branch'
+          'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch'
         )
       )
     ).toBe(true);
@@ -683,7 +683,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --no-merges upstream/main..feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch',
       {
         exitCode: 0,
         stdout: 'feat111\nwf222\nfeat333',
@@ -735,6 +735,54 @@ describe('stageCommand', () => {
     expect(pickCalls.some((cmd) => cmd.includes('feat111'))).toBe(true);
     expect(pickCalls.some((cmd) => cmd.includes('feat333'))).toBe(true);
     expect(pickCalls.some((cmd) => cmd.includes('wf222'))).toBe(false);
+  });
+
+  test('preserves user-authored workflow commits that do not touch venfork-sync.yml', async () => {
+    // A user edits .github/workflows/ci.yml on a feature branch, intending
+    // to send it upstream. The commit only touches files under
+    // .github/workflows but does NOT touch the managed venfork-sync.yml.
+    // The narrowed isWorkflowCommit must classify this as user-authored so
+    // stage cherry-picks it onto the public-fork tip (otherwise the
+    // upstream PR would silently miss the workflow change).
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'userci1',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git log -1 --format=%s userci1', {
+      exitCode: 0,
+      stdout: 'ci: tighten test matrix on ci.yml',
+      stderr: '',
+    });
+    mockResponses.set('git show --name-only --pretty=format: userci1', {
+      exitCode: 0,
+      stdout: '.github/workflows/ci.yml',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    const pickCalls = execaCalls.filter((cmd) =>
+      cmd.includes('git cherry-pick --allow-empty')
+    );
+    expect(pickCalls.some((cmd) => cmd.includes('userci1'))).toBe(true);
   });
 
   test('aborts when a merge commit has evil resolutions outside .github/workflows', async () => {
@@ -838,7 +886,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --no-merges upstream/main..feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch',
       {
         exitCode: 0,
         stdout: 'feat111',
@@ -889,7 +937,7 @@ describe('stageCommand', () => {
     // `--no-merges` makes git omit the merge commit from the list. We assert
     // venfork passes that flag and only cherry-picks the non-merge commits.
     mockResponses.set(
-      'git rev-list --reverse --no-merges upstream/main..feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch',
       {
         exitCode: 0,
         stdout: 'feat111\nfeat222',
@@ -918,7 +966,7 @@ describe('stageCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git rev-list --reverse --no-merges upstream/main..feature-branch'
+          'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch'
         )
       )
     ).toBe(true);
@@ -1540,6 +1588,42 @@ describe('syncCommand - error paths', () => {
     mockResponses.set('git show --name-only --pretty=format: deadbee', {
       exitCode: 0,
       stdout: '.github/workflows/sync.yml\nsrc/index.ts',
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected - process.exit(1) throws in tests
+    }
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git push origin upstream/main:refs/heads/main')
+      )
+    ).toBe(false);
+  });
+
+  test('aborts when divergent commit touches only non-managed workflow files', async () => {
+    // A user-authored commit that edits, say, ci.yml on the default branch.
+    // It only touches files under .github/workflows, but does NOT touch the
+    // managed venfork-sync.yml. The narrowed isWorkflowCommit must classify
+    // this as user-authored — sync should refuse to clobber it, not silently
+    // filter it as a managed commit.
+    mockResponses.set('git rev-list upstream/main..origin/main', {
+      exitCode: 0,
+      stdout: 'userci1\n',
+      stderr: '',
+    });
+    mockResponses.set('git log -1 --format=%s userci1', {
+      exitCode: 0,
+      stdout: 'ci: tighten test matrix on ci.yml',
+      stderr: '',
+    });
+    mockResponses.set('git show --name-only --pretty=format: userci1', {
+      exitCode: 0,
+      stdout: '.github/workflows/ci.yml',
       stderr: '',
     });
 

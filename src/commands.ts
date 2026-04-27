@@ -96,17 +96,26 @@ async function commitTouchesWorkflowPath(
   if (!changedFiles.length) {
     return false;
   }
-  return changedFiles.every((filePath) =>
+  // A commit is the venfork-managed "+1" only when it (a) touches the managed
+  // workflow file and (b) doesn't reach outside `.github/workflows/`. Without
+  // (a), legitimate user commits to other workflows (e.g. ci.yml) would be
+  // silently dropped during stage. Without (b), arbitrary user commits could
+  // be misclassified as managed.
+  const allUnderWorkflows = changedFiles.every((filePath) =>
     filePath.startsWith(`${WORKFLOWS_DIR}/`)
   );
+  const touchesManagedWorkflow = changedFiles.includes(SYNC_WORKFLOW_PATH);
+  return allUnderWorkflows && touchesManagedWorkflow;
 }
 
 /**
  * Internal workflow commit marker used by the mirror "+1 commit" model.
  *
  * We identify this commit by its deterministic message and also accept commits
- * that only touch files under `.github/workflows/`, so historical repos where
- * venfork rollout bundled extra workflow files can still be normalized.
+ * that touch the managed `venfork-sync.yml` plus only sibling files under
+ * `.github/workflows/` — so historical rollouts that bundled extra workflow
+ * files alongside the managed one are still classified as managed, while
+ * user-authored commits to *other* workflow files (e.g. ci.yml) are preserved.
  */
 async function isWorkflowCommit(ref: string, cwd?: string): Promise<boolean> {
   const subject = await commitSubject(ref, cwd);
@@ -424,9 +433,14 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
     // still walks *both* sides of any merge, so non-merge content from either
     // side is cherry-picked as normal (workflow commits introduced via the
     // merged-in side are then filtered by `isWorkflowCommit` below).
+    // `--topo-order` makes the parent-before-child guarantee explicit (with
+    // `--reverse`: ancestors first, descendants last). The default order is
+    // pseudo-chronological and can violate topology when commit timestamps
+    // are skewed (clock drift, rebases that re-set author dates, etc.),
+    // which would surface as cherry-pick conflicts.
     const revListResult = await $({
       cwd: repoDir,
-    })`git rev-list --reverse --no-merges upstream/${defaultBranch}..${branch}`;
+    })`git rev-list --reverse --topo-order --no-merges upstream/${defaultBranch}..${branch}`;
     const branchCommits = revListResult.stdout
       .split('\n')
       .map((line) => line.trim())
