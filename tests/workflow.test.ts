@@ -22,6 +22,19 @@ describe('workflow helpers', () => {
     expect(workflow).toContain('fetch-depth: 0');
   });
 
+  test('rewrites SSH GitHub URLs to HTTPS so extraheader auth applies', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *');
+    expect(workflow).toContain('Rewrite SSH GitHub URLs to HTTPS');
+    // Both SCP-style (git@github.com:) and ssh:// forms must rewrite to the
+    // same HTTPS prefix that actions/checkout's extraheader auth covers.
+    expect(workflow).toContain(
+      'git config --global --add url."https://github.com/".insteadOf "git@github.com:"'
+    );
+    expect(workflow).toContain(
+      'git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"'
+    );
+  });
+
   test('escapes cron safely for yaml single-quoted string', () => {
     const workflow = generateSyncWorkflow("0 */6 * * *'\n# injected");
     expect(workflow).toContain("cron: '0 */6 * * *'' # injected'");
