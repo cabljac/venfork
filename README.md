@@ -588,7 +588,7 @@ Key steps:
 2. Install dependencies: `bun install`
 3. Make your changes and add tests
 4. Run checks: `bun run check && bun test`
-5. Add a changeset: `bun run changeset`
+5. Use a conventional commit prefix (`feat:`, `fix:`, etc.) — release-please picks up the version bump from your commit message
 6. Submit a pull request
 
 ## Support

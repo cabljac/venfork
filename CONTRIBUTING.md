@@ -104,7 +104,6 @@ venfork/
 │   ├── git.test.ts
 │   ├── utils.test.ts
 │   └── errors.test.ts
-├── .changeset/        # Changesets for version management
 └── dist/              # Built output (gitignored)
 ```
 
@@ -139,24 +138,21 @@ test('descriptive test name', async () => {
 });
 ```
 
-### 4. Add a Changeset
+### 4. Use Conventional Commit Messages
 
-We use [Changesets](https://github.com/changesets/changesets) for version management.
+We use [release-please](https://github.com/googleapis/release-please) to drive
+versioning and the changelog. It reads commit subjects on `main` and opens a
+release PR that bumps `package.json`, regenerates `CHANGELOG.md`, and tags the
+release. **You don't add a changeset file** — the version bump is derived from
+your commit prefix:
 
-```bash
-bun run changeset
-# or
-npm run changeset
-```
+- `fix:` → patch bump
+- `feat:` → minor bump
+- `feat!:` / `BREAKING CHANGE:` in the body → major bump
+- `docs:`, `test:`, `refactor:`, `chore:` → no version bump
 
-Follow the prompts:
-- Select the appropriate version bump type:
-  - **patch**: Bug fixes, minor changes
-  - **minor**: New features, non-breaking changes
-  - **major**: Breaking changes
-- Write a clear description of your changes
-
-This will create a file in `.changeset/` that will be used to generate the changelog.
+Use a scope when it adds clarity (e.g. `feat(workflow): …`, `fix(setup): …`).
+The commit subject becomes the CHANGELOG entry, so write it for end users.
 
 ### 5. Run Quality Checks
 
@@ -179,13 +175,7 @@ git commit -m "feat: add new feature"
 git commit -m "fix: resolve issue with X"
 ```
 
-**Commit message conventions** (recommended but not enforced):
-- `feat:` - New features
-- `fix:` - Bug fixes
-- `docs:` - Documentation changes
-- `test:` - Test additions or changes
-- `refactor:` - Code refactoring
-- `chore:` - Maintenance tasks
+The commit prefix drives the release flow (see step 4).
 
 ### 7. Push and Create a Pull Request
 
@@ -206,7 +196,7 @@ Then create a PR on GitHub with:
 - ✅ All tests pass (`bun test`)
 - ✅ Code is formatted and linted (`bun run check`)
 - ✅ Build succeeds (`bun run build`)
-- ✅ Changeset added (`bun run changeset`)
+- ✅ Commit subject uses a [conventional prefix](#4-use-conventional-commit-messages) so release-please picks it up
 - ✅ Documentation updated if needed
 - ✅ No unnecessary dependencies added
 
@@ -270,84 +260,19 @@ if (!isValid) {
 
 ## Releasing (Maintainers Only)
 
-This section is for maintainers who publish releases to npm.
+Releases are automated by [release-please](https://github.com/googleapis/release-please) (see `.github/workflows/release.yml` and `release-please-config.json`).
 
-### Prerequisites
+### How it works
 
-- npm account with publish access to `venfork`
-- Authenticated with npm: `npm login`
+1. Every push to `main` triggers `release-please-action`. It scans new conventional-commit subjects since the last release and either opens or updates a "release PR" titled `chore(main): release X.Y.Z`.
+2. The release PR contains the bumped version in `package.json`, the new section in `CHANGELOG.md`, and `.release-please-manifest.json` updated. Review and merge it when you're ready to ship.
+3. Merging the release PR creates the git tag (e.g. `v0.5.0`) and triggers the npm publish + binary release jobs in the same workflow.
 
-### Release Process
+### Maintainer responsibilities
 
-1. **Ensure main branch is ready**
-   ```bash
-   git checkout main
-   git pull origin main
-
-   # Verify all checks pass
-   bun run check && bun test && bun run build
-   ```
-
-2. **Version packages (consumes changesets)**
-   ```bash
-   bun run version
-   ```
-
-   This will:
-   - Update version in `package.json`
-   - Update `CHANGELOG.md` with changes from `.changeset/*.md` files
-   - Delete consumed changeset files
-   - Run `bun install` to update lockfile
-
-3. **Review the changes**
-   ```bash
-   git diff
-   ```
-
-   Check that:
-   - Version number is correct
-   - CHANGELOG.md looks good
-   - Changeset files were removed
-
-4. **Commit and push version changes**
-   ```bash
-   git add .
-   git commit -m "Version Packages"
-   git push origin main
-   ```
-
-5. **Publish to npm**
-   ```bash
-   bun run release
-   ```
-
-   This will:
-   - Build the project
-   - Publish to npm with the new version
-   - Create git tags
-
-6. **Push tags**
-   ```bash
-   git push --tags
-   ```
-
-7. **Create GitHub Release** (optional but recommended)
-   - Go to GitHub Releases
-   - Click "Draft a new release"
-   - Select the new tag
-   - Use CHANGELOG.md content for release notes
-   - Publish release
-
-### Quick Release Checklist
-
-- [ ] Pull latest main
-- [ ] Run `bun run version`
-- [ ] Review version bump and changelog
-- [ ] Commit: "Version Packages"
-- [ ] Push to main
-- [ ] Run `bun run release`
-- [ ] Push tags: `git push --tags`
-- [ ] Create GitHub release (optional)
+- Make sure commits landing on `main` use conventional prefixes (otherwise the release PR won't include them in the changelog).
+- Review the open release PR before merging — confirm version + changelog look right.
+- Don't manually edit `package.json` version or `CHANGELOG.md`; release-please owns both.
 
 ### Versioning Strategy
 
