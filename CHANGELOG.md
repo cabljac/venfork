@@ -1,5 +1,24 @@
 # venfork
 
+## [0.5.0](https://github.com/cabljac/venfork/compare/v0.4.1...v0.5.0) (2026-04-27)
+
+
+### Features
+
+* **workflow:** wire VENFORK_PUSH_TOKEN for cross-repo scheduled sync ([db67940](https://github.com/cabljac/venfork/commit/db67940ef5ff9572b749bd25a60204feb61a8ea3))
+
+
+### Bug Fixes
+
+* **commands:** abort stage on evil merges outside .github/workflows ([a3d3ea6](https://github.com/cabljac/venfork/commit/a3d3ea6c6ff2537988227bf4ae1ed6e79976f108))
+* **commands:** filter workflow commits in stage by identity, not position ([d8eb103](https://github.com/cabljac/venfork/commit/d8eb103a88af4097370978624c45fa7479b9a404))
+* **commands:** narrow workflow-commit detection and add --topo-order ([003abb8](https://github.com/cabljac/venfork/commit/003abb85f3c6e064056a95c175f1b8eceabb0b88))
+* **commands:** skip merge commits in stage cherry-pick loop ([78e8a47](https://github.com/cabljac/venfork/commit/78e8a478ed9f3fdd87bdb1e305fbd98c881d0792))
+* **commands:** treat any .github/workflows commit as managed in sync divergence check ([3751e1f](https://github.com/cabljac/venfork/commit/3751e1f71d90249a6583ed37401bf4a27ea79800))
+* **setup:** handle owner/repo shorthand for gh repo fork and add regression docs/tests ([4145f8e](https://github.com/cabljac/venfork/commit/4145f8eb4b8195ce242e216ae397ae63b0109991))
+* **setup:** validate reused public repo is fork of upstream ([604a5cb](https://github.com/cabljac/venfork/commit/604a5cb468dd7cde0fa9ab00485f11b6c55ec6e2))
+* **stage:** fail closed when merge inspection cannot read commit ([2d378c4](https://github.com/cabljac/venfork/commit/2d378c4b43e38d6ab9594d5bad0f64a57b4225a1))
+
 ## [0.4.1](https://github.com/cabljac/venfork/compare/v0.4.0...v0.4.1) (2026-04-08)
 
 
