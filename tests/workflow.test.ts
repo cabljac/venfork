@@ -13,6 +13,15 @@ describe('workflow helpers', () => {
     expect(workflow).toContain('run: venfork sync');
   });
 
+  test('checkout step wires VENFORK_PUSH_TOKEN with github.token fallback', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *');
+    const expectedTokenLine =
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expression we are asserting.
+      'token: ${{ secrets.VENFORK_PUSH_TOKEN || github.token }}';
+    expect(workflow).toContain(expectedTokenLine);
+    expect(workflow).toContain('fetch-depth: 0');
+  });
+
   test('escapes cron safely for yaml single-quoted string', () => {
     const workflow = generateSyncWorkflow("0 */6 * * *'\n# injected");
     expect(workflow).toContain("cron: '0 */6 * * *'' # injected'");

@@ -33,6 +33,19 @@ jobs:
     steps:
       - name: Checkout mirror
         uses: actions/checkout@v4
+        with:
+          token: \${{ secrets.VENFORK_PUSH_TOKEN || github.token }}
+          fetch-depth: 0
+      - name: Rewrite SSH GitHub URLs to HTTPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          # venfork-config can store SSH remote URLs (gh defaults to ssh).
+          # actions/checkout's extraheader auth only applies to https://github.com/,
+          # so rewrite SSH forms to HTTPS. --add is required: each insteadOf
+          # value is a separate entry under the same key.
+          git config --global --add url."https://github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
       - name: Install venfork
         run: npm install -g venfork
       - name: Configure venfork remotes
