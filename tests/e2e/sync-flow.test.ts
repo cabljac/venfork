@@ -4,6 +4,7 @@ import { $ } from 'execa';
 import { readVenforkConfigFromRepo } from '../../src/config.js';
 import {
   cleanupAll,
+  createIssueOnRepo,
   createUpstreamRepo,
   dirExists,
   ensureDeleteRepoScope,
@@ -11,12 +12,16 @@ import {
   ensureGhAuth,
   GITHUB_ORG,
   getDefaultBranchSha,
+  getIssueMeta,
+  getPrMeta,
   getPushToken,
   getRepoDefaultBranch,
   listCommitMessages,
   localMirrorPath,
   names,
+  openUpstreamPr,
   pokeUpstream,
+  pushToUpstreamPrBranch,
   REPO_ROOT,
   RUN_ID,
   readWorkflowFromOrigin,
@@ -303,4 +308,192 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     },
     1_500_000
   );
+
+  test('tier 3: stage --pr opens upstream PR with internal body redacted', async () => {
+    const defaultBranch = await getRepoDefaultBranch(
+      UPSTREAM_OWNER,
+      names.upstream
+    );
+    const featureBranch = `feat-${RUN_ID}`;
+
+    // Create a feature branch on the local mirror clone with one commit.
+    await $({
+      cwd: localMirrorPath,
+    })`git checkout -b ${featureBranch}`;
+    await fs.writeFile(`${localMirrorPath}/feature.txt`, `feature ${RUN_ID}\n`);
+    await $({
+      cwd: localMirrorPath,
+    })`git -c user.name=e2e -c user.email=e2e@local add feature.txt`;
+    await $({
+      cwd: localMirrorPath,
+    })`git -c user.name=e2e -c user.email=e2e@local commit -m ${'feat: add feature.txt'}`;
+    await $({ cwd: localMirrorPath })`git push origin ${featureBranch}`;
+
+    // Open an internal review PR on the mirror with body containing a
+    // redaction block.
+    const internalBody = [
+      'Public summary: adds feature.txt to demonstrate ship.',
+      '',
+      '<!-- venfork:internal -->',
+      'Internal note: client X requires this for compliance ticket Z.',
+      '<!-- /venfork:internal -->',
+      '',
+      'Implementation notes intended for upstream maintainers.',
+    ].join('\n');
+    await $`gh pr create --repo ${GITHUB_ORG}/${names.mirrorBare} --base ${defaultBranch} --head ${featureBranch} --title ${'feat: add feature.txt'} --body ${internalBody}`;
+
+    // Drive `venfork stage --pr`, auto-confirming the prompt.
+    await runVenfork(['stage', featureBranch, '--pr', '--draft'], {
+      cwd: localMirrorPath,
+      input: 'y\n',
+    });
+
+    // Find the upstream PR and verify body translation + draft state.
+    const list =
+      await $`gh pr list --repo ${UPSTREAM_OWNER}/${names.upstream} --head ${GITHUB_ORG}:${featureBranch} --state all --json number,url,body,isDraft --limit 1`;
+    const prs = JSON.parse(list.stdout) as Array<{
+      number: number;
+      url: string;
+      body: string;
+      isDraft: boolean;
+    }>;
+    expect(prs.length).toBe(1);
+    const upstreamPr = prs[0];
+    expect(upstreamPr.body).not.toContain('Internal note');
+    expect(upstreamPr.body).not.toContain('venfork:internal');
+    expect(upstreamPr.body).toContain('Public summary');
+    expect(upstreamPr.body).toContain('Upstreamed from internal review');
+    expect(upstreamPr.isDraft).toBe(true);
+  }, 300_000);
+
+  test('tier 4: pull-request imports an upstream PR; sync refreshes it', async () => {
+    const defaultBranch = await getRepoDefaultBranch(
+      UPSTREAM_OWNER,
+      names.upstream
+    );
+
+    // Open a PR on upstream by creating a branch directly there.
+    const upstreamPrBranch = `upstream-feat-${RUN_ID}`;
+    const opened = await openUpstreamPr({
+      branch: upstreamPrBranch,
+      filename: `upstream-${RUN_ID}.md`,
+      content: `original content ${RUN_ID}\n`,
+      title: `e2e upstream PR ${RUN_ID}`,
+      body: 'Body of an upstream PR for e2e.',
+      base: defaultBranch,
+    });
+
+    // Pull it into the mirror.
+    await runVenfork(['pull-request', String(opened.number)], {
+      cwd: localMirrorPath,
+    });
+
+    // Verify the local + mirror branch exist with the imported head.
+    const localBranch = `upstream-pr/${opened.number}`;
+    const initialLocalHead = (
+      await $({
+        cwd: localMirrorPath,
+      })`git rev-parse ${localBranch}`
+    ).stdout.trim();
+    const mirrorHead = await getDefaultBranchSha(
+      GITHUB_ORG,
+      names.mirrorBare,
+      localBranch
+    );
+    expect(mirrorHead).toBe(initialLocalHead);
+
+    // Update the upstream PR with another commit.
+    await pushToUpstreamPrBranch({
+      branch: upstreamPrBranch,
+      filename: `upstream-${RUN_ID}.md`,
+      content: `updated content ${RUN_ID}\n`,
+    });
+
+    // venfork sync <branch> should refresh the local + mirror branch.
+    await runVenfork(['sync', localBranch], { cwd: localMirrorPath });
+
+    const refreshedLocalHead = (
+      await $({
+        cwd: localMirrorPath,
+      })`git rev-parse ${localBranch}`
+    ).stdout.trim();
+    expect(refreshedLocalHead).not.toBe(initialLocalHead);
+    const refreshedMirrorHead = await getDefaultBranchSha(
+      GITHUB_ORG,
+      names.mirrorBare,
+      localBranch
+    );
+    expect(refreshedMirrorHead).toBe(refreshedLocalHead);
+  }, 300_000);
+
+  test('tier 5: issue stage + issue pull round-trip through gh', async () => {
+    // Create an internal issue on the mirror with a redaction block.
+    const internalBody = [
+      'Public bug summary: feature.txt does not load in Safari.',
+      '',
+      '<!-- venfork:internal -->',
+      'Client X needs a fix before launch on date Y.',
+      '<!-- /venfork:internal -->',
+    ].join('\n');
+    const internal = await createIssueOnRepo({
+      owner: GITHUB_ORG,
+      repo: names.mirrorBare,
+      title: 'Bug: Safari rendering',
+      body: internalBody,
+    });
+
+    // Stage the internal issue upstream.
+    await runVenfork(['issue', 'stage', String(internal.number)], {
+      cwd: localMirrorPath,
+      input: 'y\n',
+    });
+
+    // Find the upstream issue and verify body redaction.
+    const list =
+      await $`gh issue list --repo ${UPSTREAM_OWNER}/${names.upstream} --state all --search ${'Safari rendering'} --json number,url,body --limit 5`;
+    const upstreamIssues = JSON.parse(list.stdout) as Array<{
+      number: number;
+      url: string;
+      body: string;
+    }>;
+    const upstreamIssue = upstreamIssues.find((i) =>
+      i.body.includes('Public bug summary')
+    );
+    expect(upstreamIssue).toBeDefined();
+    expect(upstreamIssue?.body).not.toContain('Client X');
+    expect(upstreamIssue?.body).not.toContain('venfork:internal');
+
+    // Pull a different upstream issue back into the mirror.
+    const upstreamReport = await createIssueOnRepo({
+      owner: UPSTREAM_OWNER,
+      repo: names.upstream,
+      title: 'Upstream-reported bug',
+      body: 'Reported by an external user.',
+    });
+
+    await runVenfork(['issue', 'pull', String(upstreamReport.number)], {
+      cwd: localMirrorPath,
+      input: 'y\n',
+    });
+
+    // The mirror should now have an issue whose title carries the
+    // [upstream #N] prefix and whose body references the upstream URL.
+    const mirrorList =
+      await $`gh issue list --repo ${GITHUB_ORG}/${names.mirrorBare} --state all --search ${`upstream #${upstreamReport.number}`} --json number,title,body --limit 5`;
+    const mirrorIssues = JSON.parse(mirrorList.stdout) as Array<{
+      number: number;
+      title: string;
+      body: string;
+    }>;
+    const mirrorIssue = mirrorIssues.find((i) =>
+      i.title.includes(`upstream #${upstreamReport.number}`)
+    );
+    expect(mirrorIssue).toBeDefined();
+    expect(mirrorIssue?.body).toContain(upstreamReport.url);
+
+    // Suppress unused-var warnings for helpers we leave in place for
+    // future debugging hooks.
+    void getIssueMeta;
+    void getPrMeta;
+  }, 300_000);
 });

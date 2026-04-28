@@ -33,6 +33,32 @@ export interface PulledPr {
 }
 
 /**
+ * Record kept by `venfork issue stage` linking an internal issue (private
+ * mirror) to the upstream issue it was promoted to.
+ */
+export interface ShippedIssue {
+  internalIssueNumber: number;
+  internalIssueUrl: string;
+  upstreamIssueNumber: number;
+  upstreamIssueUrl: string;
+  /** ISO timestamp when ship completed. */
+  shippedAt: string;
+}
+
+/**
+ * Record kept by `venfork issue pull` linking an upstream issue to the
+ * internal issue created on the mirror for team triage.
+ */
+export interface PulledIssue {
+  upstreamIssueNumber: number;
+  upstreamIssueUrl: string;
+  internalIssueNumber: number;
+  internalIssueUrl: string;
+  /** ISO timestamp when the internal issue was created. */
+  pulledAt: string;
+}
+
+/**
  * Venfork configuration structure.
  */
 export interface VenforkConfig {
@@ -45,10 +71,20 @@ export interface VenforkConfig {
   };
   enabledWorkflows?: string[];
   disabledWorkflows?: string[];
-  /** Branch -> upstream PR linkage recorded by `venfork ship`. */
+  /** Branch -> upstream PR linkage recorded by `venfork stage --pr`. */
   shippedBranches?: Record<string, ShippedBranch>;
   /** Branch -> upstream PR tracking recorded by `venfork pull-request`. */
   pulledPrs?: Record<string, PulledPr>;
+  /**
+   * Internal-issue-number-as-string -> upstream issue linkage recorded by
+   * `venfork issue stage`.
+   */
+  shippedIssues?: Record<string, ShippedIssue>;
+  /**
+   * Internal-issue-number-as-string -> upstream issue linkage recorded by
+   * `venfork issue pull`.
+   */
+  pulledIssues?: Record<string, PulledIssue>;
 }
 
 const CONFIG_BRANCH = 'venfork-config';
@@ -60,7 +96,12 @@ const VENFORK_BOT_EMAIL = 'venfork-bot@users.noreply.github.com';
 
 export type VenforkConfigPatch = Omit<
   Partial<VenforkConfig>,
-  'enabledWorkflows' | 'disabledWorkflows' | 'shippedBranches' | 'pulledPrs'
+  | 'enabledWorkflows'
+  | 'disabledWorkflows'
+  | 'shippedBranches'
+  | 'pulledPrs'
+  | 'shippedIssues'
+  | 'pulledIssues'
 > & {
   enabledWorkflows?: string[] | null;
   disabledWorkflows?: string[] | null;
@@ -71,6 +112,8 @@ export type VenforkConfigPatch = Omit<
   shippedBranches?: Record<string, ShippedBranch | null> | null;
   /** Same shape as `shippedBranches` for pulled-PR tracking. */
   pulledPrs?: Record<string, PulledPr | null> | null;
+  shippedIssues?: Record<string, ShippedIssue | null> | null;
+  pulledIssues?: Record<string, PulledIssue | null> | null;
 };
 
 /**
@@ -173,6 +216,58 @@ function normalizePulledPr(value: unknown): PulledPr | null {
   };
 }
 
+function normalizeShippedIssue(value: unknown): ShippedIssue | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Partial<ShippedIssue>;
+  if (
+    typeof v.internalIssueNumber !== 'number' ||
+    !Number.isFinite(v.internalIssueNumber) ||
+    typeof v.internalIssueUrl !== 'string' ||
+    !v.internalIssueUrl.trim() ||
+    typeof v.upstreamIssueNumber !== 'number' ||
+    !Number.isFinite(v.upstreamIssueNumber) ||
+    typeof v.upstreamIssueUrl !== 'string' ||
+    !v.upstreamIssueUrl.trim() ||
+    typeof v.shippedAt !== 'string' ||
+    !v.shippedAt.trim()
+  ) {
+    return null;
+  }
+  return {
+    internalIssueNumber: v.internalIssueNumber,
+    internalIssueUrl: v.internalIssueUrl,
+    upstreamIssueNumber: v.upstreamIssueNumber,
+    upstreamIssueUrl: v.upstreamIssueUrl,
+    shippedAt: v.shippedAt,
+  };
+}
+
+function normalizePulledIssue(value: unknown): PulledIssue | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Partial<PulledIssue>;
+  if (
+    typeof v.upstreamIssueNumber !== 'number' ||
+    !Number.isFinite(v.upstreamIssueNumber) ||
+    typeof v.upstreamIssueUrl !== 'string' ||
+    !v.upstreamIssueUrl.trim() ||
+    typeof v.internalIssueNumber !== 'number' ||
+    !Number.isFinite(v.internalIssueNumber) ||
+    typeof v.internalIssueUrl !== 'string' ||
+    !v.internalIssueUrl.trim() ||
+    typeof v.pulledAt !== 'string' ||
+    !v.pulledAt.trim()
+  ) {
+    return null;
+  }
+  return {
+    upstreamIssueNumber: v.upstreamIssueNumber,
+    upstreamIssueUrl: v.upstreamIssueUrl,
+    internalIssueNumber: v.internalIssueNumber,
+    internalIssueUrl: v.internalIssueUrl,
+    pulledAt: v.pulledAt,
+  };
+}
+
 function normalizeBranchMap<T>(
   source: Record<string, unknown> | undefined,
   perEntry: (value: unknown) => T | null
@@ -256,6 +351,26 @@ function normalizeConfig(config: VenforkConfig): VenforkConfig | null {
     normalized.pulledPrs = pulledPrs;
   } else {
     delete normalized.pulledPrs;
+  }
+
+  const shippedIssues = normalizeBranchMap(
+    normalized.shippedIssues,
+    normalizeShippedIssue
+  );
+  if (shippedIssues) {
+    normalized.shippedIssues = shippedIssues;
+  } else {
+    delete normalized.shippedIssues;
+  }
+
+  const pulledIssues = normalizeBranchMap(
+    normalized.pulledIssues,
+    normalizePulledIssue
+  );
+  if (pulledIssues) {
+    normalized.pulledIssues = pulledIssues;
+  } else {
+    delete normalized.pulledIssues;
   }
 
   return normalized;
@@ -344,6 +459,8 @@ export async function updateVenforkConfig(
     disabledWorkflows: _disabledWorkflowsPatch,
     shippedBranches: _shippedBranchesPatch,
     pulledPrs: _pulledPrsPatch,
+    shippedIssues: _shippedIssuesPatch,
+    pulledIssues: _pulledIssuesPatch,
     ...basePatch
   } = patch;
 
@@ -383,6 +500,24 @@ export async function updateVenforkConfig(
     delete merged.pulledPrs;
   } else if (patch.pulledPrs !== undefined) {
     merged.pulledPrs = mergeBranchMap(merged.pulledPrs, patch.pulledPrs);
+  }
+
+  if (patch.shippedIssues === null) {
+    delete merged.shippedIssues;
+  } else if (patch.shippedIssues !== undefined) {
+    merged.shippedIssues = mergeBranchMap(
+      merged.shippedIssues,
+      patch.shippedIssues
+    );
+  }
+
+  if (patch.pulledIssues === null) {
+    delete merged.pulledIssues;
+  } else if (patch.pulledIssues !== undefined) {
+    merged.pulledIssues = mergeBranchMap(
+      merged.pulledIssues,
+      patch.pulledIssues
+    );
   }
 
   if (merged.schedule && !merged.schedule.cron?.trim()) {

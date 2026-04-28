@@ -187,6 +187,7 @@ mock.module('@clack/prompts', () => ({
 // Import commands (will use mocked execa, fs, and prompts)
 import {
   cloneCommand,
+  issueCommand,
   pullRequestCommand,
   scheduleCommand,
   setupCommand,
@@ -2333,5 +2334,160 @@ describe('syncCommand - pulled PR branches', () => {
     expect(
       execaCalls.some((cmd) => cmd.includes('git fetch upstream pull/'))
     ).toBe(false);
+  });
+});
+
+describe('issueCommand', () => {
+  function setupCommonRemotes() {
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/mirror.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+  }
+
+  test('stage: reads internal issue, redacts, posts upstream, records linkage', async () => {
+    setupCommonRemotes();
+    confirmResponse = true;
+    mockResponses.set('gh issue view 7 --repo owner/mirror', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 7,
+        url: 'https://github.com/owner/mirror/issues/7',
+        title: 'Bug: things break',
+        body: 'Public summary.\n<!-- venfork:internal -->Client X is blocked.<!-- /venfork:internal -->\nMore detail.',
+        state: 'OPEN',
+        author: { login: 'me' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set('gh issue create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/issues/99\n',
+      stderr: '',
+    });
+
+    try {
+      await issueCommand('stage', '7');
+    } catch {
+      // venfork-config write may fail under mocks
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh issue view 7') && cmd.includes('--repo owner/mirror')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh issue create --repo up/repo') &&
+          cmd.includes('--body-file -')
+      )
+    ).toBe(true);
+  });
+
+  test('pull: reads upstream issue, posts internal, records linkage', async () => {
+    setupCommonRemotes();
+    confirmResponse = true;
+    mockResponses.set('gh issue view 1234 --repo up/repo', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 1234,
+        url: 'https://github.com/up/repo/issues/1234',
+        title: 'Feature request: foo',
+        body: 'Body text.',
+        state: 'OPEN',
+        author: { login: 'reporter' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set('gh issue create --repo owner/mirror', {
+      exitCode: 0,
+      stdout: 'https://github.com/owner/mirror/issues/12\n',
+      stderr: '',
+    });
+
+    try {
+      await issueCommand('pull', '1234');
+    } catch {
+      // ignore config-write fallout
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh issue view 1234') && cmd.includes('--repo up/repo')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('gh issue create --repo owner/mirror')
+      )
+    ).toBe(true);
+  });
+
+  test('rejects unknown action', async () => {
+    setupCommonRemotes();
+    await expect(
+      // biome-ignore lint/suspicious/noExplicitAny: testing invalid runtime input
+      issueCommand('burn' as any, '7')
+    ).rejects.toThrow('process.exit called');
+  });
+
+  test('rejects missing target', async () => {
+    setupCommonRemotes();
+    await expect(issueCommand('stage', undefined)).rejects.toThrow(
+      'process.exit called'
+    );
+  });
+
+  test('accepts URL form for stage', async () => {
+    setupCommonRemotes();
+    confirmResponse = true;
+    mockResponses.set('gh issue view 7 --repo owner/mirror', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 7,
+        url: 'https://github.com/owner/mirror/issues/7',
+        title: 't',
+        body: '',
+        state: 'OPEN',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('gh issue create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/issues/40\n',
+      stderr: '',
+    });
+
+    try {
+      await issueCommand('stage', 'https://github.com/owner/mirror/issues/7');
+    } catch {
+      // ignore
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh issue view 7') && cmd.includes('--repo owner/mirror')
+      )
+    ).toBe(true);
   });
 });

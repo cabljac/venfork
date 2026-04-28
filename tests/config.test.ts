@@ -235,6 +235,31 @@ describe('updateVenforkConfig', () => {
     expect(first.pulledPrs?.['upstream-pr/42']?.upstreamPrNumber).toBe(42);
   });
 
+  test('records and merges shippedIssues + pulledIssues', async () => {
+    const first = await updateVenforkConfig('/tmp/repo', {
+      shippedIssues: {
+        '7': {
+          internalIssueNumber: 7,
+          internalIssueUrl: 'https://github.com/owner/mirror/issues/7',
+          upstreamIssueNumber: 99,
+          upstreamIssueUrl: 'https://github.com/upstream/repo/issues/99',
+          shippedAt: '2026-04-28T10:00:00Z',
+        },
+      },
+      pulledIssues: {
+        '12': {
+          upstreamIssueNumber: 200,
+          upstreamIssueUrl: 'https://github.com/upstream/repo/issues/200',
+          internalIssueNumber: 12,
+          internalIssueUrl: 'https://github.com/owner/mirror/issues/12',
+          pulledAt: '2026-04-28T11:00:00Z',
+        },
+      },
+    });
+    expect(first.shippedIssues?.['7']?.upstreamIssueNumber).toBe(99);
+    expect(first.pulledIssues?.['12']?.upstreamIssueNumber).toBe(200);
+  });
+
   test('drops malformed shippedBranches entries during normalize', async () => {
     mockResponses.set(
       'git show FETCH_HEAD:.venfork/config.json',

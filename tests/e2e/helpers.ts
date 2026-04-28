@@ -111,6 +111,111 @@ export async function pokeUpstream(
 }
 
 /**
+ * Creates a branch on `<UPSTREAM_OWNER>/<upstream>` with a new file commit
+ * via the GitHub contents API, then opens a PR from that branch into
+ * upstream's default branch. Returns the PR number + URL.
+ *
+ * Used by Tier 4 (pull-request) so the test owns an upstream PR it can
+ * also update later with `pushToUpstreamPrBranch`.
+ */
+export async function openUpstreamPr(args: {
+  branch: string;
+  filename: string;
+  content: string;
+  title: string;
+  body: string;
+  base: string;
+}): Promise<{ number: number; url: string }> {
+  // 1. Get base branch SHA so we can create the new ref.
+  const baseRef =
+    await $`gh api repos/${UPSTREAM_OWNER}/${names.upstream}/git/refs/heads/${args.base} --jq .object.sha`;
+  const baseSha = baseRef.stdout.trim();
+  // 2. Create the new branch ref pointing at base.
+  await $`gh api repos/${UPSTREAM_OWNER}/${names.upstream}/git/refs -X POST -f ref=refs/heads/${args.branch} -f sha=${baseSha}`;
+  // 3. PUT a file on that branch (creates a commit on it).
+  const b64 = Buffer.from(args.content, 'utf8').toString('base64');
+  await $`gh api repos/${UPSTREAM_OWNER}/${names.upstream}/contents/${args.filename} -X PUT -f message=${`e2e upstream PR commit ${args.filename}`} -f content=${b64} -f branch=${args.branch}`;
+  // 4. Open the PR.
+  const created =
+    await $`gh pr create --repo ${UPSTREAM_OWNER}/${names.upstream} --base ${args.base} --head ${args.branch} --title ${args.title} --body ${args.body}`;
+  const url = created.stdout.trim().split(/\s+/).pop() ?? '';
+  const numberMatch = url.match(/\/pull\/(\d+)/);
+  if (!numberMatch) {
+    throw new Error(`Could not parse upstream PR URL: ${url}`);
+  }
+  return { number: Number(numberMatch[1]), url };
+}
+
+/**
+ * Pushes another commit onto an existing upstream PR's branch via the
+ * contents API. Used by Tier 4 to verify `venfork sync upstream-pr/<n>`
+ * picks up new commits.
+ */
+export async function pushToUpstreamPrBranch(args: {
+  branch: string;
+  filename: string;
+  content: string;
+}): Promise<void> {
+  const apiPath = `repos/${UPSTREAM_OWNER}/${names.upstream}/contents/${args.filename}`;
+  const b64 = Buffer.from(args.content, 'utf8').toString('base64');
+  const existing =
+    await ghQuiet`gh api ${apiPath}?ref=${args.branch} --jq .sha`;
+  const message = `e2e PR update ${args.filename}`;
+  if (existing.exitCode === 0 && existing.stdout.trim()) {
+    const sha = existing.stdout.trim();
+    await $`gh api ${apiPath} -X PUT -f message=${message} -f content=${b64} -f branch=${args.branch} -f sha=${sha}`;
+  } else {
+    await $`gh api ${apiPath} -X PUT -f message=${message} -f content=${b64} -f branch=${args.branch}`;
+  }
+}
+
+/**
+ * Creates an issue on the given GitHub repo via gh and returns
+ * { number, url }.
+ */
+export async function createIssueOnRepo(args: {
+  owner: string;
+  repo: string;
+  title: string;
+  body: string;
+}): Promise<{ number: number; url: string }> {
+  const result =
+    await $`gh issue create --repo ${args.owner}/${args.repo} --title ${args.title} --body ${args.body}`;
+  const url = result.stdout.trim().split(/\s+/).pop() ?? '';
+  const match = url.match(/\/issues\/(\d+)/);
+  if (!match) {
+    throw new Error(`Could not parse issue URL: ${url}`);
+  }
+  return { number: Number(match[1]), url };
+}
+
+/**
+ * Reads an issue's metadata via gh.
+ */
+export async function getIssueMeta(args: {
+  owner: string;
+  repo: string;
+  number: number;
+}): Promise<{ title: string; body: string; state: string; url: string }> {
+  const result =
+    await $`gh issue view ${args.number} --repo ${args.owner}/${args.repo} --json title,body,state,url`;
+  return JSON.parse(result.stdout);
+}
+
+/**
+ * Reads a PR's metadata + body via gh.
+ */
+export async function getPrMeta(args: {
+  owner: string;
+  repo: string;
+  number: number;
+}): Promise<{ title: string; body: string; state: string; url: string }> {
+  const result =
+    await $`gh pr view ${args.number} --repo ${args.owner}/${args.repo} --json title,body,state,url`;
+  return JSON.parse(result.stdout);
+}
+
+/**
  * Returns the SHA at the tip of `branch` for `<owner>/<repo>`.
  */
 export async function getDefaultBranchSha(

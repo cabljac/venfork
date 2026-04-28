@@ -3,6 +3,7 @@
 import * as p from '@clack/prompts';
 import {
   cloneCommand,
+  issueCommand,
   pullRequestCommand,
   scheduleCommand,
   setupCommand,
@@ -12,6 +13,7 @@ import {
   syncCommand,
   workflowsCommand,
 } from './commands.js';
+import { parseIssueCliArgs } from './issue-args.js';
 import { parsePullRequestCliArgs } from './pull-request-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
 import { parseStageCliArgs } from './stage-args.js';
@@ -77,6 +79,13 @@ async function main(): Promise<void> {
       await pullRequestCommand(parsed.pr, {
         branchName: parsed.branchName,
         push: parsed.push,
+      });
+      break;
+    }
+    case 'issue': {
+      const parsed = parseIssueCliArgs(args.slice(1));
+      await issueCommand(parsed.action, parsed.target, {
+        title: parsed.title,
       });
       break;
     }

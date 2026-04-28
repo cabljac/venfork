@@ -2146,6 +2146,263 @@ export async function pullRequestCommand(
   }
 }
 
+interface IssueMeta {
+  number: number;
+  url: string;
+  title: string;
+  body: string;
+  state: string;
+  author?: { login: string };
+}
+
+async function readIssue(
+  repoPath: string,
+  number: number,
+  cwd: string
+): Promise<IssueMeta> {
+  const result = await $({
+    cwd,
+    reject: false,
+  })`gh issue view ${number} --repo ${repoPath} --json number,url,title,body,state,author`;
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Failed to read issue #${number} from ${repoPath}: ${result.stderr.trim() || `exit ${result.exitCode}`}`
+    );
+  }
+  return JSON.parse(result.stdout) as IssueMeta;
+}
+
+async function createIssue(args: {
+  repoPath: string;
+  title: string;
+  body: string;
+  cwd: string;
+}): Promise<{ url: string; number: number }> {
+  const result = await $({
+    cwd: args.cwd,
+    reject: false,
+    input: args.body,
+  })`gh issue create --repo ${args.repoPath} --title ${args.title} --body-file -`;
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Failed to create issue on ${args.repoPath}: ${result.stderr.trim() || `exit ${result.exitCode}`}`
+    );
+  }
+  const url = result.stdout.trim().split(/\s+/).pop() ?? '';
+  const numberMatch = url.match(/\/issues\/(\d+)/);
+  if (!numberMatch) {
+    throw new Error(`gh issue create returned an unexpected output: ${url}`);
+  }
+  return { url, number: Number(numberMatch[1]) };
+}
+
+function resolveIssueArg(
+  target: string,
+  expectedRepoPath: string
+): { number: number } {
+  const trimmed = target.trim();
+  if (/^\d+$/.test(trimmed)) {
+    return { number: Number(trimmed) };
+  }
+  const match = trimmed.match(
+    /github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?\/issues\/(\d+)/
+  );
+  if (!match) {
+    throw new Error(
+      `Could not parse issue reference: ${target}. Expected an integer or a github.com/<owner>/<repo>/issues/<n> URL.`
+    );
+  }
+  const [, sourceRepoPath, num] = match;
+  if (sourceRepoPath !== expectedRepoPath) {
+    p.log.warn(
+      `Issue URL points to ${sourceRepoPath}, but the expected repo is ${expectedRepoPath}. Continuing under that assumption.`
+    );
+  }
+  return { number: Number(num) };
+}
+
+/**
+ * Issue command: stage an internal issue to upstream, or pull an upstream
+ * issue into the mirror for internal triage. Body translation uses the same
+ * `<!-- venfork:internal -->...<!-- /venfork:internal -->` markers as
+ * `stage --pr`. No comment sync — the linkage is one-shot.
+ */
+export async function issueCommand(
+  action: 'stage' | 'pull' | undefined,
+  target: string | undefined,
+  options: { title?: string } = {}
+): Promise<void> {
+  p.intro('🐛 Venfork Issue');
+
+  const isAuthenticated = await checkGhAuth();
+  if (!isAuthenticated) {
+    throw new AuthenticationError();
+  }
+
+  if (!action || !target) {
+    p.log.error(
+      'Usage: venfork issue <stage|pull> <number-or-url> [--title <text>]'
+    );
+    p.outro('');
+    process.exit(1);
+  }
+
+  const s = p.spinner();
+  const repoDir = process.cwd();
+
+  try {
+    s.start('Resolving remotes');
+    const upstreamUrlResult = await $({
+      cwd: repoDir,
+      reject: false,
+    })`git remote get-url upstream`;
+    if (upstreamUrlResult.exitCode !== 0) {
+      throw new RemoteNotFoundError('upstream');
+    }
+    const upstreamRepoPath = parseRepoPath(upstreamUrlResult.stdout.trim());
+    if (!upstreamRepoPath) {
+      throw new Error(
+        `Could not parse upstream remote URL: ${upstreamUrlResult.stdout.trim()}`
+      );
+    }
+    const mirrorRepoPath = await findMirrorRepoPath(repoDir);
+    if (!mirrorRepoPath) {
+      throw new RemoteNotFoundError('origin');
+    }
+    s.stop(`Mirror: ${mirrorRepoPath} | Upstream: ${upstreamRepoPath}`);
+
+    if (action === 'stage') {
+      const { number: internalNumber } = resolveIssueArg(
+        target,
+        mirrorRepoPath
+      );
+
+      s.start(`Reading internal issue #${internalNumber}`);
+      const internal = await readIssue(mirrorRepoPath, internalNumber, repoDir);
+      s.stop(`Read: ${internal.title}`);
+
+      const translatedBody = translateInternalBody(internal.body, internal.url);
+      const upstreamTitle = options.title ?? internal.title;
+
+      p.note(
+        [
+          `Internal: #${internal.number} ${internal.title} (${internal.state})`,
+          `Upstream target: ${upstreamRepoPath}`,
+          '',
+          `Title: ${upstreamTitle}`,
+        ].join('\n'),
+        'Issue Stage'
+      );
+      p.note(translatedBody || '(empty)', 'Upstream issue body preview');
+
+      const ok = await p.confirm({
+        message: `Open the issue on ${upstreamRepoPath}?`,
+        initialValue: false,
+      });
+      if (p.isCancel(ok) || !ok) {
+        p.outro('Stage cancelled');
+        process.exit(0);
+      }
+
+      s.start('Opening upstream issue');
+      const created = await createIssue({
+        repoPath: upstreamRepoPath,
+        title: upstreamTitle,
+        body: translatedBody,
+        cwd: repoDir,
+      });
+      s.stop(`Upstream issue created: ${created.url}`);
+
+      try {
+        await updateVenforkConfig(repoDir, {
+          shippedIssues: {
+            [String(internalNumber)]: {
+              internalIssueNumber: internalNumber,
+              internalIssueUrl: internal.url,
+              upstreamIssueNumber: created.number,
+              upstreamIssueUrl: created.url,
+              shippedAt: new Date().toISOString(),
+            },
+          },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        p.log.warn(`Could not record shippedIssues entry: ${msg}`);
+      }
+
+      p.outro(`✨ Issue staged: ${created.url}`);
+      return;
+    }
+
+    // action === 'pull'
+    const { number: upstreamNumber } = resolveIssueArg(
+      target,
+      upstreamRepoPath
+    );
+
+    s.start(`Reading upstream issue #${upstreamNumber}`);
+    const upstream = await readIssue(upstreamRepoPath, upstreamNumber, repoDir);
+    s.stop(`Read: ${upstream.title} (${upstream.state})`);
+
+    const internalTitle =
+      options.title ?? `[upstream #${upstream.number}] ${upstream.title}`;
+    const internalBody = `${upstream.body || '(no body provided)'}\n\n> Pulled from upstream issue: ${upstream.url}\n> Author: ${upstream.author?.login ?? '(unknown)'}\n> State: ${upstream.state}`;
+
+    p.note(
+      [
+        `Upstream: #${upstream.number} ${upstream.title} (${upstream.state})`,
+        `Mirror target: ${mirrorRepoPath}`,
+        '',
+        `Title: ${internalTitle}`,
+      ].join('\n'),
+      'Issue Pull'
+    );
+    p.note(internalBody, 'Internal issue body preview');
+
+    const ok = await p.confirm({
+      message: `Open the issue on ${mirrorRepoPath}?`,
+      initialValue: false,
+    });
+    if (p.isCancel(ok) || !ok) {
+      p.outro('Pull cancelled');
+      process.exit(0);
+    }
+
+    s.start('Opening internal issue');
+    const created = await createIssue({
+      repoPath: mirrorRepoPath,
+      title: internalTitle,
+      body: internalBody,
+      cwd: repoDir,
+    });
+    s.stop(`Internal issue created: ${created.url}`);
+
+    try {
+      await updateVenforkConfig(repoDir, {
+        pulledIssues: {
+          [String(created.number)]: {
+            upstreamIssueNumber: upstreamNumber,
+            upstreamIssueUrl: upstream.url,
+            internalIssueNumber: created.number,
+            internalIssueUrl: created.url,
+            pulledAt: new Date().toISOString(),
+          },
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      p.log.warn(`Could not record pulledIssues entry: ${msg}`);
+    }
+
+    p.outro(`✨ Issue pulled: ${created.url}`);
+  } catch (error) {
+    s.stop('Error occurred');
+    p.log.error(error instanceof Error ? error.message : String(error));
+    p.outro('❌ Issue command failed');
+    process.exit(1);
+  }
+}
+
 /**
  * Status command: Show current repository setup and configuration
  */
@@ -2270,6 +2527,13 @@ venfork pull-request <pr-number-or-url> [--branch-name <name>] [--no-push]
   Fetches pull/<n>/head from upstream into a new branch (default: upstream-pr/<n>)
   Pushes the branch to origin so the team can see it
   Refresh later with: venfork sync <branch>
+
+venfork issue <stage|pull> <number-or-url> [--title <text>]
+  Move issue context between the private mirror and upstream
+  • stage: read internal mirror issue, strip venfork:internal blocks,
+    open the upstream counterpart, record linkage in venfork-config
+  • pull: read upstream issue, open an internal triage issue on the mirror,
+    record linkage. No comment sync — the linkage is one-shot.
 
 venfork workflows <status|allow|block|clear> [workflow-file ...]
   Configure workflow allowlist/blocklist policy in venfork-config`,

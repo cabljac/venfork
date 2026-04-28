@@ -365,6 +365,34 @@ venfork sync upstream-pr/1234
 
 In that case it refetches `pull/<n>/head` from upstream and force-with-lease pushes the result to origin. The default-branch sync (the +1-managed-commit flow) is unaffected.
 
+### `venfork issue <stage|pull> <number-or-url> [--title <text>]`
+
+Move *issue* context between the private mirror and upstream — the same shape as `stage --pr` and `pull-request`, but for issues instead of PRs.
+
+**Sub-commands:**
+- `stage <internal-#>` — read an internal triage issue from the mirror, redact `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks (same convention as `stage --pr`), and open the upstream counterpart via `gh issue create`.
+- `pull <upstream-#>` — read an upstream issue, create a parallel internal issue on the mirror titled `[upstream #N] <original title>` so the team can triage it without leaving the private space.
+
+**Flags:**
+- `--title <text>` - Override the destination issue's title.
+
+**Examples:**
+```bash
+# Found a bug while working internally → refine then file upstream
+venfork issue stage 7
+
+# Watching an upstream issue that affects the team's roadmap
+venfork issue pull 1234
+```
+
+**What gets recorded**
+
+Both sub-commands write a linkage to `venfork-config`:
+- `shippedIssues[<internal-#>]` for `stage`
+- `pulledIssues[<internal-#>]` for `pull`
+
+This is **only the linkage** — comments and state changes do *not* sync. If the upstream issue is closed, the internal one stays open until you close it manually (and vice versa). Treat the records as a "where did this go?" audit log rather than a live mirror.
+
 ### `venfork schedule <status|set <cron>|disable>`
 
 Manage automated sync configuration stored in `venfork-config`.
