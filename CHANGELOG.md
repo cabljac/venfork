@@ -1,5 +1,12 @@
 # venfork
 
+## [0.6.0](https://github.com/cabljac/venfork/compare/v0.5.0...v0.6.0) (2026-04-28)
+
+
+### Features
+
+* stage --pr, pull-request, sync &lt;pulled-branch&gt;, and issue stage/pull ([#32](https://github.com/cabljac/venfork/issues/32)) ([a33430e](https://github.com/cabljac/venfork/commit/a33430efe326c8ada61c99387eba5ce40103162a))
+
 ## [0.5.0](https://github.com/cabljac/venfork/compare/v0.4.1...v0.5.0) (2026-04-27)
 
 
