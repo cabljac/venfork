@@ -330,7 +330,7 @@ Pull a third-party upstream PR into the private mirror so your team can review i
 - `pr-number-or-url` - Either a bare integer (`1234`) or a github.com PR URL.
 
 **Flags:**
-- `--branch-name <name>` - Use a custom local/mirror branch name instead of `upstream-pr/<n>`.
+- `--branch-name <name>` - Use a custom local/mirror branch name instead of `upstream-pr/<n>`. **Note**: with a custom branch name, the linkage in `venfork-config.pulledPrs[<branch>]` is the only way `venfork sync <branch>` finds the upstream PR — the `upstream-pr/<n>` convention fallback only matches branches with that exact name.
 - `--no-push` - Fetch into a local branch only; don't push to the mirror.
 
 **Examples:**
@@ -487,6 +487,10 @@ VENFORK_NONINTERACTIVE=1 venfork stage feat/auth --pr
 ```
 
 The setup-time personal-account confirmation is intentionally **not** bypassed — that one's a safety net you almost certainly want when scripting setup.
+
+### Concurrency
+
+Commands that mutate `venfork-config` (`stage --pr`, `pull-request`, `issue stage`, `issue pull`, and `sync upstream-pr/<n>`) push to the orphan config branch with `--force-with-lease`. Two parallel runs racing the config update will see the **second** push fail with a "stale info" error — re-run the failed command and the next read will include the first run's update. Don't `--force` the config branch by hand to "fix" the failure; that's exactly the data-loss path the lease prevents.
 
 ## Complete Workflow
 

@@ -1222,6 +1222,304 @@ describe('stageCommand', () => {
 
     expect(execaCalls.some((cmd) => cmd.includes('gh pr create'))).toBe(false);
   });
+
+  test('--pr internal-PR lookup passes --state with value as separate args', async () => {
+    // Regression for the bug where `--state open` was a single execa template
+    // interpolation and gh silently filtered wrong, producing zero results.
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/pull/200\n',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } catch {
+      // ignore
+    }
+
+    // The rendered command must contain "--state open" (space-separated).
+    expect(
+      execaCalls.some(
+        (cmd) => cmd.includes('gh pr list') && / --state open(?: |$)/.test(cmd)
+      )
+    ).toBe(true);
+  });
+
+  test('--internal-pr <n> uses gh pr view by id and skips the list lookup', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('gh pr view 99 --repo owner/repo-private', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 99,
+        url: 'https://github.com/owner/repo-private/pull/99',
+        title: 'pinned title',
+        body: 'pinned body',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/pull/300\n',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch', {
+        createPr: true,
+        internalPrNumber: 99,
+      });
+    } catch {
+      // ignore
+    }
+
+    // gh pr view by id was called
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh pr view 99') && cmd.includes('owner/repo-private')
+      )
+    ).toBe(true);
+    // and gh pr list was NOT called (the override skips list)
+    expect(execaCalls.some((cmd) => cmd.includes('gh pr list'))).toBe(false);
+  });
+
+  test('--pr auto-updates body via gh pr edit when upstream PR already exists', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    // gh pr create exits non-zero with an "already exists" error containing
+    // the existing PR URL — createUpstreamPr surfaces alreadyExists: true.
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        'a pull request for branch "feature-branch" into branch "main" already exists: https://github.com/up/repo/pull/77',
+    });
+    mockResponses.set('gh pr edit https://github.com/up/repo/pull/77', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } catch {
+      // ignore
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh pr edit https://github.com/up/repo/pull/77') &&
+          cmd.includes('--body-file -')
+      )
+    ).toBe(true);
+  });
+
+  test('--pr respects --no-update-existing on already-exists path', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        'a pull request for branch "feature-branch" into branch "main" already exists: https://github.com/up/repo/pull/77',
+    });
+
+    try {
+      await stageCommand('feature-branch', {
+        createPr: true,
+        noUpdateExisting: true,
+      });
+    } catch {
+      // ignore
+    }
+
+    expect(execaCalls.some((cmd) => cmd.includes('gh pr edit'))).toBe(false);
+  });
+
+  test('--pr with VENFORK_NONINTERACTIVE=1 skips the confirm prompt', async () => {
+    process.env.VENFORK_NONINTERACTIVE = '1';
+    // Default confirmResponse=true would also let the test pass even if the
+    // prompt fired; flip it to false so a successful flow PROVES the prompt
+    // was bypassed.
+    confirmResponse = false;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/pull/400\n',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } finally {
+      delete process.env.VENFORK_NONINTERACTIVE;
+    }
+
+    // The prompt was bypassed, so we reached the push + gh pr create path
+    // even though confirmResponse=false would have cancelled it.
+    expect(execaCalls.some((cmd) => cmd.includes('gh pr create'))).toBe(true);
+  });
 });
 
 describe('scheduleCommand', () => {

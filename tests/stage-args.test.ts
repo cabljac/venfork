@@ -72,4 +72,42 @@ describe('parseStageCliArgs', () => {
     expect(parsed.createPr).toBe(true);
     expect(parsed.draft).toBe(true);
   });
+
+  test('--internal-pr <n> sets internalPrNumber', () => {
+    const parsed = parseStageCliArgs([
+      'feat/auth',
+      '--pr',
+      '--internal-pr',
+      '42',
+    ]);
+    expect(parsed.internalPrNumber).toBe(42);
+  });
+
+  test('--internal-pr=<n> form', () => {
+    const parsed = parseStageCliArgs(['feat/auth', '--pr', '--internal-pr=42']);
+    expect(parsed.internalPrNumber).toBe(42);
+  });
+
+  test('throws when --internal-pr is not a positive integer', () => {
+    expect(() =>
+      parseStageCliArgs(['feat/auth', '--pr', '--internal-pr', 'abc'])
+    ).toThrow('--internal-pr requires a positive integer');
+    expect(() =>
+      parseStageCliArgs(['feat/auth', '--pr', '--internal-pr', '0'])
+    ).toThrow('--internal-pr requires a positive integer');
+  });
+
+  test('--no-update-existing flips the body re-sync default', () => {
+    const parsed = parseStageCliArgs([
+      'feat/auth',
+      '--pr',
+      '--no-update-existing',
+    ]);
+    expect(parsed.noUpdateExisting).toBe(true);
+  });
+
+  test('noUpdateExisting defaults to false', () => {
+    const parsed = parseStageCliArgs(['feat/auth', '--pr']);
+    expect(parsed.noUpdateExisting).toBe(false);
+  });
 });

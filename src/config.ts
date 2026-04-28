@@ -157,9 +157,29 @@ async function writeConfigBranch(
 
     const remoteResult = await $({ cwd: repoDir })`git remote get-url origin`;
     const originUrl = remoteResult.stdout.trim();
-    await $({
+    // Read the current SHA of the config branch (if it exists) so we can pass
+    // an explicit lease — the bare `--force-with-lease` flag relies on a
+    // remote-tracking ref, which doesn't exist in this fresh tempDir.
+    // First-time writes have no upstream to lease against; falling back to a
+    // plain push is safe (no concurrent writers can exist when the branch
+    // doesn't yet exist).
+    const lsRemote = await $({
       cwd: tempDir,
-    })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH} --force`;
+      reject: false,
+    })`git ls-remote ${originUrl} ${CONFIG_BRANCH}`;
+    const expectedSha =
+      lsRemote.exitCode === 0
+        ? (lsRemote.stdout.trim().split(/\s+/)[0] ?? '')
+        : '';
+    if (expectedSha) {
+      await $({
+        cwd: tempDir,
+      })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH} --force-with-lease=${CONFIG_BRANCH}:${expectedSha}`;
+    } else {
+      await $({
+        cwd: tempDir,
+      })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH}`;
+    }
   } finally {
     try {
       await rm(tempDir, { recursive: true, force: true });

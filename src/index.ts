@@ -63,6 +63,8 @@ async function main(): Promise<void> {
         draft: parsed.draft,
         title: parsed.title,
         base: parsed.base,
+        internalPrNumber: parsed.internalPrNumber,
+        noUpdateExisting: parsed.noUpdateExisting,
       });
       break;
     }

@@ -8,6 +8,18 @@ export type ParsedStageArgs = {
   title?: string;
   /** Override the upstream base branch; default is upstream's default branch. */
   base?: string;
+  /**
+   * Pin the internal review PR by number, instead of letting venfork pick
+   * the most recent one for the branch. Use when a branch has had multiple
+   * internal PRs and you want to ship from a specific one.
+   */
+  internalPrNumber?: number;
+  /**
+   * When true, don't update an existing upstream PR body on re-runs.
+   * Default behaviour re-syncs the body via `gh pr edit` so addressing
+   * internal review feedback re-publishes upstream.
+   */
+  noUpdateExisting: boolean;
 };
 
 function consumeValue(
@@ -39,6 +51,8 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   let draft = false;
   let title: string | undefined;
   let base: string | undefined;
+  let internalPrNumber: number | undefined;
+  let noUpdateExisting = false;
 
   for (let i = 0; i < stageArgs.length; i++) {
     const a = stageArgs[i];
@@ -49,6 +63,10 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     if (a === '--draft') {
       draft = true;
       createPr = true;
+      continue;
+    }
+    if (a === '--no-update-existing') {
+      noUpdateExisting = true;
       continue;
     }
     if (a === '--title' || a.startsWith('--title=')) {
@@ -63,6 +81,16 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
       i += consumed;
       continue;
     }
+    if (a === '--internal-pr' || a.startsWith('--internal-pr=')) {
+      const { value, consumed } = consumeValue('--internal-pr', stageArgs, i);
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error('--internal-pr requires a positive integer');
+      }
+      internalPrNumber = parsed;
+      i += consumed;
+      continue;
+    }
     positional.push(a);
   }
 
@@ -72,5 +100,7 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     draft,
     title,
     base,
+    internalPrNumber,
+    noUpdateExisting,
   };
 }

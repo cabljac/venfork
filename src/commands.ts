@@ -1630,6 +1630,17 @@ export interface StageOptions {
   title?: string;
   /** Override the upstream base branch; default is upstream's default branch. */
   base?: string;
+  /**
+   * Pin the internal review PR by number instead of letting `findInternalPr`
+   * pick the most recent one for the branch.
+   */
+  internalPrNumber?: number;
+  /**
+   * When true, *don't* update an existing upstream PR's body if one is found
+   * for the same head/base. Default behaviour (false) re-syncs the body via
+   * `gh pr edit` so addressing internal feedback re-publishes upstream.
+   */
+  noUpdateExisting?: boolean;
 }
 
 interface InternalPrInfo {
@@ -1640,19 +1651,35 @@ interface InternalPrInfo {
 }
 
 const VENFORK_INTERNAL_REDACTION_RE =
-  /<!--\s*venfork:internal\s*-->[\s\S]*?<!--\s*\/venfork:internal\s*-->/g;
+  /<!--\s*venfork:internal\s*-->[\s\S]*?<!--\s*\/venfork:internal\s*-->/;
 
 /**
  * Looks up the most relevant internal PR for `branch` on the private mirror.
- * Prefers the most recent open PR; falls back to the most recent of any state.
- * Returns null if none exists or the lookup fails (network/rate limit) — the
- * caller falls back to a synthetic body.
+ * When `pinnedNumber` is set, fetches that exact PR via `gh pr view` (skips
+ * the list lookup). Otherwise prefers the most recent open PR, then the most
+ * recent of any state. Returns null if none exists or the lookup fails — the
+ * caller falls back to a generated synthetic body.
  */
 async function findInternalPr(
   mirrorRepoPath: string,
   branch: string,
-  cwd: string
+  cwd: string,
+  pinnedNumber?: number
 ): Promise<InternalPrInfo | null> {
+  if (pinnedNumber !== undefined) {
+    const result = await $({
+      cwd,
+      reject: false,
+    })`gh pr view ${pinnedNumber} --repo ${mirrorRepoPath} --json number,url,title,body`;
+    if (result.exitCode !== 0) {
+      return null;
+    }
+    try {
+      return JSON.parse(result.stdout) as InternalPrInfo;
+    } catch {
+      return null;
+    }
+  }
   // Prefer an open PR; if none, take the most recent of any state.
   // Pass each flag/value as a separate execa interpolation — passing
   // `--state open` as a single string makes execa treat it as one arg
@@ -1682,12 +1709,25 @@ async function findInternalPr(
  * appends a footer linking back to the internal review PR (only the team can
  * follow that link; the upstream maintainer sees only that there *was* an
  * internal review).
+ *
+ * Iterates the strip until no markers remain, so nested marker pairs are
+ * handled correctly. (The non-greedy `*?` matches the innermost pair on each
+ * pass; outer pairs become matchable once their inner content is stripped.)
  */
 function translateInternalBody(
   body: string,
   internalPrUrl: string | undefined
 ): string {
-  const stripped = body.replace(VENFORK_INTERNAL_REDACTION_RE, '').trim();
+  let stripped = body;
+  // Bounded loop guards against pathological input. 64 is way more nesting
+  // than any reasonable PR description would have.
+  for (let i = 0; i < 64; i += 1) {
+    if (!VENFORK_INTERNAL_REDACTION_RE.test(stripped)) {
+      break;
+    }
+    stripped = stripped.replace(VENFORK_INTERNAL_REDACTION_RE, '');
+  }
+  stripped = stripped.trim();
   const footer = internalPrUrl
     ? `\n\n> Upstreamed from internal review (${internalPrUrl}).`
     : '';
@@ -1695,14 +1735,41 @@ function translateInternalBody(
 }
 
 /**
- * Build the body and title for the upstream PR. Falls back to a synthetic body
- * keyed off the branch name when there's no internal PR to translate.
+ * Generates a synthetic upstream PR body from the branch's commit log when no
+ * internal review PR was found. Lists the non-merge commits in
+ * `upstream/<defaultBranch>..<branch>` so the upstream maintainer sees what
+ * the change actually is, rather than a "please add a description" placeholder.
  */
-function buildUpstreamPrPayload(
+async function buildSyntheticBody(
+  branch: string,
+  defaultBranch: string,
+  cwd: string
+): Promise<string> {
+  const log = await $({
+    cwd,
+    reject: false,
+  })`git log --oneline --no-merges upstream/${defaultBranch}..${branch}`;
+  if (log.exitCode !== 0 || !log.stdout.trim()) {
+    return 'Staged from a private mirror. No internal review PR was open at stage time.';
+  }
+  const lines = log.stdout
+    .trim()
+    .split('\n')
+    .map((line) => `- ${line}`)
+    .join('\n');
+  return `Staged from a private mirror. Commits in this branch:\n\n${lines}\n\n_(No internal review PR was found at stage time.)_`;
+}
+
+/**
+ * Build the body and title for the upstream PR. Falls back to a generated
+ * commit-summary body when there's no internal PR to translate.
+ */
+async function buildUpstreamPrPayload(
   branch: string,
   internal: InternalPrInfo | null,
-  override: { title?: string; body?: string }
-): { title: string; body: string } {
+  override: { title?: string; body?: string },
+  context: { defaultBranch: string; cwd: string }
+): Promise<{ title: string; body: string }> {
   if (internal) {
     return {
       title: override.title ?? internal.title,
@@ -1713,7 +1780,7 @@ function buildUpstreamPrPayload(
     title: override.title ?? branch,
     body:
       override.body ??
-      `Branch staged from a venfork-managed private mirror. No internal review PR found for \`${branch}\`; please add a description.`,
+      (await buildSyntheticBody(branch, context.defaultBranch, context.cwd)),
   };
 }
 
@@ -1809,11 +1876,19 @@ export async function stageCommand(
       s.start('Looking up internal review PR');
       const mirrorRepoPath = await findMirrorRepoPath(repoDir);
       if (mirrorRepoPath) {
-        internalPr = await findInternalPr(mirrorRepoPath, plan.branch, repoDir);
+        internalPr = await findInternalPr(
+          mirrorRepoPath,
+          plan.branch,
+          repoDir,
+          options.internalPrNumber
+        );
       }
-      const payload = buildUpstreamPrPayload(plan.branch, internalPr, {
-        title: options.title,
-      });
+      const payload = await buildUpstreamPrPayload(
+        plan.branch,
+        internalPr,
+        { title: options.title },
+        { defaultBranch: plan.upstreamDefaultBranch, cwd: repoDir }
+      );
       prTitle = payload.title;
       translatedBody = payload.body;
       s.stop(
@@ -1898,6 +1973,26 @@ export async function stageCommand(
           'Staging succeeded; you can retry the PR manually with `gh pr create`.'
         );
       }
+
+      // Refresh the existing upstream PR's body from the (possibly updated)
+      // internal review. Default behaviour; opt out with --no-update-existing
+      // if the user wants the upstream body frozen at first-stage time.
+      if (alreadyExisted && upstreamPrUrl && !options.noUpdateExisting) {
+        s.start('Updating existing upstream PR body');
+        const editResult = await $({
+          cwd: repoDir,
+          reject: false,
+          input: translatedBody,
+        })`gh pr edit ${upstreamPrUrl} --body-file -`;
+        if (editResult.exitCode === 0) {
+          s.stop('Updated upstream PR body');
+        } else {
+          s.stop('Could not update upstream PR body');
+          p.log.warn(
+            editResult.stderr.trim() || `gh pr edit exit ${editResult.exitCode}`
+          );
+        }
+      }
     }
 
     if (createPr && upstreamPrUrl) {
@@ -1972,8 +2067,8 @@ function resolvePullRequestArg(
   }
   const [, sourceRepoPath, num] = match;
   if (sourceRepoPath !== upstreamRepoPath) {
-    p.log.warn(
-      `PR URL points to ${sourceRepoPath}, but the upstream remote is ${upstreamRepoPath}. Continuing under the assumption you meant ${upstreamRepoPath} (gh fetch uses the upstream remote).`
+    throw new Error(
+      `Refused to use PR URL ${pr}: it points to ${sourceRepoPath}, but the upstream remote is ${upstreamRepoPath}. If this is intentional, pass the PR number directly (\`venfork pull-request ${num}\`).`
     );
   }
   return { number: Number(num), sourceRepoPath };
@@ -2092,6 +2187,7 @@ export async function pullRequestCommand(
     ).stdout.trim();
     s.stop(`Fetched ${headSha.slice(0, 9)} → ${localBranch}`);
 
+    let pushSucceeded = !push; // If push is disabled, treat as "no push needed".
     if (push) {
       s.start(`Pushing ${localBranch} to origin`);
       const pushResult = await $({
@@ -2103,10 +2199,21 @@ export async function pullRequestCommand(
         p.log.warn(
           `Could not push ${localBranch} to origin: ${pushResult.stderr.trim()}`
         );
-        p.log.warn('The local branch is still available for review.');
+        p.log.warn(
+          'The local branch is still available for review, but no pulledPrs entry was recorded — `venfork sync` will not know how to refresh it until the next successful push.'
+        );
       } else {
         s.stop(`Pushed ${localBranch} to origin`);
+        pushSucceeded = true;
       }
+    }
+
+    if (!pushSucceeded) {
+      // Skip the linkage record so the user doesn't think the mirror has the
+      // branch. The local branch remains, so they can `git push origin
+      // <branch>` themselves and re-run `venfork pull-request` if desired.
+      p.outro('✨ Pull request fetched locally (mirror push failed)');
+      return;
     }
 
     try {
@@ -2234,8 +2341,8 @@ function resolveIssueArg(
   }
   const [, sourceRepoPath, num] = match;
   if (sourceRepoPath !== expectedRepoPath) {
-    p.log.warn(
-      `Issue URL points to ${sourceRepoPath}, but the expected repo is ${expectedRepoPath}. Continuing under that assumption.`
+    throw new Error(
+      `Refused to use issue URL ${target}: it points to ${sourceRepoPath}, but the expected repo is ${expectedRepoPath}. If this is intentional, pass the issue number directly.`
     );
   }
   return { number: Number(num) };
@@ -2473,6 +2580,73 @@ export async function statusCommand(): Promise<void> {
   ];
 
   p.note(statusLines.join('\n'), 'Repository Status');
+
+  // Surface PR/issue linkages from venfork-config (best-effort — quietly skip
+  // if the branch is missing or the read fails).
+  if (isSetupComplete) {
+    try {
+      const cfg = await readVenforkConfigFromRepo(process.cwd());
+      const linkageBlocks: string[] = [];
+
+      const formatDate = (iso: string): string => {
+        try {
+          return new Date(iso).toISOString().slice(0, 10);
+        } catch {
+          return iso;
+        }
+      };
+
+      const ship = cfg?.shippedBranches ?? {};
+      if (Object.keys(ship).length > 0) {
+        const lines = Object.entries(ship)
+          .map(
+            ([branch, entry]) =>
+              `  ${branch} → ${entry.upstreamPrUrl} (${formatDate(entry.shippedAt)})`
+          )
+          .join('\n');
+        linkageBlocks.push(`Shipped branches:\n${lines}`);
+      }
+
+      const pulled = cfg?.pulledPrs ?? {};
+      if (Object.keys(pulled).length > 0) {
+        const lines = Object.entries(pulled)
+          .map(
+            ([branch, entry]) =>
+              `  ${branch} → ${entry.upstreamPrUrl} (last sync ${formatDate(entry.lastSyncedAt)})`
+          )
+          .join('\n');
+        linkageBlocks.push(`Pulled PRs:\n${lines}`);
+      }
+
+      const shippedIssues = cfg?.shippedIssues ?? {};
+      if (Object.keys(shippedIssues).length > 0) {
+        const lines = Object.entries(shippedIssues)
+          .map(
+            ([, entry]) =>
+              `  #${entry.internalIssueNumber} → ${entry.upstreamIssueUrl} (${formatDate(entry.shippedAt)})`
+          )
+          .join('\n');
+        linkageBlocks.push(`Shipped issues:\n${lines}`);
+      }
+
+      const pulledIssues = cfg?.pulledIssues ?? {};
+      if (Object.keys(pulledIssues).length > 0) {
+        const lines = Object.entries(pulledIssues)
+          .map(
+            ([, entry]) =>
+              `  #${entry.internalIssueNumber} ← ${entry.upstreamIssueUrl} (${formatDate(entry.pulledAt)})`
+          )
+          .join('\n');
+        linkageBlocks.push(`Pulled issues:\n${lines}`);
+      }
+
+      if (linkageBlocks.length > 0) {
+        p.note(linkageBlocks.join('\n\n'), 'Linkages');
+      }
+    } catch {
+      // Best-effort; status should never fail because of a config read.
+    }
+  }
 
   // Show appropriate outro
   if (isSetupComplete) {
