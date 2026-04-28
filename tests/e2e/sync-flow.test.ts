@@ -349,17 +349,25 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
       env: { VENFORK_NONINTERACTIVE: '1' },
     });
 
-    // Find the upstream PR and verify body translation + draft state.
+    // Find the upstream PR. gh's --head filter on cross-repo PRs is
+    // unreliable, so list all PRs and filter by headRefName in JS.
     const list =
-      await $`gh pr list --repo ${UPSTREAM_OWNER}/${names.upstream} --head ${GITHUB_ORG}:${featureBranch} --state all --json number,url,body,isDraft --limit 1`;
+      await $`gh pr list --repo ${UPSTREAM_OWNER}/${names.upstream} --state all --json number,url,body,isDraft,headRefName,headRepositoryOwner --limit 20`;
     const prs = JSON.parse(list.stdout) as Array<{
       number: number;
       url: string;
       body: string;
       isDraft: boolean;
+      headRefName: string;
+      headRepositoryOwner?: { login: string };
     }>;
-    expect(prs.length).toBe(1);
-    const upstreamPr = prs[0];
+    const upstreamPr = prs.find(
+      (pr) =>
+        pr.headRefName === featureBranch &&
+        (pr.headRepositoryOwner?.login ?? '') === GITHUB_ORG
+    );
+    expect(upstreamPr).toBeDefined();
+    if (!upstreamPr) return;
     expect(upstreamPr.body).not.toContain('Internal note');
     expect(upstreamPr.body).not.toContain('venfork:internal');
     expect(upstreamPr.body).toContain('Public summary');
