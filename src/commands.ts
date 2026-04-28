@@ -1131,10 +1131,12 @@ async function syncPulledPr(
     p.log.warn(
       `Could not push ${branch} to origin: ${pushResult.stderr.trim()}`
     );
-    p.log.warn('Local branch is updated; the mirror copy was not.');
-  } else {
-    s.stop(`Pushed ${branch} to origin`);
+    p.log.warn(
+      'Local branch is updated; the mirror copy was not. Skipping pulledPrs config update — the recorded head/lastSyncedAt would not match the mirror.'
+    );
+    return;
   }
+  s.stop(`Pushed ${branch} to origin`);
 
   try {
     await updateVenforkConfig(cwd, {
@@ -1655,8 +1657,84 @@ interface InternalPrInfo {
   body: string;
 }
 
-const VENFORK_INTERNAL_REDACTION_RE =
-  /<!--\s*venfork:internal\s*-->[\s\S]*?<!--\s*\/venfork:internal\s*-->/;
+const VENFORK_INTERNAL_OPEN_RE = /<!--\s*venfork:internal\s*-->/g;
+const VENFORK_INTERNAL_CLOSE_RE = /<!--\s*\/venfork:internal\s*-->/g;
+
+interface RedactionMarker {
+  type: 'open' | 'close';
+  start: number;
+  end: number;
+}
+
+/**
+ * Removes properly-nested `<!-- venfork:internal -->...<!-- /venfork:internal -->`
+ * blocks from `body`. Walks markers in document order and tracks depth, so
+ * nested pairs collapse correctly: every char between the outermost open and
+ * its matching close is dropped (including any inner pairs).
+ *
+ * Edge cases:
+ *  - Unmatched close marker: dropped, surrounding content preserved.
+ *  - Unmatched open marker: content from that open to end-of-input is
+ *    dropped (defensive — a missing close shouldn't leak intended-private
+ *    content upstream).
+ *  - Whitespace inside the markers is tolerated (`<!-- venfork:internal -->`
+ *    and `<!--venfork:internal-->` both match).
+ *
+ * @internal Exported for unit testing; not part of the public API.
+ */
+export function stripInternalBlocks(body: string): string {
+  const markers: RedactionMarker[] = [];
+  // Reset lastIndex on the global regexes — they're module-scoped and would
+  // otherwise carry state across calls.
+  VENFORK_INTERNAL_OPEN_RE.lastIndex = 0;
+  VENFORK_INTERNAL_CLOSE_RE.lastIndex = 0;
+
+  for (
+    let m = VENFORK_INTERNAL_OPEN_RE.exec(body);
+    m !== null;
+    m = VENFORK_INTERNAL_OPEN_RE.exec(body)
+  ) {
+    markers.push({ type: 'open', start: m.index, end: m.index + m[0].length });
+  }
+  for (
+    let m = VENFORK_INTERNAL_CLOSE_RE.exec(body);
+    m !== null;
+    m = VENFORK_INTERNAL_CLOSE_RE.exec(body)
+  ) {
+    markers.push({ type: 'close', start: m.index, end: m.index + m[0].length });
+  }
+  markers.sort((a, b) => a.start - b.start);
+
+  let result = '';
+  let cursor = 0;
+  let depth = 0;
+  for (const marker of markers) {
+    if (marker.type === 'open') {
+      if (depth === 0) {
+        // Surfacing into a new redacted block — emit content up to here.
+        result += body.slice(cursor, marker.start);
+      }
+      depth += 1;
+      cursor = marker.end;
+      continue;
+    }
+    if (depth > 0) {
+      depth -= 1;
+      cursor = marker.end;
+    } else {
+      // Unmatched close marker. Keep the content before it; drop the
+      // marker itself.
+      result += body.slice(cursor, marker.start);
+      cursor = marker.end;
+    }
+  }
+  if (depth === 0) {
+    result += body.slice(cursor);
+  }
+  // depth > 0 here means an unclosed open marker — content from the
+  // unmatched open to end-of-input is intentionally dropped.
+  return result;
+}
 
 /**
  * Looks up the most relevant internal PR for `branch` on the private mirror.
@@ -1710,30 +1788,18 @@ async function findInternalPr(
 }
 
 /**
- * Strips `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks and
- * appends a footer linking back to the internal review PR or issue (only the
- * team can follow that link; the upstream maintainer sees only that there
- * *was* an internal review).
- *
- * Iterates the strip until no markers remain, so nested marker pairs are
- * handled correctly. (The non-greedy `*?` matches the innermost pair on each
- * pass; outer pairs become matchable once their inner content is stripped.)
+ * Strips `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks via
+ * a depth-tracking pass (see `stripInternalBlocks`) and appends a footer
+ * linking back to the internal review PR or issue. Only the team can follow
+ * that link; the upstream maintainer sees only that there *was* an internal
+ * review.
  */
 function translateInternalBody(
   body: string,
   internalUrl: string | undefined,
   kind: 'pr' | 'issue' = 'pr'
 ): string {
-  let stripped = body;
-  // Bounded loop guards against pathological input. 64 is way more nesting
-  // than any reasonable PR description would have.
-  for (let i = 0; i < 64; i += 1) {
-    if (!VENFORK_INTERNAL_REDACTION_RE.test(stripped)) {
-      break;
-    }
-    stripped = stripped.replace(VENFORK_INTERNAL_REDACTION_RE, '');
-  }
-  stripped = stripped.trim();
+  const stripped = stripInternalBlocks(body).trim();
   const footer = internalUrl
     ? kind === 'issue'
       ? `\n\n> Upstreamed from internal issue (${internalUrl}).`
@@ -2027,7 +2093,10 @@ export async function stageCommand(
       }
     }
 
-    const prUrl = `https://github.com/${plan.upstreamRepoPath}/compare/${plan.upstreamDefaultBranch}...${plan.publicOwner}:${plan.branch}?expand=1`;
+    // Use the resolved baseBranch (which respects --base) so the compare URL
+    // points at the same base the user asked for, even if --pr wasn't set
+    // or `gh pr create` failed earlier.
+    const prUrl = `https://github.com/${plan.upstreamRepoPath}/compare/${baseBranch}...${plan.publicOwner}:${plan.branch}?expand=1`;
 
     if (createPr && upstreamPrUrl) {
       const lines = [`Upstream PR: ${upstreamPrUrl}`];

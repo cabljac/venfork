@@ -2640,6 +2640,54 @@ describe('syncCommand - pulled PR branches', () => {
       execaCalls.some((cmd) => cmd.includes('git fetch upstream pull/'))
     ).toBe(false);
   });
+
+  test('does NOT update pulledPrs when push to origin fails', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+        pulledPrs: {
+          'upstream-pr/42': {
+            upstreamPrNumber: 42,
+            upstreamPrUrl: 'https://github.com/up/repo/pull/42',
+            head: 'oldsha',
+            lastSyncedAt: '2026-04-28T09:00:00Z',
+          },
+        },
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git fetch upstream pull/42/head:upstream-pr/42', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse upstream-pr/42', {
+      exitCode: 0,
+      stdout: 'newsha\n',
+      stderr: '',
+    });
+    // Mirror push fails — config write must NOT happen, otherwise pulledPrs
+    // would record a head/lastSyncedAt that doesn't match the mirror.
+    mockResponses.set('git push origin upstream-pr/42 --force-with-lease', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'fatal: remote rejected',
+    });
+
+    try {
+      await syncCommand('upstream-pr/42');
+    } catch {
+      // ignore
+    }
+
+    // No new write to venfork-config branch.
+    expect(
+      execaCalls.some((cmd) => cmd.includes('venfork-config:venfork-config'))
+    ).toBe(false);
+  });
 });
 
 describe('issueCommand', () => {

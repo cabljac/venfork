@@ -457,17 +457,22 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
       env: { VENFORK_NONINTERACTIVE: '1' },
     });
 
-    // Find the upstream issue and verify body redaction.
-    const list =
-      await $`gh issue list --repo ${UPSTREAM_OWNER}/${names.upstream} --state all --search ${'Safari rendering'} --json number,url,body --limit 5`;
-    const upstreamIssues = JSON.parse(list.stdout) as Array<{
-      number: number;
-      url: string;
-      body: string;
-    }>;
-    const upstreamIssue = upstreamIssues.find((i) =>
-      i.body.includes('Public bug summary')
-    );
+    // Find the upstream issue. Don't use gh's `--search` — its index is
+    // eventually consistent. Even the plain list endpoint has cache lag
+    // for freshly-created issues, so retry a few times.
+    type IssueListEntry = { number: number; url: string; body: string };
+    let upstreamIssue: IssueListEntry | undefined;
+    for (let attempt = 0; attempt < 5 && !upstreamIssue; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+      const list =
+        await $`gh issue list --repo ${UPSTREAM_OWNER}/${names.upstream} --state all --json number,url,body --limit 20`;
+      const upstreamIssues = JSON.parse(list.stdout) as IssueListEntry[];
+      upstreamIssue = upstreamIssues.find((i) =>
+        i.body.includes('Public bug summary')
+      );
+    }
     expect(upstreamIssue).toBeDefined();
     expect(upstreamIssue?.body).not.toContain('Client X');
     expect(upstreamIssue?.body).not.toContain('venfork:internal');
@@ -487,16 +492,20 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
 
     // The mirror should now have an issue whose title carries the
     // [upstream #N] prefix and whose body references the upstream URL.
-    const mirrorList =
-      await $`gh issue list --repo ${GITHUB_ORG}/${names.mirrorBare} --state all --search ${`upstream #${upstreamReport.number}`} --json number,title,body --limit 5`;
-    const mirrorIssues = JSON.parse(mirrorList.stdout) as Array<{
-      number: number;
-      title: string;
-      body: string;
-    }>;
-    const mirrorIssue = mirrorIssues.find((i) =>
-      i.title.includes(`upstream #${upstreamReport.number}`)
-    );
+    // Same retry-with-cache-lag reasoning as above.
+    type MirrorIssue = { number: number; title: string; body: string };
+    let mirrorIssue: MirrorIssue | undefined;
+    for (let attempt = 0; attempt < 5 && !mirrorIssue; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+      const mirrorList =
+        await $`gh issue list --repo ${GITHUB_ORG}/${names.mirrorBare} --state all --json number,title,body --limit 20`;
+      const mirrorIssues = JSON.parse(mirrorList.stdout) as MirrorIssue[];
+      mirrorIssue = mirrorIssues.find((i) =>
+        i.title.includes(`upstream #${upstreamReport.number}`)
+      );
+    }
     expect(mirrorIssue).toBeDefined();
     expect(mirrorIssue?.body).toContain(upstreamReport.url);
 
