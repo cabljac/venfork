@@ -2430,7 +2430,11 @@ export async function issueCommand(
       const internal = await readIssue(mirrorRepoPath, internalNumber, repoDir);
       s.stop(`Read: ${internal.title}`);
 
-      const translatedBody = translateInternalBody(internal.body, internal.url, 'issue');
+      const translatedBody = translateInternalBody(
+        internal.body,
+        internal.url,
+        'issue'
+      );
       const upstreamTitle = options.title ?? internal.title;
 
       p.note(
