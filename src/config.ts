@@ -6,6 +6,33 @@ import { $ } from 'execa';
 import { parseRepoPath } from './utils.js';
 
 /**
+ * Record kept by `venfork ship` linking an internal review PR (on the private
+ * mirror) to the upstream PR it was promoted to.
+ */
+export interface ShippedBranch {
+  upstreamPrUrl: string;
+  /** SHA pushed to the public fork (== HEAD of the staged branch). */
+  head: string;
+  /** ISO timestamp when ship completed. */
+  shippedAt: string;
+  /** Internal-mirror PR URL, omitted if the branch had no internal PR. */
+  internalPrUrl?: string;
+}
+
+/**
+ * Record kept by `venfork pull-request` so `venfork sync <branch>` can
+ * refresh a pulled-in upstream PR against the latest `pull/<n>/head` ref.
+ */
+export interface PulledPr {
+  upstreamPrNumber: number;
+  upstreamPrUrl: string;
+  /** SHA last fetched onto the local branch. Used for "no-op sync" detection. */
+  head: string;
+  /** ISO timestamp of the last successful fetch. */
+  lastSyncedAt: string;
+}
+
+/**
  * Venfork configuration structure.
  */
 export interface VenforkConfig {
@@ -18,6 +45,10 @@ export interface VenforkConfig {
   };
   enabledWorkflows?: string[];
   disabledWorkflows?: string[];
+  /** Branch -> upstream PR linkage recorded by `venfork ship`. */
+  shippedBranches?: Record<string, ShippedBranch>;
+  /** Branch -> upstream PR tracking recorded by `venfork pull-request`. */
+  pulledPrs?: Record<string, PulledPr>;
 }
 
 const CONFIG_BRANCH = 'venfork-config';
@@ -29,10 +60,20 @@ const VENFORK_BOT_EMAIL = 'venfork-bot@users.noreply.github.com';
 
 export type VenforkConfigPatch = Omit<
   Partial<VenforkConfig>,
-  'enabledWorkflows' | 'disabledWorkflows'
+  | 'enabledWorkflows'
+  | 'disabledWorkflows'
+  | 'shippedBranches'
+  | 'pulledPrs'
 > & {
   enabledWorkflows?: string[] | null;
   disabledWorkflows?: string[] | null;
+  /**
+   * Shallow merge into the existing map. Pass `null` for an entry to delete
+   * just that branch, or `null` for the whole field to clear the map.
+   */
+  shippedBranches?: Record<string, ShippedBranch | null> | null;
+  /** Same shape as `shippedBranches` for pulled-PR tracking. */
+  pulledPrs?: Record<string, PulledPr | null> | null;
 };
 
 /**
@@ -88,6 +129,69 @@ async function writeConfigBranch(
   }
 }
 
+function normalizeShippedBranch(value: unknown): ShippedBranch | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Partial<ShippedBranch>;
+  if (
+    typeof v.upstreamPrUrl !== 'string' ||
+    !v.upstreamPrUrl.trim() ||
+    typeof v.head !== 'string' ||
+    !v.head.trim() ||
+    typeof v.shippedAt !== 'string' ||
+    !v.shippedAt.trim()
+  ) {
+    return null;
+  }
+  const out: ShippedBranch = {
+    upstreamPrUrl: v.upstreamPrUrl,
+    head: v.head,
+    shippedAt: v.shippedAt,
+  };
+  if (typeof v.internalPrUrl === 'string' && v.internalPrUrl.trim()) {
+    out.internalPrUrl = v.internalPrUrl;
+  }
+  return out;
+}
+
+function normalizePulledPr(value: unknown): PulledPr | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Partial<PulledPr>;
+  if (
+    typeof v.upstreamPrNumber !== 'number' ||
+    !Number.isFinite(v.upstreamPrNumber) ||
+    typeof v.upstreamPrUrl !== 'string' ||
+    !v.upstreamPrUrl.trim() ||
+    typeof v.head !== 'string' ||
+    !v.head.trim() ||
+    typeof v.lastSyncedAt !== 'string' ||
+    !v.lastSyncedAt.trim()
+  ) {
+    return null;
+  }
+  return {
+    upstreamPrNumber: v.upstreamPrNumber,
+    upstreamPrUrl: v.upstreamPrUrl,
+    head: v.head,
+    lastSyncedAt: v.lastSyncedAt,
+  };
+}
+
+function normalizeBranchMap<T>(
+  source: Record<string, unknown> | undefined,
+  perEntry: (value: unknown) => T | null
+): Record<string, T> | null {
+  if (!source || typeof source !== 'object') return null;
+  const out: Record<string, T> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (!key.trim()) continue;
+    const normalized = perEntry(value);
+    if (normalized) {
+      out[key] = normalized;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 function normalizeConfig(config: VenforkConfig): VenforkConfig | null {
   if (!config.version || !config.publicForkUrl || !config.upstreamUrl) {
     return null;
@@ -138,6 +242,26 @@ function normalizeConfig(config: VenforkConfig): VenforkConfig | null {
     } else {
       delete normalized.disabledWorkflows;
     }
+  }
+
+  const shippedBranches = normalizeBranchMap(
+    normalized.shippedBranches,
+    normalizeShippedBranch
+  );
+  if (shippedBranches) {
+    normalized.shippedBranches = shippedBranches;
+  } else {
+    delete normalized.shippedBranches;
+  }
+
+  const pulledPrs = normalizeBranchMap(
+    normalized.pulledPrs,
+    normalizePulledPr
+  );
+  if (pulledPrs) {
+    normalized.pulledPrs = pulledPrs;
+  } else {
+    delete normalized.pulledPrs;
   }
 
   return normalized;
@@ -224,6 +348,8 @@ export async function updateVenforkConfig(
   const {
     enabledWorkflows: _enabledWorkflowsPatch,
     disabledWorkflows: _disabledWorkflowsPatch,
+    shippedBranches: _shippedBranchesPatch,
+    pulledPrs: _pulledPrsPatch,
     ...basePatch
   } = patch;
 
@@ -250,6 +376,21 @@ export async function updateVenforkConfig(
     merged.disabledWorkflows = patch.disabledWorkflows;
   }
 
+  if (patch.shippedBranches === null) {
+    delete merged.shippedBranches;
+  } else if (patch.shippedBranches !== undefined) {
+    merged.shippedBranches = mergeBranchMap(
+      merged.shippedBranches,
+      patch.shippedBranches
+    );
+  }
+
+  if (patch.pulledPrs === null) {
+    delete merged.pulledPrs;
+  } else if (patch.pulledPrs !== undefined) {
+    merged.pulledPrs = mergeBranchMap(merged.pulledPrs, patch.pulledPrs);
+  }
+
   if (merged.schedule && !merged.schedule.cron?.trim()) {
     throw new Error('schedule.cron is required when schedule is configured');
   }
@@ -261,4 +402,24 @@ export async function updateVenforkConfig(
 
   await writeConfigBranch(repoDir, normalized, UPDATE_CONFIG_COMMIT_MESSAGE);
   return normalized;
+}
+
+/**
+ * Apply a partial patch to a branch-keyed map. Per-entry `null` deletes the
+ * entry; absent entries are preserved. Returns undefined when the result is
+ * empty so the field gets removed from the config object.
+ */
+function mergeBranchMap<T>(
+  current: Record<string, T> | undefined,
+  patch: Record<string, T | null>
+): Record<string, T> | undefined {
+  const merged: Record<string, T> = { ...(current ?? {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) {
+      delete merged[key];
+    } else {
+      merged[key] = value;
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
