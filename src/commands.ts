@@ -1385,12 +1385,125 @@ export async function workflowsCommand(
 }
 
 /**
+ * Read-only snapshot of the state needed to stage a branch. Computed before
+ * any user confirmation so the caller can show a preview, and reused for the
+ * actual push (`executeStagingPush`) and any follow-on work (e.g. opening an
+ * upstream PR in `shipCommand`).
+ */
+export interface StagingPlan {
+  branch: string;
+  publicUrl: string;
+  publicRepoPath: string;
+  upstreamUrl: string;
+  upstreamRepoPath: string;
+  upstreamDefaultBranch: string;
+  scheduleEnabled: boolean;
+  /** owner of the public fork — first half of `publicRepoPath`. */
+  publicOwner: string;
+}
+
+/**
+ * Resolves remotes, default branch, and schedule state for a staging push.
+ * Pure read; no network writes. Throws `BranchNotFoundError` /
+ * `RemoteNotFoundError` so callers can render a single failure path.
+ */
+async function planStaging(branch: string, cwd: string): Promise<StagingPlan> {
+  const branchCheck = await $({
+    cwd,
+    reject: false,
+  })`git rev-parse --verify ${branch}`;
+  if (branchCheck.exitCode !== 0) {
+    throw new BranchNotFoundError(branch);
+  }
+
+  const publicUrlResult = await $({
+    cwd,
+    reject: false,
+  })`git remote get-url public`;
+  if (publicUrlResult.exitCode !== 0) {
+    throw new RemoteNotFoundError('public');
+  }
+  const publicUrl = publicUrlResult.stdout.trim();
+  const publicRepoPath = parseRepoPath(publicUrl);
+  const publicOwner = publicRepoPath.split('/')[0] ?? '';
+
+  const upstreamUrlResult = await $({
+    cwd,
+    reject: false,
+  })`git remote get-url upstream`;
+  if (upstreamUrlResult.exitCode !== 0) {
+    throw new RemoteNotFoundError('upstream');
+  }
+  const upstreamUrl = upstreamUrlResult.stdout.trim();
+  const upstreamRepoPath = parseRepoPath(upstreamUrl);
+
+  const upstreamDefaultBranch = await getDefaultBranch('upstream');
+  const scheduleEnabled = await isScheduleEnabled(cwd);
+
+  return {
+    branch,
+    publicUrl,
+    publicRepoPath,
+    upstreamUrl,
+    upstreamRepoPath,
+    upstreamDefaultBranch,
+    scheduleEnabled,
+    publicOwner,
+  };
+}
+
+/**
+ * Pushes the branch to the public fork, stripping the internal workflow
+ * commit when scheduled sync is enabled. Returns the SHA pushed.
+ *
+ * The caller owns the spinner so consistent UI text appears in every
+ * command that stages (`stage`, `ship`).
+ */
+async function executeStagingPush(
+  plan: StagingPlan,
+  cwd: string,
+  s: ReturnType<typeof p.spinner>
+): Promise<string> {
+  if (plan.scheduleEnabled) {
+    await $({ cwd })`git fetch upstream`;
+    await $({ cwd })`git fetch origin`;
+    s.start('Preparing sanitized branch for public staging');
+    const stageHead = await buildPublicStageHeadWithoutWorkflowCommit(
+      plan.branch,
+      plan.upstreamDefaultBranch,
+      cwd
+    );
+    s.stop('Prepared sanitized branch');
+
+    s.start('Pushing sanitized branch to public fork');
+    if (await remoteBranchExists('public', plan.branch)) {
+      await $({
+        cwd,
+      })`git push public ${stageHead}:refs/heads/${plan.branch} --force-with-lease=refs/heads/${plan.branch}`;
+    } else {
+      await $({
+        cwd,
+      })`git push public ${stageHead}:refs/heads/${plan.branch}`;
+    }
+    s.stop('Push successful');
+    return stageHead;
+  }
+
+  s.start('Pushing to public fork');
+  await $({ cwd })`git push public ${plan.branch}`;
+  s.stop('Push successful');
+  const headResult = await $({
+    cwd,
+  })`git rev-parse ${plan.branch}`;
+  return headResult.stdout.trim();
+}
+
+/**
  * Stage command: Push branch to public fork for PR to upstream
  */
 export async function stageCommand(branch: string): Promise<void> {
   p.intro('📤 Venfork Stage');
 
-  // Check GitHub CLI authentication
   const isAuthenticated = await checkGhAuth();
   if (!isAuthenticated) {
     throw new AuthenticationError();
@@ -1403,43 +1516,20 @@ export async function stageCommand(branch: string): Promise<void> {
   }
 
   const s = p.spinner();
+  const repoDir = process.cwd();
 
   try {
-    // Step 1: Verify branch exists
     s.start('Verifying branch exists');
-    const branchCheck = await $({
-      reject: false,
-    })`git rev-parse --verify ${branch}`;
-    if (branchCheck.exitCode !== 0) {
-      throw new BranchNotFoundError(branch);
-    }
+    const plan = await planStaging(branch, repoDir);
     s.stop('Branch verified');
 
-    // Step 2: Get public fork URL
-    const publicUrlResult = await $({
-      reject: false,
-    })`git remote get-url public`;
-    if (publicUrlResult.exitCode !== 0) {
-      throw new RemoteNotFoundError('public');
-    }
-    const publicUrl = publicUrlResult.stdout.trim();
-    const publicRepoPath = parseRepoPath(publicUrl);
-
-    // Step 3: Get upstream URL for PR link
-    const upstreamUrlResult = await $({
-      reject: false,
-    })`git remote get-url upstream`;
-    const upstreamUrl = upstreamUrlResult.stdout.trim();
-    const upstreamRepoPath = parseRepoPath(upstreamUrl);
-
-    // Step 4: Confirm stage
     p.note(
-      `Branch '${branch}' will be pushed to your public fork.
+      `Branch '${plan.branch}' will be pushed to your public fork.
 This makes your work visible and ready for PR to upstream.
 
   From: Private vendor repo (current)
-  To:   ${publicUrl}
-  PR:   ${publicRepoPath} → ${upstreamRepoPath}`,
+  To:   ${plan.publicUrl}
+  PR:   ${plan.publicRepoPath} → ${plan.upstreamRepoPath}`,
       'Staging Details'
     );
 
@@ -1458,40 +1548,9 @@ This makes your work visible and ready for PR to upstream.
       process.exit(0);
     }
 
-    const repoDir = process.cwd();
+    await executeStagingPush(plan, repoDir, s);
 
-    // Step 5: Detect upstream default branch for staging + PR URL
-    const upstreamDefaultBranch = await getDefaultBranch('upstream');
-    const scheduleEnabled = await isScheduleEnabled(repoDir);
-
-    // Step 6: If schedule is enabled, strip the internal workflow commit before
-    // publishing. Otherwise keep normal direct branch push behavior.
-    if (scheduleEnabled) {
-      await $`git fetch upstream`;
-      await $`git fetch origin`;
-      s.start('Preparing sanitized branch for public staging');
-      const stageHead = await buildPublicStageHeadWithoutWorkflowCommit(
-        branch,
-        upstreamDefaultBranch,
-        repoDir
-      );
-      s.stop('Prepared sanitized branch');
-
-      s.start('Pushing sanitized branch to public fork');
-      if (await remoteBranchExists('public', branch)) {
-        await $`git push public ${stageHead}:refs/heads/${branch} --force-with-lease=refs/heads/${branch}`;
-      } else {
-        await $`git push public ${stageHead}:refs/heads/${branch}`;
-      }
-      s.stop('Push successful');
-    } else {
-      s.start('Pushing to public fork');
-      await $`git push public ${branch}`;
-      s.stop('Push successful');
-    }
-
-    // Step 7: Show PR creation link
-    const prUrl = `https://github.com/${upstreamRepoPath}/compare/${upstreamDefaultBranch}...${publicRepoPath.split('/')[0]}:${branch}?expand=1`;
+    const prUrl = `https://github.com/${plan.upstreamRepoPath}/compare/${plan.upstreamDefaultBranch}...${plan.publicOwner}:${plan.branch}?expand=1`;
 
     p.note(
       `Your branch is now on the public fork!\n\nCreate a pull request to upstream:\n  ${prUrl}`,
