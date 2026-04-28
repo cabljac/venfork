@@ -60,10 +60,7 @@ const VENFORK_BOT_EMAIL = 'venfork-bot@users.noreply.github.com';
 
 export type VenforkConfigPatch = Omit<
   Partial<VenforkConfig>,
-  | 'enabledWorkflows'
-  | 'disabledWorkflows'
-  | 'shippedBranches'
-  | 'pulledPrs'
+  'enabledWorkflows' | 'disabledWorkflows' | 'shippedBranches' | 'pulledPrs'
 > & {
   enabledWorkflows?: string[] | null;
   disabledWorkflows?: string[] | null;
@@ -254,10 +251,7 @@ function normalizeConfig(config: VenforkConfig): VenforkConfig | null {
     delete normalized.shippedBranches;
   }
 
-  const pulledPrs = normalizeBranchMap(
-    normalized.pulledPrs,
-    normalizePulledPr
-  );
+  const pulledPrs = normalizeBranchMap(normalized.pulledPrs, normalizePulledPr);
   if (pulledPrs) {
     normalized.pulledPrs = pulledPrs;
   } else {

@@ -86,9 +86,21 @@ git push origin feature/new-thing
 # Still private! Create internal PR for team review
 
 # 3. Stage for upstream (after internal approval)
+venfork stage feature/new-thing --pr
+# NOW visible on public fork — and the upstream PR is opened for you,
+# carrying your internal review body (with <!-- venfork:internal --> blocks redacted).
+
+# Or just stage and open the PR yourself later:
 venfork stage feature/new-thing
-# NOW visible on public fork
-# Create PR: public fork → upstream
+```
+
+```bash
+# Reviewing a third-party upstream PR internally
+venfork pull-request 1234
+# upstream-pr/1234 now exists on the mirror; team can review/test against your internal codebase
+
+# Refresh as the upstream contributor pushes updates
+venfork sync upstream-pr/1234
 ```
 
 ## Commands
@@ -247,27 +259,111 @@ venfork status
 - Check which remotes are configured
 - See your current branch
 
-### `venfork stage <branch>`
+### `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>]`
 
-Push a branch to the public fork, making it visible and ready for PR to upstream.
+Push a branch to the public fork, making it visible and ready for PR to upstream. With `--pr`, also opens the upstream PR for you using your internal review PR's body.
 
 **⚠️ Important:** This is when your work becomes visible to the client!
 
 **Arguments:**
 - `branch` - Branch name to stage
 
+**Flags:**
+- `--pr` - Also open an upstream PR after staging. Looks up your internal-review PR on the private mirror and copies its description (with redacted blocks stripped — see below) into the upstream PR.
+- `--draft` - Open the upstream PR as a draft. Implies `--pr`.
+- `--title <text>` - Override the upstream PR title (default: the internal PR title, or the branch name if no internal PR was found).
+- `--base <branch>` - Override the upstream base branch (default: upstream's default branch).
+
 **Examples:**
 ```bash
+# Stage only — same as before
 venfork stage feature-auth
-venfork stage bugfix/issue-123
+
+# Stage and open the upstream PR using the internal review body
+venfork stage feature-auth --pr
+
+# Open as draft
+venfork stage feature-auth --draft
+
+# Override title or base
+venfork stage feature-auth --pr --title "Add OAuth"
+venfork stage feature-auth --pr --base develop
 ```
 
-**What it does:**
+**What it does (without `--pr`):**
 1. Verifies branch exists
 2. Shows staging details and confirmation
 3. Rebuilds branch history on top of upstream while removing internal workflow commits
 4. Pushes sanitized history to public fork
-5. Provides PR creation link
+5. Provides a compare URL so you can open the PR yourself
+
+**What `--pr` adds:**
+1. Looks up the most recent PR on the private mirror with `--head <branch>` (open first, then most recent of any state).
+2. Renders the upstream PR body by stripping any `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks and appending a footer linking back to the internal review.
+3. Shows you the translated body **before** confirming, so you can catch redaction mistakes before they go public.
+4. Runs `gh pr create --repo <upstream> --base <default> --head <fork-owner>:<branch>` and surfaces the resulting PR URL.
+5. Records the linkage in `venfork-config.shippedBranches[<branch>]` for later tracking.
+
+**Redacting internal-only context**
+
+In the body of your internal review PR, wrap anything that should NOT go upstream in HTML comments:
+
+```md
+This PR adds OAuth login.
+
+<!-- venfork:internal -->
+Internal note: Client X explicitly asked us to use Auth0 instead of Keycloak (see ticket INT-1234).
+<!-- /venfork:internal -->
+
+The implementation follows the spec at https://example.com/oauth.
+```
+
+`venfork stage --pr` strips everything between the markers (greedy multi-line) before posting upstream. The upstream PR shows only the public summary; the internal context stays inside the redacted block on the private mirror, where only your team can see it.
+
+If you forget to add markers, the entire internal body is sent upstream — review the preview prompt before confirming.
+
+### `venfork pull-request <pr-number-or-url> [--branch-name <override>] [--no-push]`
+
+Pull a third-party upstream PR into the private mirror so your team can review it internally before it lands. The PR's commits land on a new branch (`upstream-pr/<n>` by default) that's pushed to your mirror.
+
+**Arguments:**
+- `pr-number-or-url` - Either a bare integer (`1234`) or a github.com PR URL.
+
+**Flags:**
+- `--branch-name <name>` - Use a custom local/mirror branch name instead of `upstream-pr/<n>`.
+- `--no-push` - Fetch into a local branch only; don't push to the mirror.
+
+**Examples:**
+```bash
+# Bring upstream PR #1234 into the mirror
+venfork pull-request 1234
+
+# Or via URL
+venfork pull-request https://github.com/upstream/repo/pull/1234
+
+# Use a custom branch name (e.g. for staged team review of a critical PR)
+venfork pull-request 1234 --branch-name review/oauth-pr
+```
+
+**What it does:**
+1. Reads the upstream PR's metadata (`gh pr view`) and prints a summary (title, author, state, base, body preview, link).
+2. Fetches `pull/<n>/head` from the upstream remote into a local branch.
+3. Pushes that branch to `origin` (the private mirror) so the team can see it.
+4. Records a `pulledPrs[<branch>]` entry in `venfork-config` so `venfork sync <branch>` knows which upstream PR to refresh from.
+
+**Refreshing a pulled PR**
+
+When the upstream contributor updates their PR, refresh your local + mirror copy with:
+
+```bash
+venfork sync upstream-pr/1234
+```
+
+`venfork sync <branch>` falls into the pulled-PR path when:
+- `venfork-config.pulledPrs[<branch>]` exists (recorded by `pull-request`), OR
+- The branch matches the `upstream-pr/<n>` naming convention.
+
+In that case it refetches `pull/<n>/head` from upstream and force-with-lease pushes the result to origin. The default-branch sync (the +1-managed-commit flow) is unaffected.
 
 ### `venfork schedule <status|set <cron>|disable>`
 
