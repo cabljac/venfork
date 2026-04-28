@@ -259,7 +259,7 @@ venfork status
 - Check which remotes are configured
 - See your current branch
 
-### `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>]`
+### `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing]`
 
 Push a branch to the public fork, making it visible and ready for PR to upstream. With `--pr`, also opens the upstream PR for you using your internal review PR's body.
 
@@ -273,6 +273,8 @@ Push a branch to the public fork, making it visible and ready for PR to upstream
 - `--draft` - Open the upstream PR as a draft. Implies `--pr`.
 - `--title <text>` - Override the upstream PR title (default: the internal PR title, or the branch name if no internal PR was found).
 - `--base <branch>` - Override the upstream base branch (default: upstream's default branch).
+- `--internal-pr <n>` - Pin a specific internal-review PR number (skips the most-recent-open lookup). Useful when multiple PRs target the same branch.
+- `--no-update-existing` - Do not update an already-open upstream PR body when staging. By default, if an upstream PR for the branch already exists, `venfork stage --pr` refreshes its body with the latest translated content.
 
 **Examples:**
 ```bash
@@ -318,7 +320,7 @@ Internal note: Client X explicitly asked us to use Auth0 instead of Keycloak (se
 The implementation follows the spec at https://example.com/oauth.
 ```
 
-`venfork stage --pr` strips everything between the markers (greedy multi-line) before posting upstream. The upstream PR shows only the public summary; the internal context stays inside the redacted block on the private mirror, where only your team can see it.
+`venfork stage --pr` strips all content enclosed by these markers before posting upstream. The upstream PR shows only the public summary; the internal context stays inside the redacted block on the private mirror, where only your team can see it.
 
 If you forget to add markers, the entire internal body is sent upstream — review the preview prompt before confirming.
 

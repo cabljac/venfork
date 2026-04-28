@@ -6,8 +6,8 @@ import { $ } from 'execa';
 import { parseRepoPath } from './utils.js';
 
 /**
- * Record kept by `venfork ship` linking an internal review PR (on the private
- * mirror) to the upstream PR it was promoted to.
+ * Record kept by `venfork stage --pr` linking an internal review PR (on the
+ * private mirror) to the upstream PR it was promoted to.
  */
 export interface ShippedBranch {
   upstreamPrUrl: string;

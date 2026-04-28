@@ -46,17 +46,22 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 /**
- * `p.confirm` wrapper that returns `true` immediately when
- * `VENFORK_NONINTERACTIVE=1` is set in the environment. Lets scripts and
- * tests bypass interactive confirms without having to feed key presses
- * through stdin (clack's confirm reads keypresses, which doesn't work
- * cleanly with line-buffered piped input).
+ * `p.confirm` wrapper that can return `true` immediately when
+ * `VENFORK_NONINTERACTIVE=1` is set in the environment, but only for
+ * callers that explicitly opt into that behavior by passing
+ * `allowNonInteractive: true`. This lets scripts and tests bypass intended
+ * interactive confirms without turning every prompt into an implicit "yes"
+ * in CI/non-interactive environments.
  */
 async function confirmOrAutoYes(opts: {
   message: string;
   initialValue?: boolean;
+  allowNonInteractive?: boolean;
 }): Promise<boolean | symbol> {
-  if (process.env.VENFORK_NONINTERACTIVE === '1') {
+  if (
+    opts.allowNonInteractive === true &&
+    process.env.VENFORK_NONINTERACTIVE === '1'
+  ) {
     return true;
   }
   return p.confirm(opts);
@@ -1706,9 +1711,9 @@ async function findInternalPr(
 
 /**
  * Strips `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks and
- * appends a footer linking back to the internal review PR (only the team can
- * follow that link; the upstream maintainer sees only that there *was* an
- * internal review).
+ * appends a footer linking back to the internal review PR or issue (only the
+ * team can follow that link; the upstream maintainer sees only that there
+ * *was* an internal review).
  *
  * Iterates the strip until no markers remain, so nested marker pairs are
  * handled correctly. (The non-greedy `*?` matches the innermost pair on each
@@ -1716,7 +1721,8 @@ async function findInternalPr(
  */
 function translateInternalBody(
   body: string,
-  internalPrUrl: string | undefined
+  internalUrl: string | undefined,
+  kind: 'pr' | 'issue' = 'pr'
 ): string {
   let stripped = body;
   // Bounded loop guards against pathological input. 64 is way more nesting
@@ -1728,8 +1734,10 @@ function translateInternalBody(
     stripped = stripped.replace(VENFORK_INTERNAL_REDACTION_RE, '');
   }
   stripped = stripped.trim();
-  const footer = internalPrUrl
-    ? `\n\n> Upstreamed from internal review (${internalPrUrl}).`
+  const footer = internalUrl
+    ? kind === 'issue'
+      ? `\n\n> Upstreamed from internal issue (${internalUrl}).`
+      : `\n\n> Upstreamed from internal review (${internalUrl}).`
     : '';
   return `${stripped}${footer}`.trim();
 }
@@ -1739,12 +1747,17 @@ function translateInternalBody(
  * internal review PR was found. Lists the non-merge commits in
  * `upstream/<defaultBranch>..<branch>` so the upstream maintainer sees what
  * the change actually is, rather than a "please add a description" placeholder.
+ *
+ * Fetches `upstream/<defaultBranch>` first so the log works even when schedule
+ * is disabled and the ref may not exist locally yet.
  */
 async function buildSyntheticBody(
   branch: string,
   defaultBranch: string,
   cwd: string
 ): Promise<string> {
+  // Ensure the remote-tracking ref exists before running the log.
+  await $({ cwd, reject: false })`git fetch upstream ${defaultBranch}`;
   const log = await $({
     cwd,
     reject: false,
@@ -1851,7 +1864,7 @@ export async function stageCommand(
   if (!branch) {
     p.log.error('Branch name is required');
     p.outro(
-      'Usage: venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>]'
+      'Usage: venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>]. Run `venfork help` for the full list of supported options, including `--internal-pr <n>` and `--no-update-existing`.'
     );
     process.exit(1);
   }
@@ -1929,6 +1942,7 @@ export async function stageCommand(
         ? 'Push to public fork and open the upstream PR?'
         : 'Push to public fork?',
       initialValue: false,
+      allowNonInteractive: createPr,
     });
 
     if (p.isCancel(shouldStage)) {
@@ -2179,7 +2193,7 @@ export async function pullRequestCommand(
     })`git fetch upstream ${fetchRefspec}`;
     if (fetchResult.exitCode !== 0) {
       throw new Error(
-        `git fetch upstream ${fetchRefspec} failed. The PR's head ref may have been removed by a deleted source branch. Stderr:\n${fetchResult.stderr.trim()}`
+        `git fetch upstream ${fetchRefspec} failed. This can happen if the PR's source branch was deleted, or if the local branch already exists at a different commit (try deleting or renaming it first). Stderr:\n${fetchResult.stderr.trim()}`
       );
     }
     const headSha = (
@@ -2374,6 +2388,14 @@ export async function issueCommand(
     process.exit(1);
   }
 
+  if (action !== 'stage' && action !== 'pull') {
+    p.log.error(
+      `Unknown action '${action}'. Usage: venfork issue <stage|pull> <number-or-url> [--title <text>]`
+    );
+    p.outro('');
+    process.exit(1);
+  }
+
   const s = p.spinner();
   const repoDir = process.cwd();
 
@@ -2408,7 +2430,7 @@ export async function issueCommand(
       const internal = await readIssue(mirrorRepoPath, internalNumber, repoDir);
       s.stop(`Read: ${internal.title}`);
 
-      const translatedBody = translateInternalBody(internal.body, internal.url);
+      const translatedBody = translateInternalBody(internal.body, internal.url, 'issue');
       const upstreamTitle = options.title ?? internal.title;
 
       p.note(
@@ -2425,6 +2447,7 @@ export async function issueCommand(
       const ok = await confirmOrAutoYes({
         message: `Open the issue on ${upstreamRepoPath}?`,
         initialValue: false,
+        allowNonInteractive: true,
       });
       if (p.isCancel(ok) || !ok) {
         p.outro('Stage cancelled');
@@ -2489,6 +2512,7 @@ export async function issueCommand(
     const ok = await confirmOrAutoYes({
       message: `Open the issue on ${mirrorRepoPath}?`,
       initialValue: false,
+      allowNonInteractive: true,
     });
     if (p.isCancel(ok) || !ok) {
       p.outro('Pull cancelled');
@@ -2709,11 +2733,14 @@ venfork schedule <status|set <cron>|disable>
   Manage scheduled sync config stored in venfork-config
   Set writes/removes ${SYNC_WORKFLOW_PATH} on the private mirror default branch
 
-venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>]
+venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing]
   Push branch to public fork for PR to upstream
   When schedule is enabled, strips internal workflow commit before public push
   With --pr, also opens the upstream PR using the internal-review PR's body
     (with <!-- venfork:internal -->...<!-- /venfork:internal --> blocks redacted)
+  Options:
+  • --internal-pr <n>      Pin a specific internal review PR number (skips most-recent-open lookup)
+  • --no-update-existing   Do not update an already-open upstream PR body when staging
   This is when your work becomes visible to the client
 
 venfork pull-request <pr-number-or-url> [--branch-name <name>] [--no-push]
