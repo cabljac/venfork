@@ -61,6 +61,13 @@ function getMockExecaResponse(command: string) {
   if (command.includes('git fetch origin venfork-config')) {
     return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
   }
+  if (command.includes('git rev-parse FETCH_HEAD')) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: 'cafebabe1234567890abcdef\n',
+      stderr: '',
+    });
+  }
   if (command.includes('git show FETCH_HEAD:.venfork/config.json')) {
     return Promise.resolve({
       exitCode: 0,
@@ -278,5 +285,148 @@ describe('updateVenforkConfig', () => {
     );
     const updated = await updateVenforkConfig('/tmp/repo', {});
     expect(Object.keys(updated.shippedBranches ?? {})).toEqual(['good']);
+  });
+
+  test('writes config branch with --force-with-lease against the read sha', async () => {
+    mockResponses.set('git rev-parse FETCH_HEAD', {
+      exitCode: 0,
+      stdout: 'deadbeef0000000000000000\n',
+      stderr: '',
+    });
+
+    await updateVenforkConfig('/tmp/repo', {
+      shippedBranches: {
+        'feat/auth': {
+          upstreamPrUrl: 'https://github.com/u/r/pull/1',
+          head: 'aaa',
+          shippedAt: '2026-04-28T10:00:00Z',
+        },
+      },
+    });
+
+    // The push should use the SHA captured during the read, not a fresh
+    // ls-remote (which would race with concurrent writers).
+    const pushCalls = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('git push') &&
+        cmd.includes('venfork-config:venfork-config')
+    );
+    expect(pushCalls.length).toBe(1);
+    expect(pushCalls[0]).toContain(
+      '--force-with-lease=venfork-config:deadbeef0000000000000000'
+    );
+  });
+
+  test('retries on stale-info lease failure and succeeds with fresh state', async () => {
+    // First push: lease failure (another venfork command got there first).
+    // Second push: succeeds.
+    let pushAttempt = 0;
+    mockResponses.set('git push', (cmd: string) => {
+      if (!cmd.includes('venfork-config:venfork-config')) {
+        return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+      }
+      pushAttempt += 1;
+      if (pushAttempt === 1) {
+        return Promise.reject(
+          new Error(
+            '! [rejected] venfork-config -> venfork-config (stale info)'
+          )
+        );
+      }
+      return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+    });
+
+    // Each fetch+rev-parse pair returns a different SHA so we can confirm
+    // the retry re-read.
+    let fetchCount = 0;
+    mockResponses.set('git rev-parse FETCH_HEAD', () => {
+      fetchCount += 1;
+      return Promise.resolve({
+        exitCode: 0,
+        stdout: fetchCount === 1 ? 'sha1\n' : 'sha2\n',
+        stderr: '',
+      });
+    });
+
+    const result = await updateVenforkConfig('/tmp/repo', {
+      shippedBranches: {
+        'feat/auth': {
+          upstreamPrUrl: 'https://github.com/u/r/pull/1',
+          head: 'aaa',
+          shippedAt: '2026-04-28T10:00:00Z',
+        },
+      },
+    });
+
+    expect(pushAttempt).toBe(2);
+    expect(fetchCount).toBeGreaterThanOrEqual(2); // re-read between attempts
+    expect(result.shippedBranches?.['feat/auth']?.upstreamPrUrl).toBe(
+      'https://github.com/u/r/pull/1'
+    );
+    // The successful retry leased against the second-read SHA.
+    const successfulPush = execaCalls
+      .filter(
+        (cmd) =>
+          cmd.includes('git push') &&
+          cmd.includes('venfork-config:venfork-config')
+      )
+      .pop();
+    expect(successfulPush).toContain('--force-with-lease=venfork-config:sha2');
+  });
+
+  test('throws after exhausting retries when every push hits stale-info', async () => {
+    let pushAttempt = 0;
+    mockResponses.set('git push', (cmd: string) => {
+      if (!cmd.includes('venfork-config:venfork-config')) {
+        return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+      }
+      pushAttempt += 1;
+      return Promise.reject(
+        new Error('! [rejected] venfork-config -> venfork-config (stale info)')
+      );
+    });
+
+    await expect(
+      updateVenforkConfig('/tmp/repo', {
+        shippedBranches: {
+          'feat/auth': {
+            upstreamPrUrl: 'https://github.com/u/r/pull/1',
+            head: 'aaa',
+            shippedAt: '2026-04-28T10:00:00Z',
+          },
+        },
+      })
+    ).rejects.toThrow(/concurrent-write retries|stale info/i);
+
+    // Bounded at MAX_RETRIES = 3.
+    expect(pushAttempt).toBe(3);
+  });
+
+  test('does NOT retry on non-lease errors (e.g. auth failure)', async () => {
+    let pushAttempt = 0;
+    mockResponses.set('git push', (cmd: string) => {
+      if (!cmd.includes('venfork-config:venfork-config')) {
+        return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+      }
+      pushAttempt += 1;
+      return Promise.reject(
+        new Error('fatal: Authentication failed for github.com')
+      );
+    });
+
+    await expect(
+      updateVenforkConfig('/tmp/repo', {
+        shippedBranches: {
+          'feat/auth': {
+            upstreamPrUrl: 'https://github.com/u/r/pull/1',
+            head: 'aaa',
+            shippedAt: '2026-04-28T10:00:00Z',
+          },
+        },
+      })
+    ).rejects.toThrow(/Authentication failed/);
+
+    // Only one push attempt — we don't retry auth failures.
+    expect(pushAttempt).toBe(1);
   });
 });

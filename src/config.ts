@@ -133,10 +133,21 @@ export async function createConfigBranch(
   await writeConfigBranch(repoDir, config, 'Initialize venfork configuration');
 }
 
+/**
+ * Detects a `git push --force-with-lease` rejection due to upstream having
+ * moved since we read it. Distinguishes from auth/network failures (which
+ * should NOT trigger a config-write retry).
+ */
+function isLeaseFailure(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  return /stale info/i.test(msg) || /\[rejected\][^\n]*stale/i.test(msg);
+}
+
 async function writeConfigBranch(
   repoDir: string,
   config: VenforkConfig,
-  commitMessage: string
+  commitMessage: string,
+  options: { expectedSha?: string } = {}
 ): Promise<void> {
   const uniqueId = randomBytes(8).toString('hex');
   const tempDir = path.join(os.tmpdir(), `venfork-config-${uniqueId}`);
@@ -157,25 +168,30 @@ async function writeConfigBranch(
 
     const remoteResult = await $({ cwd: repoDir })`git remote get-url origin`;
     const originUrl = remoteResult.stdout.trim();
-    // Read the current SHA of the config branch (if it exists) so we can pass
-    // an explicit lease — the bare `--force-with-lease` flag relies on a
-    // remote-tracking ref, which doesn't exist in this fresh tempDir.
-    // First-time writes have no upstream to lease against; falling back to a
-    // plain push is safe (no concurrent writers can exist when the branch
-    // doesn't yet exist).
-    const lsRemote = await $({
-      cwd: tempDir,
-      reject: false,
-    })`git ls-remote ${originUrl} ${CONFIG_BRANCH}`;
-    const expectedSha =
-      lsRemote.exitCode === 0
-        ? (lsRemote.stdout.trim().split(/\s+/)[0] ?? '')
-        : '';
+
+    // Caller-supplied lease wins — it's the SHA that was actually read,
+    // which is the only correct lease (a fresh ls-remote here would race
+    // with a concurrent writer who pushed between our read and our push).
+    // Fall back to ls-remote when no SHA is supplied, for first-time writes
+    // (`createConfigBranch`) and any callers that haven't been updated.
+    let expectedSha = options.expectedSha ?? '';
+    if (!expectedSha) {
+      const lsRemote = await $({
+        cwd: tempDir,
+        reject: false,
+      })`git ls-remote ${originUrl} ${CONFIG_BRANCH}`;
+      expectedSha =
+        lsRemote.exitCode === 0
+          ? (lsRemote.stdout.trim().split(/\s+/)[0] ?? '')
+          : '';
+    }
     if (expectedSha) {
       await $({
         cwd: tempDir,
       })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH} --force-with-lease=${CONFIG_BRANCH}:${expectedSha}`;
     } else {
+      // First-time write: no upstream to lease against; concurrent writers
+      // can't exist yet because the branch doesn't yet exist.
       await $({
         cwd: tempDir,
       })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH}`;
@@ -437,16 +453,35 @@ export async function fetchVenforkConfig(
 }
 
 /**
- * Reads venfork configuration from the local repo's orphan `venfork-config` branch.
+ * Atomically reads the config content + the SHA of the commit it came from
+ * by running fetch once and resolving both `FETCH_HEAD` (for the SHA) and
+ * `FETCH_HEAD:<config>` (for the content) against that single fetch. Returns
+ * null if the branch doesn't exist or the content is unreadable.
+ *
+ * Capturing the SHA here is what lets `updateVenforkConfig` push back with
+ * an explicit `--force-with-lease=<branch>:<sha>` against the *exact* SHA
+ * we read from — the only lease that's safe under concurrent writers.
  */
-export async function readVenforkConfigFromRepo(
+async function fetchConfigContentAndSha(
   repoDir: string
-): Promise<VenforkConfig | null> {
+): Promise<{ raw: string; sha: string } | null> {
   const fetchResult = await $({
     cwd: repoDir,
     reject: false,
   })`git fetch origin ${CONFIG_BRANCH}`;
   if (fetchResult.exitCode !== 0) {
+    return null;
+  }
+
+  const revParseResult = await $({
+    cwd: repoDir,
+    reject: false,
+  })`git rev-parse FETCH_HEAD`;
+  if (revParseResult.exitCode !== 0) {
+    return null;
+  }
+  const sha = revParseResult.stdout.trim();
+  if (!sha) {
     return null;
   }
 
@@ -457,9 +492,19 @@ export async function readVenforkConfigFromRepo(
   if (showResult.exitCode !== 0) {
     return null;
   }
+  return { raw: showResult.stdout, sha };
+}
 
+/**
+ * Reads venfork configuration from the local repo's orphan `venfork-config` branch.
+ */
+export async function readVenforkConfigFromRepo(
+  repoDir: string
+): Promise<VenforkConfig | null> {
+  const fetched = await fetchConfigContentAndSha(repoDir);
+  if (!fetched) return null;
   try {
-    const config = JSON.parse(showResult.stdout) as VenforkConfig;
+    const config = JSON.parse(fetched.raw) as VenforkConfig;
     return normalizeConfig(config);
   } catch {
     return null;
@@ -467,17 +512,35 @@ export async function readVenforkConfigFromRepo(
 }
 
 /**
- * Updates and force-pushes `venfork-config` with a shallow merge patch.
+ * Like `readVenforkConfigFromRepo` but also returns the SHA of the commit
+ * the config was read from. Used by `updateVenforkConfig` so the
+ * subsequent push can lease against that SHA.
  */
-export async function updateVenforkConfig(
-  repoDir: string,
-  patch: VenforkConfigPatch
-): Promise<VenforkConfig> {
-  const current = await readVenforkConfigFromRepo(repoDir);
-  if (!current) {
-    throw new Error('venfork-config branch not found or invalid');
+async function readVenforkConfigFromRepoWithSha(
+  repoDir: string
+): Promise<{ config: VenforkConfig; sha: string } | null> {
+  const fetched = await fetchConfigContentAndSha(repoDir);
+  if (!fetched) return null;
+  try {
+    const config = JSON.parse(fetched.raw) as VenforkConfig;
+    const normalized = normalizeConfig(config);
+    if (!normalized) return null;
+    return { config: normalized, sha: fetched.sha };
+  } catch {
+    return null;
   }
+}
 
+/**
+ * Apply a `VenforkConfigPatch` on top of an already-read config and return
+ * the fully merged + normalized result. Pulled out so the retry loop in
+ * `updateVenforkConfig` can re-apply the same patch to freshly-read state
+ * after a `--force-with-lease` failure.
+ */
+function applyPatchAndNormalize(
+  current: VenforkConfig,
+  patch: VenforkConfigPatch
+): VenforkConfig {
   const {
     enabledWorkflows: _enabledWorkflowsPatch,
     disabledWorkflows: _disabledWorkflowsPatch,
@@ -552,9 +615,58 @@ export async function updateVenforkConfig(
   if (!normalized) {
     throw new Error('Updated venfork config is invalid');
   }
-
-  await writeConfigBranch(repoDir, normalized, UPDATE_CONFIG_COMMIT_MESSAGE);
   return normalized;
+}
+
+/**
+ * Updates and force-pushes `venfork-config` with a shallow merge patch.
+ *
+ * Auto-retries on `--force-with-lease` failure (i.e. another venfork
+ * command pushed between our read and our write). Each retry re-reads
+ * the now-updated config, re-applies the same patch on top, and pushes
+ * again with the fresh lease SHA — so the losing run's update is
+ * preserved on top of the winning run's, instead of being dropped or
+ * surfaced as a confusing error to the user. Bounded at 3 attempts so
+ * pathological live-locks don't hang the CLI.
+ */
+export async function updateVenforkConfig(
+  repoDir: string,
+  patch: VenforkConfigPatch
+): Promise<VenforkConfig> {
+  const MAX_RETRIES = 3;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+    const read = await readVenforkConfigFromRepoWithSha(repoDir);
+    if (!read) {
+      throw new Error('venfork-config branch not found or invalid');
+    }
+
+    const normalized = applyPatchAndNormalize(read.config, patch);
+
+    try {
+      await writeConfigBranch(
+        repoDir,
+        normalized,
+        UPDATE_CONFIG_COMMIT_MESSAGE,
+        {
+          expectedSha: read.sha,
+        }
+      );
+      return normalized;
+    } catch (err) {
+      if (isLeaseFailure(err) && attempt < MAX_RETRIES - 1) {
+        // Another venfork command updated the config between our read and
+        // our push. Re-read on the next iteration so the merge is on top
+        // of their winning content.
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw new Error(
+    `Could not update venfork-config after ${MAX_RETRIES} concurrent-write retries. Re-run the command, or resolve any unexpected state on the venfork-config branch.`
+  );
 }
 
 /**

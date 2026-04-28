@@ -492,7 +492,11 @@ The setup-time personal-account confirmation is intentionally **not** bypassed �
 
 ### Concurrency
 
-Commands that mutate `venfork-config` (`stage --pr`, `pull-request`, `issue stage`, `issue pull`, and `sync upstream-pr/<n>`) push to the orphan config branch with `--force-with-lease`. Two parallel runs racing the config update will see the **second** push fail with a "stale info" error — re-run the failed command and the next read will include the first run's update. Don't `--force` the config branch by hand to "fix" the failure; that's exactly the data-loss path the lease prevents.
+Commands that mutate `venfork-config` (`stage --pr`, `pull-request`, `issue stage`, `issue pull`, and `sync upstream-pr/<n>`) push to the orphan config branch with `--force-with-lease=venfork-config:<read-sha>`, leasing against the exact SHA the command read its starting state from.
+
+When two venfork commands race the config update, the losing one's push is rejected with a "stale info" error. **venfork auto-handles this**: it re-reads the freshly-updated config (now including the winning run's changes), re-applies its own patch on top, and pushes again with the new lease SHA. Up to 3 retries before giving up.
+
+That means concurrent runs are normally invisible to the user — both updates land. Only after sustained contention (3 lease failures in a row) does venfork surface the error and ask you to re-run the command. Don't `--force` the config branch by hand to "fix" a transient lease failure; that's exactly the data-loss path the lease prevents.
 
 ## Complete Workflow
 
