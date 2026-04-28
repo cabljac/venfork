@@ -478,6 +478,16 @@ venfork setup git@github.com:client/project.git
 # Continue with personal account? (y/N)
 ```
 
+### `VENFORK_NONINTERACTIVE`
+
+Set `VENFORK_NONINTERACTIVE=1` to auto-confirm prompts in `venfork stage --pr`, `venfork issue stage`, and `venfork issue pull`. Useful when calling venfork from CI or scripts where stdin isn't a TTY.
+
+```bash
+VENFORK_NONINTERACTIVE=1 venfork stage feat/auth --pr
+```
+
+The setup-time personal-account confirmation is intentionally **not** bypassed — that one's a safety net you almost certainly want when scripting setup.
+
 ## Complete Workflow
 
 ### Initial Setup

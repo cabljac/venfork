@@ -342,10 +342,11 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     ].join('\n');
     await $`gh pr create --repo ${GITHUB_ORG}/${names.mirrorBare} --base ${defaultBranch} --head ${featureBranch} --title ${'feat: add feature.txt'} --body ${internalBody}`;
 
-    // Drive `venfork stage --pr`, auto-confirming the prompt.
+    // Drive `venfork stage --pr`, auto-confirming via env var (clack's
+    // confirm doesn't reliably accept piped `y\n` in non-TTY mode).
     await runVenfork(['stage', featureBranch, '--pr', '--draft'], {
       cwd: localMirrorPath,
-      input: 'y\n',
+      env: { VENFORK_NONINTERACTIVE: '1' },
     });
 
     // Find the upstream PR and verify body translation + draft state.
@@ -445,7 +446,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     // Stage the internal issue upstream.
     await runVenfork(['issue', 'stage', String(internal.number)], {
       cwd: localMirrorPath,
-      input: 'y\n',
+      env: { VENFORK_NONINTERACTIVE: '1' },
     });
 
     // Find the upstream issue and verify body redaction.
@@ -473,7 +474,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
 
     await runVenfork(['issue', 'pull', String(upstreamReport.number)], {
       cwd: localMirrorPath,
-      input: 'y\n',
+      env: { VENFORK_NONINTERACTIVE: '1' },
     });
 
     // The mirror should now have an issue whose title carries the

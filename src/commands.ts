@@ -45,6 +45,23 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * `p.confirm` wrapper that returns `true` immediately when
+ * `VENFORK_NONINTERACTIVE=1` is set in the environment. Lets scripts and
+ * tests bypass interactive confirms without having to feed key presses
+ * through stdin (clack's confirm reads keypresses, which doesn't work
+ * cleanly with line-buffered piped input).
+ */
+async function confirmOrAutoYes(opts: {
+  message: string;
+  initialValue?: boolean;
+}): Promise<boolean | symbol> {
+  if (process.env.VENFORK_NONINTERACTIVE === '1') {
+    return true;
+  }
+  return p.confirm(opts);
+}
+
 const SYNC_WORKFLOW_PATH = getSyncWorkflowPath();
 const WORKFLOW_COMMIT_MESSAGE =
   'chore: add/update scheduled sync workflow (venfork)';
@@ -1829,7 +1846,7 @@ export async function stageCommand(
       p.note(previewBody || '(empty)', 'Upstream PR body preview');
     }
 
-    const shouldStage = await p.confirm({
+    const shouldStage = await confirmOrAutoYes({
       message: createPr
         ? 'Push to public fork and open the upstream PR?'
         : 'Push to public fork?',
@@ -2295,7 +2312,7 @@ export async function issueCommand(
       );
       p.note(translatedBody || '(empty)', 'Upstream issue body preview');
 
-      const ok = await p.confirm({
+      const ok = await confirmOrAutoYes({
         message: `Open the issue on ${upstreamRepoPath}?`,
         initialValue: false,
       });
@@ -2359,7 +2376,7 @@ export async function issueCommand(
     );
     p.note(internalBody, 'Internal issue body preview');
 
-    const ok = await p.confirm({
+    const ok = await confirmOrAutoYes({
       message: `Open the issue on ${mirrorRepoPath}?`,
       initialValue: false,
     });
