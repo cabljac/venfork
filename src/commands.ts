@@ -2201,7 +2201,7 @@ export async function pullRequestCommand(
     ).stdout.trim();
     s.stop(`Fetched ${headSha.slice(0, 9)} → ${localBranch}`);
 
-    let pushSucceeded = !push; // If push is disabled, treat as "no push needed".
+    let pushedToMirror = false;
     if (push) {
       s.start(`Pushing ${localBranch} to origin`);
       const pushResult = await $({
@@ -2218,15 +2218,24 @@ export async function pullRequestCommand(
         );
       } else {
         s.stop(`Pushed ${localBranch} to origin`);
-        pushSucceeded = true;
+        pushedToMirror = true;
       }
     }
 
-    if (!pushSucceeded) {
-      // Skip the linkage record so the user doesn't think the mirror has the
-      // branch. The local branch remains, so they can `git push origin
-      // <branch>` themselves and re-run `venfork pull-request` if desired.
-      p.outro('✨ Pull request fetched locally (mirror push failed)');
+    if (!pushedToMirror) {
+      // Two paths reach here:
+      // 1. Push failed: warned above, branch is local-only.
+      // 2. --no-push: user asked us not to push; treat the branch as
+      //    local-only too. In both cases the mirror does not have the
+      //    branch, so we skip the pulledPrs record. Otherwise a later
+      //    `venfork sync <branch>` would push the branch to the mirror —
+      //    surprising for --no-push users (who explicitly opted out of
+      //    mirror state) and misleading for the failure case (the mirror
+      //    is out of sync with what we recorded).
+      const reason = push
+        ? 'mirror push failed'
+        : '--no-push set, branch is local-only';
+      p.outro(`✨ Pull request fetched locally (${reason})`);
       return;
     }
 

@@ -2405,7 +2405,10 @@ describe('pullRequestCommand', () => {
     ).toBe(true);
   });
 
-  test('--no-push skips push to origin', async () => {
+  test('--no-push skips push to origin AND skips pulledPrs linkage', async () => {
+    // The linkage skip is important: with --no-push the mirror doesn't have
+    // the branch, so a later `venfork sync <branch>` shouldn't push it
+    // (which it would do if a pulledPrs entry were recorded).
     setupPrCommonMocks();
     try {
       await pullRequestCommand('42', { push: false });
@@ -2415,6 +2418,10 @@ describe('pullRequestCommand', () => {
     expect(execaCalls.some((cmd) => cmd.includes('git push origin'))).toBe(
       false
     );
+    // updateVenforkConfig pushes the venfork-config branch — must not happen.
+    expect(
+      execaCalls.some((cmd) => cmd.includes('venfork-config:venfork-config'))
+    ).toBe(false);
   });
 
   test('--branch-name overrides the local branch', async () => {

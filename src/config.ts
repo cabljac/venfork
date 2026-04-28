@@ -213,12 +213,20 @@ function normalizeShippedBranch(value: unknown): ShippedBranch | null {
   return out;
 }
 
+/**
+ * GitHub PR / issue numbers are always positive integers. Reject anything
+ * else so a hand-edited config with garbage numbers (negatives, floats, NaN)
+ * doesn't leak into runtime.
+ */
+function isPositiveInt(n: unknown): n is number {
+  return typeof n === 'number' && Number.isInteger(n) && n > 0;
+}
+
 function normalizePulledPr(value: unknown): PulledPr | null {
   if (!value || typeof value !== 'object') return null;
   const v = value as Partial<PulledPr>;
   if (
-    typeof v.upstreamPrNumber !== 'number' ||
-    !Number.isFinite(v.upstreamPrNumber) ||
+    !isPositiveInt(v.upstreamPrNumber) ||
     typeof v.upstreamPrUrl !== 'string' ||
     !v.upstreamPrUrl.trim() ||
     typeof v.head !== 'string' ||
@@ -240,12 +248,10 @@ function normalizeShippedIssue(value: unknown): ShippedIssue | null {
   if (!value || typeof value !== 'object') return null;
   const v = value as Partial<ShippedIssue>;
   if (
-    typeof v.internalIssueNumber !== 'number' ||
-    !Number.isFinite(v.internalIssueNumber) ||
+    !isPositiveInt(v.internalIssueNumber) ||
     typeof v.internalIssueUrl !== 'string' ||
     !v.internalIssueUrl.trim() ||
-    typeof v.upstreamIssueNumber !== 'number' ||
-    !Number.isFinite(v.upstreamIssueNumber) ||
+    !isPositiveInt(v.upstreamIssueNumber) ||
     typeof v.upstreamIssueUrl !== 'string' ||
     !v.upstreamIssueUrl.trim() ||
     typeof v.shippedAt !== 'string' ||
@@ -266,12 +272,10 @@ function normalizePulledIssue(value: unknown): PulledIssue | null {
   if (!value || typeof value !== 'object') return null;
   const v = value as Partial<PulledIssue>;
   if (
-    typeof v.upstreamIssueNumber !== 'number' ||
-    !Number.isFinite(v.upstreamIssueNumber) ||
+    !isPositiveInt(v.upstreamIssueNumber) ||
     typeof v.upstreamIssueUrl !== 'string' ||
     !v.upstreamIssueUrl.trim() ||
-    typeof v.internalIssueNumber !== 'number' ||
-    !Number.isFinite(v.internalIssueNumber) ||
+    !isPositiveInt(v.internalIssueNumber) ||
     typeof v.internalIssueUrl !== 'string' ||
     !v.internalIssueUrl.trim() ||
     typeof v.pulledAt !== 'string' ||
