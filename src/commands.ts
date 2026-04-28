@@ -1654,11 +1654,14 @@ async function findInternalPr(
   cwd: string
 ): Promise<InternalPrInfo | null> {
   // Prefer an open PR; if none, take the most recent of any state.
-  for (const stateFlag of ['--state open', '--state all']) {
+  // Pass each flag/value as a separate execa interpolation — passing
+  // `--state open` as a single string makes execa treat it as one arg
+  // and gh silently filters wrong (returns zero results).
+  for (const state of ['open', 'all'] as const) {
     const result = await $({
       cwd,
       reject: false,
-    })`gh pr list --repo ${mirrorRepoPath} --head ${branch} ${stateFlag} --json number,url,title,body --limit 1`;
+    })`gh pr list --repo ${mirrorRepoPath} --head ${branch} --state ${state} --json number,url,title,body --limit 1`;
     if (result.exitCode !== 0) {
       return null;
     }
