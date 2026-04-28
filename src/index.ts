@@ -3,6 +3,8 @@
 import * as p from '@clack/prompts';
 import {
   cloneCommand,
+  issueCommand,
+  pullRequestCommand,
   scheduleCommand,
   setupCommand,
   showHelp,
@@ -11,7 +13,10 @@ import {
   syncCommand,
   workflowsCommand,
 } from './commands.js';
+import { parseIssueCliArgs } from './issue-args.js';
+import { parsePullRequestCliArgs } from './pull-request-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
+import { parseStageCliArgs } from './stage-args.js';
 import { parseWorkflowsCliArgs } from './workflows-args.js';
 
 /**
@@ -51,15 +56,39 @@ async function main(): Promise<void> {
     case 'schedule':
       await scheduleCommand(args[1], args[2]);
       break;
-    case 'stage':
-      await stageCommand(args[1]);
+    case 'stage': {
+      const parsed = parseStageCliArgs(args.slice(1));
+      await stageCommand(parsed.branch, {
+        createPr: parsed.createPr,
+        draft: parsed.draft,
+        title: parsed.title,
+        base: parsed.base,
+        internalPrNumber: parsed.internalPrNumber,
+        noUpdateExisting: parsed.noUpdateExisting,
+      });
       break;
+    }
     case 'status':
       await statusCommand();
       break;
     case 'workflows': {
       const parsed = parseWorkflowsCliArgs(args.slice(1));
       await workflowsCommand(parsed.action, parsed.workflows);
+      break;
+    }
+    case 'pull-request': {
+      const parsed = parsePullRequestCliArgs(args.slice(1));
+      await pullRequestCommand(parsed.pr, {
+        branchName: parsed.branchName,
+        push: parsed.push,
+      });
+      break;
+    }
+    case 'issue': {
+      const parsed = parseIssueCliArgs(args.slice(1));
+      await issueCommand(parsed.action, parsed.target, {
+        title: parsed.title,
+      });
       break;
     }
     default:

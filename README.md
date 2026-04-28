@@ -86,9 +86,21 @@ git push origin feature/new-thing
 # Still private! Create internal PR for team review
 
 # 3. Stage for upstream (after internal approval)
+venfork stage feature/new-thing --pr
+# NOW visible on public fork — and the upstream PR is opened for you,
+# carrying your internal review body (with <!-- venfork:internal --> blocks redacted).
+
+# Or just stage and open the PR yourself later:
 venfork stage feature/new-thing
-# NOW visible on public fork
-# Create PR: public fork → upstream
+```
+
+```bash
+# Reviewing a third-party upstream PR internally
+venfork pull-request 1234
+# upstream-pr/1234 now exists on the mirror; team can review/test against your internal codebase
+
+# Refresh as the upstream contributor pushes updates
+venfork sync upstream-pr/1234
 ```
 
 ## Commands
@@ -247,27 +259,141 @@ venfork status
 - Check which remotes are configured
 - See your current branch
 
-### `venfork stage <branch>`
+### `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing]`
 
-Push a branch to the public fork, making it visible and ready for PR to upstream.
+Push a branch to the public fork, making it visible and ready for PR to upstream. With `--pr`, also opens the upstream PR for you using your internal review PR's body.
 
 **⚠️ Important:** This is when your work becomes visible to the client!
 
 **Arguments:**
 - `branch` - Branch name to stage
 
+**Flags:**
+- `--pr` - Also open an upstream PR after staging. Looks up your internal-review PR on the private mirror and copies its description (with redacted blocks stripped — see below) into the upstream PR.
+- `--draft` - Open the upstream PR as a draft. Implies `--pr`.
+- `--title <text>` - Override the upstream PR title (default: the internal PR title, or the branch name if no internal PR was found).
+- `--base <branch>` - Override the upstream base branch (default: upstream's default branch).
+- `--internal-pr <n>` - Pin a specific internal-review PR number (skips the most-recent-open lookup). Useful when multiple PRs target the same branch.
+- `--no-update-existing` - Do not update an already-open upstream PR body when staging. By default, if an upstream PR for the branch already exists, `venfork stage --pr` refreshes its body with the latest translated content.
+
 **Examples:**
 ```bash
+# Stage only — same as before
 venfork stage feature-auth
-venfork stage bugfix/issue-123
+
+# Stage and open the upstream PR using the internal review body
+venfork stage feature-auth --pr
+
+# Open as draft
+venfork stage feature-auth --draft
+
+# Override title or base
+venfork stage feature-auth --pr --title "Add OAuth"
+venfork stage feature-auth --pr --base develop
 ```
 
-**What it does:**
+**What it does (without `--pr`):**
 1. Verifies branch exists
 2. Shows staging details and confirmation
 3. Rebuilds branch history on top of upstream while removing internal workflow commits
 4. Pushes sanitized history to public fork
-5. Provides PR creation link
+5. Provides a compare URL so you can open the PR yourself
+
+**What `--pr` adds:**
+1. Looks up the most recent PR on the private mirror with `--head <branch>` (open first, then most recent of any state).
+2. Renders the upstream PR body by stripping any `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks and appending a footer linking back to the internal review.
+3. Shows you the translated body **before** confirming, so you can catch redaction mistakes before they go public.
+4. Runs `gh pr create --repo <upstream> --base <default> --head <fork-owner>:<branch>` and surfaces the resulting PR URL.
+5. Records the linkage in `venfork-config.shippedBranches[<branch>]` for later tracking.
+
+**Redacting internal-only context**
+
+In the body of your internal review PR, wrap anything that should NOT go upstream in HTML comments:
+
+```md
+This PR adds OAuth login.
+
+<!-- venfork:internal -->
+Internal note: Client X explicitly asked us to use Auth0 instead of Keycloak (see ticket INT-1234).
+<!-- /venfork:internal -->
+
+The implementation follows the spec at https://example.com/oauth.
+```
+
+`venfork stage --pr` strips all content enclosed by these markers before posting upstream. The upstream PR shows only the public summary; the internal context stays inside the redacted block on the private mirror, where only your team can see it.
+
+If you forget to add markers, the entire internal body is sent upstream — review the preview prompt before confirming.
+
+### `venfork pull-request <pr-number-or-url> [--branch-name <override>] [--no-push]`
+
+Pull a third-party upstream PR into the private mirror so your team can review it internally before it lands. The PR's commits land on a new branch (`upstream-pr/<n>` by default) that's pushed to your mirror.
+
+**Arguments:**
+- `pr-number-or-url` - Either a bare integer (`1234`) or a github.com PR URL.
+
+**Flags:**
+- `--branch-name <name>` - Use a custom local/mirror branch name instead of `upstream-pr/<n>`. **Note**: with a custom branch name, the linkage in `venfork-config.pulledPrs[<branch>]` is the only way `venfork sync <branch>` finds the upstream PR — the `upstream-pr/<n>` convention fallback only matches branches with that exact name.
+- `--no-push` - Fetch into a local branch only; don't push to the mirror.
+
+**Examples:**
+```bash
+# Bring upstream PR #1234 into the mirror
+venfork pull-request 1234
+
+# Or via URL
+venfork pull-request https://github.com/upstream/repo/pull/1234
+
+# Use a custom branch name (e.g. for staged team review of a critical PR)
+venfork pull-request 1234 --branch-name review/oauth-pr
+```
+
+**What it does:**
+1. Reads the upstream PR's metadata (`gh pr view`) and prints a summary (title, author, state, base, body preview, link).
+2. Fetches `pull/<n>/head` from the upstream remote into a local branch.
+3. Pushes that branch to `origin` (the private mirror) so the team can see it.
+4. Records a `pulledPrs[<branch>]` entry in `venfork-config` so `venfork sync <branch>` knows which upstream PR to refresh from.
+
+**Refreshing a pulled PR**
+
+When the upstream contributor updates their PR, refresh your local + mirror copy with:
+
+```bash
+venfork sync upstream-pr/1234
+```
+
+`venfork sync <branch>` falls into the pulled-PR path when:
+- `venfork-config.pulledPrs[<branch>]` exists (recorded by `pull-request`), OR
+- The branch matches the `upstream-pr/<n>` naming convention.
+
+In that case it refetches `pull/<n>/head` from upstream and force-with-lease pushes the result to origin. The default-branch sync (the +1-managed-commit flow) is unaffected.
+
+### `venfork issue <stage|pull> <number-or-url> [--title <text>]`
+
+Move *issue* context between the private mirror and upstream — the same shape as `stage --pr` and `pull-request`, but for issues instead of PRs.
+
+**Sub-commands:**
+- `stage <internal-#>` — read an internal triage issue from the mirror, redact `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks (same convention as `stage --pr`), and open the upstream counterpart via `gh issue create`.
+- `pull <upstream-#>` — read an upstream issue, create a parallel internal issue on the mirror titled `[upstream #N] <original title>` so the team can triage it without leaving the private space.
+
+**Flags:**
+- `--title <text>` - Override the destination issue's title.
+
+**Examples:**
+```bash
+# Found a bug while working internally → refine then file upstream
+venfork issue stage 7
+
+# Watching an upstream issue that affects the team's roadmap
+venfork issue pull 1234
+```
+
+**What gets recorded**
+
+Both sub-commands write a linkage to `venfork-config`:
+- `shippedIssues[<internal-#>]` for `stage`
+- `pulledIssues[<internal-#>]` for `pull`
+
+This is **only the linkage** — comments and state changes do *not* sync. If the upstream issue is closed, the internal one stays open until you close it manually (and vice versa). Treat the records as a "where did this go?" audit log rather than a live mirror.
 
 ### `venfork schedule <status|set <cron>|disable>`
 
@@ -353,6 +479,24 @@ venfork setup git@github.com:client/project.git
 # Repos will be created under your personal account (username: yourname)
 # Continue with personal account? (y/N)
 ```
+
+### `VENFORK_NONINTERACTIVE`
+
+Set `VENFORK_NONINTERACTIVE=1` to auto-confirm prompts in `venfork stage --pr`, `venfork issue stage`, and `venfork issue pull`. Useful when calling venfork from CI or scripts where stdin isn't a TTY.
+
+```bash
+VENFORK_NONINTERACTIVE=1 venfork stage feat/auth --pr
+```
+
+The setup-time personal-account confirmation is intentionally **not** bypassed — that one's a safety net you almost certainly want when scripting setup.
+
+### Concurrency
+
+Commands that mutate `venfork-config` (`stage --pr`, `pull-request`, `issue stage`, `issue pull`, and `sync upstream-pr/<n>`) push to the orphan config branch with `--force-with-lease=venfork-config:<read-sha>`, leasing against the exact SHA the command read its starting state from.
+
+When two venfork commands race the config update, the losing one's push is rejected with a "stale info" error. **venfork auto-handles this**: it re-reads the freshly-updated config (now including the winning run's changes), re-applies its own patch on top, and pushes again with the new lease SHA. Up to 3 retries before giving up.
+
+That means concurrent runs are normally invisible to the user — both updates land. Only after sustained contention (3 lease failures in a row) does venfork surface the error and ask you to re-run the command. Don't `--force` the config branch by hand to "fix" a transient lease failure; that's exactly the data-loss path the lease prevents.
 
 ## Complete Workflow
 

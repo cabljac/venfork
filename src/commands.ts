@@ -9,6 +9,7 @@ import {
   fetchVenforkConfig,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
+  type VenforkConfig,
 } from './config.js';
 import {
   AuthenticationError,
@@ -42,6 +43,28 @@ async function pathExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * `p.confirm` wrapper that can return `true` immediately when
+ * `VENFORK_NONINTERACTIVE=1` is set in the environment, but only for
+ * callers that explicitly opt into that behavior by passing
+ * `allowNonInteractive: true`. This lets scripts and tests bypass intended
+ * interactive confirms without turning every prompt into an implicit "yes"
+ * in CI/non-interactive environments.
+ */
+async function confirmOrAutoYes(opts: {
+  message: string;
+  initialValue?: boolean;
+  allowNonInteractive?: boolean;
+}): Promise<boolean | symbol> {
+  if (
+    opts.allowNonInteractive === true &&
+    process.env.VENFORK_NONINTERACTIVE === '1'
+  ) {
+    return true;
+  }
+  return p.confirm(opts);
 }
 
 const SYNC_WORKFLOW_PATH = getSyncWorkflowPath();
@@ -1050,6 +1073,95 @@ export async function cloneCommand(vendorRepoUrl?: string): Promise<void> {
 /**
  * Sync command: Update default branches of origin and public to match upstream
  */
+/**
+ * Returns the upstream PR number for `branch` if it's a pulled-in PR. First
+ * checks `venfork-config.pulledPrs` (recorded by `venfork pull-request`),
+ * then falls back to the `upstream-pr/<n>` naming convention. Returns null
+ * if the branch is not a pulled PR (sync routes to the default flow).
+ */
+function resolvePulledPr(
+  branch: string,
+  config: VenforkConfig | null
+): { prNumber: number; tracked: boolean } | null {
+  const recorded = config?.pulledPrs?.[branch];
+  if (recorded?.upstreamPrNumber) {
+    return { prNumber: recorded.upstreamPrNumber, tracked: true };
+  }
+  const conventionMatch = branch.match(/^upstream-pr\/(\d+)$/);
+  if (conventionMatch) {
+    return { prNumber: Number(conventionMatch[1]), tracked: false };
+  }
+  return null;
+}
+
+async function syncPulledPr(
+  branch: string,
+  prNumber: number,
+  cwd: string,
+  s: ReturnType<typeof p.spinner>
+): Promise<void> {
+  s.start(`Fetching pull/${prNumber}/head from upstream`);
+  const fetchResult = await $({
+    cwd,
+    reject: false,
+  })`git fetch upstream pull/${prNumber}/head:${branch}`;
+  if (fetchResult.exitCode !== 0) {
+    // git fetch refuses to clobber a divergent local branch; force into the
+    // local ref since the source of truth for pulled PRs is upstream.
+    const forceResult = await $({
+      cwd,
+      reject: false,
+    })`git fetch upstream +pull/${prNumber}/head:${branch}`;
+    if (forceResult.exitCode !== 0) {
+      throw new Error(
+        `git fetch upstream pull/${prNumber}/head failed:\n${(forceResult.stderr || fetchResult.stderr).trim()}`
+      );
+    }
+  }
+  const headSha = (await $({ cwd })`git rev-parse ${branch}`).stdout.trim();
+  s.stop(`Fetched ${headSha.slice(0, 9)} → ${branch}`);
+
+  s.start(`Pushing ${branch} to origin`);
+  const pushResult = await $({
+    cwd,
+    reject: false,
+  })`git push origin ${branch} --force-with-lease`;
+  if (pushResult.exitCode !== 0) {
+    s.stop('Push failed');
+    p.log.warn(
+      `Could not push ${branch} to origin: ${pushResult.stderr.trim()}`
+    );
+    p.log.warn(
+      'Local branch is updated; the mirror copy was not. Skipping pulledPrs config update — the recorded head/lastSyncedAt would not match the mirror.'
+    );
+    return;
+  }
+  s.stop(`Pushed ${branch} to origin`);
+
+  try {
+    await updateVenforkConfig(cwd, {
+      pulledPrs: {
+        [branch]: {
+          upstreamPrNumber: prNumber,
+          upstreamPrUrl: `https://github.com/${(
+            await $({ cwd })`git remote get-url upstream`
+          ).stdout
+            .trim()
+            .replace(
+              /.*[:/]([^/]+\/[^/]+?)(?:\.git)?$/,
+              '$1'
+            )}/pull/${prNumber}`,
+          head: headSha,
+          lastSyncedAt: new Date().toISOString(),
+        },
+      },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    p.log.warn(`Could not update pulledPrs entry: ${msg}`);
+  }
+}
+
 export async function syncCommand(
   targetBranch?: string,
   options?: { cwd?: string; quiet?: boolean }
@@ -1064,6 +1176,25 @@ export async function syncCommand(
   const s = p.spinner();
 
   try {
+    const repoDir = options?.cwd ?? process.cwd();
+
+    // Branch-specific path: if the targetBranch is a pulled-in upstream PR,
+    // refresh it from `pull/<n>/head` instead of running the default-branch
+    // +1-commit sync flow.
+    if (targetBranch) {
+      const initialConfig = await readVenforkConfigFromRepo(repoDir);
+      const pulledPr = resolvePulledPr(targetBranch, initialConfig);
+      if (pulledPr) {
+        await syncPulledPr(targetBranch, pulledPr.prNumber, repoDir, s);
+        if (!quiet) {
+          p.outro(
+            `✨ ${targetBranch} synced with upstream PR #${pulledPr.prNumber}`
+          );
+        }
+        return;
+      }
+    }
+
     // Step 1: Fetch from upstream
     s.start('Fetching from upstream');
     await $(cwdOpt)`git fetch upstream`;
@@ -1074,7 +1205,6 @@ export async function syncCommand(
     // Step 2: Detect default branch if not specified
     const defaultBranch =
       targetBranch || (await getDefaultBranch('upstream', options?.cwd));
-    const repoDir = options?.cwd ?? process.cwd();
     const config = await readVenforkConfigFromRepo(repoDir);
     const scheduleConfig = config?.schedule;
     const enabledWorkflows = config?.enabledWorkflows ?? [];
@@ -1385,12 +1515,413 @@ export async function workflowsCommand(
 }
 
 /**
- * Stage command: Push branch to public fork for PR to upstream
+ * Read-only snapshot of the state needed to stage a branch. Computed before
+ * any user confirmation so the caller can show a preview, and reused for the
+ * actual push (`executeStagingPush`) and any follow-on work (e.g. opening an
+ * upstream PR in `shipCommand`).
  */
-export async function stageCommand(branch: string): Promise<void> {
+export interface StagingPlan {
+  branch: string;
+  publicUrl: string;
+  publicRepoPath: string;
+  upstreamUrl: string;
+  upstreamRepoPath: string;
+  upstreamDefaultBranch: string;
+  scheduleEnabled: boolean;
+  /** owner of the public fork — first half of `publicRepoPath`. */
+  publicOwner: string;
+}
+
+/**
+ * Resolves remotes, default branch, and schedule state for a staging push.
+ * Pure read; no network writes. Throws `BranchNotFoundError` /
+ * `RemoteNotFoundError` so callers can render a single failure path.
+ */
+async function planStaging(branch: string, cwd: string): Promise<StagingPlan> {
+  const branchCheck = await $({
+    cwd,
+    reject: false,
+  })`git rev-parse --verify ${branch}`;
+  if (branchCheck.exitCode !== 0) {
+    throw new BranchNotFoundError(branch);
+  }
+
+  const publicUrlResult = await $({
+    cwd,
+    reject: false,
+  })`git remote get-url public`;
+  if (publicUrlResult.exitCode !== 0) {
+    throw new RemoteNotFoundError('public');
+  }
+  const publicUrl = publicUrlResult.stdout.trim();
+  const publicRepoPath = parseRepoPath(publicUrl);
+  const publicOwner = publicRepoPath.split('/')[0] ?? '';
+
+  const upstreamUrlResult = await $({
+    cwd,
+    reject: false,
+  })`git remote get-url upstream`;
+  if (upstreamUrlResult.exitCode !== 0) {
+    throw new RemoteNotFoundError('upstream');
+  }
+  const upstreamUrl = upstreamUrlResult.stdout.trim();
+  const upstreamRepoPath = parseRepoPath(upstreamUrl);
+
+  const upstreamDefaultBranch = await getDefaultBranch('upstream');
+  const scheduleEnabled = await isScheduleEnabled(cwd);
+
+  return {
+    branch,
+    publicUrl,
+    publicRepoPath,
+    upstreamUrl,
+    upstreamRepoPath,
+    upstreamDefaultBranch,
+    scheduleEnabled,
+    publicOwner,
+  };
+}
+
+/**
+ * Pushes the branch to the public fork, stripping the internal workflow
+ * commit when scheduled sync is enabled. Returns the SHA pushed.
+ *
+ * The caller owns the spinner so consistent UI text appears in every
+ * command that stages (`stage`, `ship`).
+ */
+async function executeStagingPush(
+  plan: StagingPlan,
+  cwd: string,
+  s: ReturnType<typeof p.spinner>
+): Promise<string> {
+  if (plan.scheduleEnabled) {
+    await $({ cwd })`git fetch upstream`;
+    await $({ cwd })`git fetch origin`;
+    s.start('Preparing sanitized branch for public staging');
+    const stageHead = await buildPublicStageHeadWithoutWorkflowCommit(
+      plan.branch,
+      plan.upstreamDefaultBranch,
+      cwd
+    );
+    s.stop('Prepared sanitized branch');
+
+    s.start('Pushing sanitized branch to public fork');
+    if (await remoteBranchExists('public', plan.branch)) {
+      await $({
+        cwd,
+      })`git push public ${stageHead}:refs/heads/${plan.branch} --force-with-lease=refs/heads/${plan.branch}`;
+    } else {
+      await $({
+        cwd,
+      })`git push public ${stageHead}:refs/heads/${plan.branch}`;
+    }
+    s.stop('Push successful');
+    return stageHead;
+  }
+
+  s.start('Pushing to public fork');
+  await $({ cwd })`git push public ${plan.branch}`;
+  s.stop('Push successful');
+  const headResult = await $({
+    cwd,
+  })`git rev-parse ${plan.branch}`;
+  return headResult.stdout.trim();
+}
+
+export interface StageOptions {
+  /** When true, also open an upstream PR after staging. */
+  createPr?: boolean;
+  /** When true, the upstream PR is opened as a draft. Implies createPr. */
+  draft?: boolean;
+  /** Override the upstream PR title; default is the internal PR title. */
+  title?: string;
+  /** Override the upstream base branch; default is upstream's default branch. */
+  base?: string;
+  /**
+   * Pin the internal review PR by number instead of letting `findInternalPr`
+   * pick the most recent one for the branch.
+   */
+  internalPrNumber?: number;
+  /**
+   * When true, *don't* update an existing upstream PR's body if one is found
+   * for the same head/base. Default behaviour (false) re-syncs the body via
+   * `gh pr edit` so addressing internal feedback re-publishes upstream.
+   */
+  noUpdateExisting?: boolean;
+}
+
+interface InternalPrInfo {
+  number: number;
+  url: string;
+  title: string;
+  body: string;
+}
+
+const VENFORK_INTERNAL_OPEN_RE = /<!--\s*venfork:internal\s*-->/g;
+const VENFORK_INTERNAL_CLOSE_RE = /<!--\s*\/venfork:internal\s*-->/g;
+
+interface RedactionMarker {
+  type: 'open' | 'close';
+  start: number;
+  end: number;
+}
+
+/**
+ * Removes properly-nested `<!-- venfork:internal -->...<!-- /venfork:internal -->`
+ * blocks from `body`. Walks markers in document order and tracks depth, so
+ * nested pairs collapse correctly: every char between the outermost open and
+ * its matching close is dropped (including any inner pairs).
+ *
+ * Edge cases:
+ *  - Unmatched close marker: dropped, surrounding content preserved.
+ *  - Unmatched open marker: content from that open to end-of-input is
+ *    dropped (defensive — a missing close shouldn't leak intended-private
+ *    content upstream).
+ *  - Whitespace inside the markers is tolerated (`<!-- venfork:internal -->`
+ *    and `<!--venfork:internal-->` both match).
+ *
+ * @internal Exported for unit testing; not part of the public API.
+ */
+export function stripInternalBlocks(body: string): string {
+  const markers: RedactionMarker[] = [];
+  // Reset lastIndex on the global regexes — they're module-scoped and would
+  // otherwise carry state across calls.
+  VENFORK_INTERNAL_OPEN_RE.lastIndex = 0;
+  VENFORK_INTERNAL_CLOSE_RE.lastIndex = 0;
+
+  for (
+    let m = VENFORK_INTERNAL_OPEN_RE.exec(body);
+    m !== null;
+    m = VENFORK_INTERNAL_OPEN_RE.exec(body)
+  ) {
+    markers.push({ type: 'open', start: m.index, end: m.index + m[0].length });
+  }
+  for (
+    let m = VENFORK_INTERNAL_CLOSE_RE.exec(body);
+    m !== null;
+    m = VENFORK_INTERNAL_CLOSE_RE.exec(body)
+  ) {
+    markers.push({ type: 'close', start: m.index, end: m.index + m[0].length });
+  }
+  markers.sort((a, b) => a.start - b.start);
+
+  let result = '';
+  let cursor = 0;
+  let depth = 0;
+  for (const marker of markers) {
+    if (marker.type === 'open') {
+      if (depth === 0) {
+        // Surfacing into a new redacted block — emit content up to here.
+        result += body.slice(cursor, marker.start);
+      }
+      depth += 1;
+      cursor = marker.end;
+      continue;
+    }
+    if (depth > 0) {
+      depth -= 1;
+      cursor = marker.end;
+    } else {
+      // Unmatched close marker. Keep the content before it; drop the
+      // marker itself.
+      result += body.slice(cursor, marker.start);
+      cursor = marker.end;
+    }
+  }
+  if (depth === 0) {
+    result += body.slice(cursor);
+  }
+  // depth > 0 here means an unclosed open marker — content from the
+  // unmatched open to end-of-input is intentionally dropped.
+  return result;
+}
+
+/**
+ * Looks up the most relevant internal PR for `branch` on the private mirror.
+ * When `pinnedNumber` is set, fetches that exact PR via `gh pr view` (skips
+ * the list lookup). Otherwise prefers the most recent open PR, then the most
+ * recent of any state. Returns null if none exists or the lookup fails — the
+ * caller falls back to a generated synthetic body.
+ */
+async function findInternalPr(
+  mirrorRepoPath: string,
+  branch: string,
+  cwd: string,
+  pinnedNumber?: number
+): Promise<InternalPrInfo | null> {
+  if (pinnedNumber !== undefined) {
+    const result = await $({
+      cwd,
+      reject: false,
+    })`gh pr view ${pinnedNumber} --repo ${mirrorRepoPath} --json number,url,title,body`;
+    if (result.exitCode !== 0) {
+      return null;
+    }
+    try {
+      return JSON.parse(result.stdout) as InternalPrInfo;
+    } catch {
+      return null;
+    }
+  }
+  // Prefer an open PR; if none, take the most recent of any state.
+  // Pass each flag/value as a separate execa interpolation — passing
+  // `--state open` as a single string makes execa treat it as one arg
+  // and gh silently filters wrong (returns zero results).
+  for (const state of ['open', 'all'] as const) {
+    const result = await $({
+      cwd,
+      reject: false,
+    })`gh pr list --repo ${mirrorRepoPath} --head ${branch} --state ${state} --json number,url,title,body --limit 1`;
+    if (result.exitCode !== 0) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(result.stdout) as InternalPrInfo[];
+      if (parsed.length > 0) {
+        return parsed[0];
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Strips `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks via
+ * a depth-tracking pass (see `stripInternalBlocks`) and appends a footer
+ * linking back to the internal review PR or issue. Only the team can follow
+ * that link; the upstream maintainer sees only that there *was* an internal
+ * review.
+ */
+function translateInternalBody(
+  body: string,
+  internalUrl: string | undefined,
+  kind: 'pr' | 'issue' = 'pr'
+): string {
+  const stripped = stripInternalBlocks(body).trim();
+  const footer = internalUrl
+    ? kind === 'issue'
+      ? `\n\n> Upstreamed from internal issue (${internalUrl}).`
+      : `\n\n> Upstreamed from internal review (${internalUrl}).`
+    : '';
+  return `${stripped}${footer}`.trim();
+}
+
+/**
+ * Generates a synthetic upstream PR body from the branch's commit log when no
+ * internal review PR was found. Lists the non-merge commits in
+ * `upstream/<defaultBranch>..<branch>` so the upstream maintainer sees what
+ * the change actually is, rather than a "please add a description" placeholder.
+ *
+ * Fetches `upstream/<defaultBranch>` first so the log works even when schedule
+ * is disabled and the ref may not exist locally yet.
+ */
+async function buildSyntheticBody(
+  branch: string,
+  defaultBranch: string,
+  cwd: string
+): Promise<string> {
+  // Ensure the remote-tracking ref exists before running the log.
+  await $({ cwd, reject: false })`git fetch upstream ${defaultBranch}`;
+  const log = await $({
+    cwd,
+    reject: false,
+  })`git log --oneline --no-merges upstream/${defaultBranch}..${branch}`;
+  if (log.exitCode !== 0 || !log.stdout.trim()) {
+    return 'Staged from a private mirror. No internal review PR was open at stage time.';
+  }
+  const lines = log.stdout
+    .trim()
+    .split('\n')
+    .map((line) => `- ${line}`)
+    .join('\n');
+  return `Staged from a private mirror. Commits in this branch:\n\n${lines}\n\n_(No internal review PR was found at stage time.)_`;
+}
+
+/**
+ * Build the body and title for the upstream PR. Falls back to a generated
+ * commit-summary body when there's no internal PR to translate.
+ */
+async function buildUpstreamPrPayload(
+  branch: string,
+  internal: InternalPrInfo | null,
+  override: { title?: string; body?: string },
+  context: { defaultBranch: string; cwd: string }
+): Promise<{ title: string; body: string }> {
+  if (internal) {
+    return {
+      title: override.title ?? internal.title,
+      body: override.body ?? translateInternalBody(internal.body, internal.url),
+    };
+  }
+  return {
+    title: override.title ?? branch,
+    body:
+      override.body ??
+      (await buildSyntheticBody(branch, context.defaultBranch, context.cwd)),
+  };
+}
+
+/**
+ * Creates the upstream PR via gh and returns its URL. Surfaces the duplicate-PR
+ * case ("already exists") cleanly so the caller can recover.
+ */
+async function createUpstreamPr(args: {
+  upstreamRepoPath: string;
+  publicOwner: string;
+  branch: string;
+  base: string;
+  title: string;
+  body: string;
+  draft: boolean;
+  cwd: string;
+}): Promise<{ url: string; alreadyExists: boolean }> {
+  const head = `${args.publicOwner}:${args.branch}`;
+  const result = await $({
+    cwd: args.cwd,
+    reject: false,
+    input: args.body,
+  })`gh pr create --repo ${args.upstreamRepoPath} --base ${args.base} --head ${head} --title ${args.title} --body-file - ${args.draft ? '--draft' : []}`;
+
+  if (result.exitCode === 0) {
+    return { url: result.stdout.trim(), alreadyExists: false };
+  }
+  // gh prints something like "a pull request for branch X into branch Y already exists: https://..."
+  const combined = `${result.stdout}\n${result.stderr}`;
+  const existing = combined.match(/https?:\/\/\S*\/pull\/\d+/);
+  if (existing && /already exists/i.test(combined)) {
+    return { url: existing[0], alreadyExists: true };
+  }
+  throw new Error(
+    `Failed to create upstream PR via gh: ${combined.trim() || `exit ${result.exitCode}`}`
+  );
+}
+
+async function findMirrorRepoPath(cwd: string): Promise<string | null> {
+  const result = await $({
+    cwd,
+    reject: false,
+  })`git remote get-url origin`;
+  if (result.exitCode !== 0) return null;
+  const path = parseRepoPath(result.stdout.trim());
+  return path || null;
+}
+
+/**
+ * Stage command: Push branch to public fork for PR to upstream.
+ *
+ * With `--pr` (createPr), additionally opens the upstream PR using the
+ * internal-review PR's body as a starting point (with `<!-- venfork:internal
+ * -->...<!-- /venfork:internal -->` blocks stripped) and records the
+ * internal/upstream PR linkage in `venfork-config.shippedBranches`.
+ */
+export async function stageCommand(
+  branch: string | undefined,
+  options: StageOptions = {}
+): Promise<void> {
   p.intro('📤 Venfork Stage');
 
-  // Check GitHub CLI authentication
   const isAuthenticated = await checkGhAuth();
   if (!isAuthenticated) {
     throw new AuthenticationError();
@@ -1398,54 +1929,86 @@ export async function stageCommand(branch: string): Promise<void> {
 
   if (!branch) {
     p.log.error('Branch name is required');
-    p.outro('Usage: venfork stage <branch>');
+    p.outro(
+      'Usage: venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>]. Run `venfork help` for the full list of supported options, including `--internal-pr <n>` and `--no-update-existing`.'
+    );
     process.exit(1);
   }
 
+  const createPr = Boolean(options.createPr || options.draft);
+
   const s = p.spinner();
+  const repoDir = process.cwd();
 
   try {
-    // Step 1: Verify branch exists
     s.start('Verifying branch exists');
-    const branchCheck = await $({
-      reject: false,
-    })`git rev-parse --verify ${branch}`;
-    if (branchCheck.exitCode !== 0) {
-      throw new BranchNotFoundError(branch);
-    }
+    const plan = await planStaging(branch, repoDir);
     s.stop('Branch verified');
 
-    // Step 2: Get public fork URL
-    const publicUrlResult = await $({
-      reject: false,
-    })`git remote get-url public`;
-    if (publicUrlResult.exitCode !== 0) {
-      throw new RemoteNotFoundError('public');
+    // Look up the internal PR up-front when --pr is set so the user sees the
+    // translated body in the confirm prompt before anything is published.
+    let internalPr: InternalPrInfo | null = null;
+    let translatedBody = '';
+    let prTitle = '';
+    const baseBranch = options.base ?? plan.upstreamDefaultBranch;
+    if (createPr) {
+      s.start('Looking up internal review PR');
+      const mirrorRepoPath = await findMirrorRepoPath(repoDir);
+      if (mirrorRepoPath) {
+        internalPr = await findInternalPr(
+          mirrorRepoPath,
+          plan.branch,
+          repoDir,
+          options.internalPrNumber
+        );
+      }
+      const payload = await buildUpstreamPrPayload(
+        plan.branch,
+        internalPr,
+        { title: options.title },
+        { defaultBranch: plan.upstreamDefaultBranch, cwd: repoDir }
+      );
+      prTitle = payload.title;
+      translatedBody = payload.body;
+      s.stop(
+        internalPr
+          ? `Internal PR found: ${internalPr.url}`
+          : 'No internal PR found — using synthetic body'
+      );
     }
-    const publicUrl = publicUrlResult.stdout.trim();
-    const publicRepoPath = parseRepoPath(publicUrl);
 
-    // Step 3: Get upstream URL for PR link
-    const upstreamUrlResult = await $({
-      reject: false,
-    })`git remote get-url upstream`;
-    const upstreamUrl = upstreamUrlResult.stdout.trim();
-    const upstreamRepoPath = parseRepoPath(upstreamUrl);
+    const detailLines = [
+      `Branch '${plan.branch}' will be pushed to your public fork.`,
+      'This makes your work visible and ready for PR to upstream.',
+      '',
+      `  From: Private vendor repo (current)`,
+      `  To:   ${plan.publicUrl}`,
+      `  PR:   ${plan.publicRepoPath} → ${plan.upstreamRepoPath}`,
+    ];
+    if (createPr) {
+      detailLines.push(
+        '',
+        `  Upstream PR: ${prTitle}`,
+        `  Base:        ${plan.upstreamRepoPath}@${baseBranch}`,
+        `  Draft:       ${options.draft ? 'yes' : 'no'}`
+      );
+    }
+    p.note(detailLines.join('\n'), 'Staging Details');
 
-    // Step 4: Confirm stage
-    p.note(
-      `Branch '${branch}' will be pushed to your public fork.
-This makes your work visible and ready for PR to upstream.
+    if (createPr) {
+      const previewBody =
+        translatedBody.length > 800
+          ? `${translatedBody.slice(0, 800)}\n…(truncated; full body sent on submit)`
+          : translatedBody;
+      p.note(previewBody || '(empty)', 'Upstream PR body preview');
+    }
 
-  From: Private vendor repo (current)
-  To:   ${publicUrl}
-  PR:   ${publicRepoPath} → ${upstreamRepoPath}`,
-      'Staging Details'
-    );
-
-    const shouldStage = await p.confirm({
-      message: 'Push to public fork?',
+    const shouldStage = await confirmOrAutoYes({
+      message: createPr
+        ? 'Push to public fork and open the upstream PR?'
+        : 'Push to public fork?',
       initialValue: false,
+      allowNonInteractive: createPr,
     });
 
     if (p.isCancel(shouldStage)) {
@@ -1458,51 +2021,617 @@ This makes your work visible and ready for PR to upstream.
       process.exit(0);
     }
 
-    const repoDir = process.cwd();
+    const stagedHead = await executeStagingPush(plan, repoDir, s);
 
-    // Step 5: Detect upstream default branch for staging + PR URL
-    const upstreamDefaultBranch = await getDefaultBranch('upstream');
-    const scheduleEnabled = await isScheduleEnabled(repoDir);
-
-    // Step 6: If schedule is enabled, strip the internal workflow commit before
-    // publishing. Otherwise keep normal direct branch push behavior.
-    if (scheduleEnabled) {
-      await $`git fetch upstream`;
-      await $`git fetch origin`;
-      s.start('Preparing sanitized branch for public staging');
-      const stageHead = await buildPublicStageHeadWithoutWorkflowCommit(
-        branch,
-        upstreamDefaultBranch,
-        repoDir
-      );
-      s.stop('Prepared sanitized branch');
-
-      s.start('Pushing sanitized branch to public fork');
-      if (await remoteBranchExists('public', branch)) {
-        await $`git push public ${stageHead}:refs/heads/${branch} --force-with-lease=refs/heads/${branch}`;
-      } else {
-        await $`git push public ${stageHead}:refs/heads/${branch}`;
+    let upstreamPrUrl: string | undefined;
+    let alreadyExisted = false;
+    if (createPr) {
+      s.start('Opening upstream pull request');
+      try {
+        const result = await createUpstreamPr({
+          upstreamRepoPath: plan.upstreamRepoPath,
+          publicOwner: plan.publicOwner,
+          branch: plan.branch,
+          base: baseBranch,
+          title: prTitle,
+          body: translatedBody,
+          draft: Boolean(options.draft),
+          cwd: repoDir,
+        });
+        upstreamPrUrl = result.url;
+        alreadyExisted = result.alreadyExists;
+        s.stop(
+          alreadyExisted
+            ? `Upstream PR already exists: ${upstreamPrUrl}`
+            : `Upstream PR opened: ${upstreamPrUrl}`
+        );
+      } catch (err) {
+        s.stop('Upstream PR creation failed');
+        const msg = err instanceof Error ? err.message : String(err);
+        p.log.warn(msg);
+        p.log.warn(
+          'Staging succeeded; you can retry the PR manually with `gh pr create`.'
+        );
       }
-      s.stop('Push successful');
-    } else {
-      s.start('Pushing to public fork');
-      await $`git push public ${branch}`;
-      s.stop('Push successful');
+
+      // Refresh the existing upstream PR's body from the (possibly updated)
+      // internal review. Default behaviour; opt out with --no-update-existing
+      // if the user wants the upstream body frozen at first-stage time.
+      if (alreadyExisted && upstreamPrUrl && !options.noUpdateExisting) {
+        s.start('Updating existing upstream PR body');
+        const editResult = await $({
+          cwd: repoDir,
+          reject: false,
+          input: translatedBody,
+        })`gh pr edit ${upstreamPrUrl} --body-file -`;
+        if (editResult.exitCode === 0) {
+          s.stop('Updated upstream PR body');
+        } else {
+          s.stop('Could not update upstream PR body');
+          p.log.warn(
+            editResult.stderr.trim() || `gh pr edit exit ${editResult.exitCode}`
+          );
+        }
+      }
     }
 
-    // Step 7: Show PR creation link
-    const prUrl = `https://github.com/${upstreamRepoPath}/compare/${upstreamDefaultBranch}...${publicRepoPath.split('/')[0]}:${branch}?expand=1`;
+    if (createPr && upstreamPrUrl) {
+      try {
+        await updateVenforkConfig(repoDir, {
+          shippedBranches: {
+            [plan.branch]: {
+              upstreamPrUrl,
+              head: stagedHead,
+              shippedAt: new Date().toISOString(),
+              ...(internalPr ? { internalPrUrl: internalPr.url } : {}),
+            },
+          },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        p.log.warn(`Could not record shippedBranches entry: ${msg}`);
+      }
+    }
 
-    p.note(
-      `Your branch is now on the public fork!\n\nCreate a pull request to upstream:\n  ${prUrl}`,
-      'Next Steps'
-    );
+    // Use the resolved baseBranch (which respects --base) so the compare URL
+    // points at the same base the user asked for, even if --pr wasn't set
+    // or `gh pr create` failed earlier.
+    const prUrl = `https://github.com/${plan.upstreamRepoPath}/compare/${baseBranch}...${plan.publicOwner}:${plan.branch}?expand=1`;
+
+    if (createPr && upstreamPrUrl) {
+      const lines = [`Upstream PR: ${upstreamPrUrl}`];
+      if (internalPr) {
+        lines.push(`Internal review: ${internalPr.url}`);
+      }
+      p.note(lines.join('\n'), 'Next Steps');
+    } else {
+      p.note(
+        `Your branch is now on the public fork!\n\nCreate a pull request to upstream:\n  ${prUrl}\n\n(Tip: re-run with --pr to open it automatically.)`,
+        'Next Steps'
+      );
+    }
 
     p.outro('✨ Stage complete!');
   } catch (error) {
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Stage failed');
+    process.exit(1);
+  }
+}
+
+export interface PullRequestOptions {
+  /** Local + mirror branch name to write the PR's commits to. */
+  branchName?: string;
+  /** When false, only fetch locally; do not push to the mirror. */
+  push?: boolean;
+}
+
+/**
+ * Resolves a `<pr>` argument (bare number or PR URL) to a numeric PR id.
+ * For URL form, also returns the parsed owner/repo so the caller can sanity
+ * check it matches the upstream remote.
+ */
+function resolvePullRequestArg(
+  pr: string,
+  upstreamRepoPath: string
+): { number: number; sourceRepoPath?: string } {
+  const trimmed = pr.trim();
+  if (/^\d+$/.test(trimmed)) {
+    return { number: Number(trimmed) };
+  }
+  const match = trimmed.match(
+    /github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?\/pull\/(\d+)/
+  );
+  if (!match) {
+    throw new Error(
+      `Could not parse PR reference: ${pr}. Expected an integer or a github.com/<owner>/<repo>/pull/<n> URL.`
+    );
+  }
+  const [, sourceRepoPath, num] = match;
+  if (sourceRepoPath !== upstreamRepoPath) {
+    throw new Error(
+      `Refused to use PR URL ${pr}: it points to ${sourceRepoPath}, but the upstream remote is ${upstreamRepoPath}. If this is intentional, pass the PR number directly (\`venfork pull-request ${num}\`).`
+    );
+  }
+  return { number: Number(num), sourceRepoPath };
+}
+
+interface UpstreamPrMeta {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  state: string;
+  baseRefName: string;
+  headRefName: string;
+  author?: { login: string };
+  headRepositoryOwner?: { login: string };
+}
+
+async function fetchUpstreamPrMeta(
+  upstreamRepoPath: string,
+  prNumber: number,
+  cwd: string
+): Promise<UpstreamPrMeta> {
+  const fields =
+    'number,title,body,url,state,baseRefName,headRefName,author,headRepositoryOwner';
+  const result = await $({
+    cwd,
+    reject: false,
+  })`gh pr view ${prNumber} --repo ${upstreamRepoPath} --json ${fields}`;
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Failed to read upstream PR #${prNumber} from ${upstreamRepoPath}: ${result.stderr.trim() || `exit ${result.exitCode}`}`
+    );
+  }
+  return JSON.parse(result.stdout) as UpstreamPrMeta;
+}
+
+/**
+ * Pull-request command: bring an upstream PR's commits into the private mirror
+ * for internal review. Fetches `pull/<n>/head` from the upstream remote onto a
+ * local branch (default `upstream-pr/<n>`), pushes to origin so the team can
+ * see it, and records a `pulledPrs` entry so `venfork sync <branch>` can
+ * later refresh it.
+ */
+export async function pullRequestCommand(
+  pr: string | undefined,
+  options: PullRequestOptions = {}
+): Promise<void> {
+  p.intro('🔀 Venfork Pull Request');
+
+  const isAuthenticated = await checkGhAuth();
+  if (!isAuthenticated) {
+    throw new AuthenticationError();
+  }
+
+  if (!pr) {
+    p.log.error('PR number or URL is required');
+    p.outro(
+      'Usage: venfork pull-request <pr-number-or-url> [--branch-name <override>] [--no-push]'
+    );
+    process.exit(1);
+  }
+
+  const s = p.spinner();
+  const repoDir = process.cwd();
+
+  try {
+    s.start('Resolving upstream remote');
+    const upstreamUrlResult = await $({
+      cwd: repoDir,
+      reject: false,
+    })`git remote get-url upstream`;
+    if (upstreamUrlResult.exitCode !== 0) {
+      throw new RemoteNotFoundError('upstream');
+    }
+    const upstreamRepoPath = parseRepoPath(upstreamUrlResult.stdout.trim());
+    if (!upstreamRepoPath) {
+      throw new Error(
+        `Could not parse upstream remote URL: ${upstreamUrlResult.stdout.trim()}`
+      );
+    }
+    s.stop(`Upstream: ${upstreamRepoPath}`);
+
+    const { number: prNumber } = resolvePullRequestArg(pr, upstreamRepoPath);
+    const localBranch = options.branchName ?? `upstream-pr/${prNumber}`;
+    const push = options.push !== false;
+
+    s.start(`Reading upstream PR #${prNumber} metadata`);
+    const meta = await fetchUpstreamPrMeta(upstreamRepoPath, prNumber, repoDir);
+    s.stop(`Read PR: ${meta.title} (${meta.state})`);
+
+    // Refuse to clobber an existing local branch unless the user opts in via
+    // a custom --branch-name. This prevents stomping on a previous review.
+    const existing = await $({
+      cwd: repoDir,
+      reject: false,
+    })`git rev-parse --verify ${localBranch}`;
+    if (existing.exitCode === 0 && !options.branchName) {
+      throw new Error(
+        `Local branch '${localBranch}' already exists. Pass --branch-name <override> to use a different name, or delete the existing branch first.`
+      );
+    }
+
+    s.start(`Fetching pull/${prNumber}/head from upstream`);
+    const fetchRefspec = `pull/${prNumber}/head:${localBranch}`;
+    const fetchResult = await $({
+      cwd: repoDir,
+      reject: false,
+    })`git fetch upstream ${fetchRefspec}`;
+    if (fetchResult.exitCode !== 0) {
+      throw new Error(
+        `git fetch upstream ${fetchRefspec} failed. This can happen if the PR's source branch was deleted, or if the local branch already exists at a different commit (try deleting or renaming it first). Stderr:\n${fetchResult.stderr.trim()}`
+      );
+    }
+    const headSha = (
+      await $({ cwd: repoDir })`git rev-parse ${localBranch}`
+    ).stdout.trim();
+    s.stop(`Fetched ${headSha.slice(0, 9)} → ${localBranch}`);
+
+    let pushedToMirror = false;
+    if (push) {
+      s.start(`Pushing ${localBranch} to origin`);
+      const pushResult = await $({
+        cwd: repoDir,
+        reject: false,
+      })`git push origin ${localBranch}`;
+      if (pushResult.exitCode !== 0) {
+        s.stop('Push failed');
+        p.log.warn(
+          `Could not push ${localBranch} to origin: ${pushResult.stderr.trim()}`
+        );
+        p.log.warn(
+          'The local branch is still available for review, but no pulledPrs entry was recorded — `venfork sync` will not know how to refresh it until the next successful push.'
+        );
+      } else {
+        s.stop(`Pushed ${localBranch} to origin`);
+        pushedToMirror = true;
+      }
+    }
+
+    if (!pushedToMirror) {
+      // Two paths reach here:
+      // 1. Push failed: warned above, branch is local-only.
+      // 2. --no-push: user asked us not to push; treat the branch as
+      //    local-only too. In both cases the mirror does not have the
+      //    branch, so we skip the pulledPrs record. Otherwise a later
+      //    `venfork sync <branch>` would push the branch to the mirror —
+      //    surprising for --no-push users (who explicitly opted out of
+      //    mirror state) and misleading for the failure case (the mirror
+      //    is out of sync with what we recorded).
+      const reason = push
+        ? 'mirror push failed'
+        : '--no-push set, branch is local-only';
+      p.outro(`✨ Pull request fetched locally (${reason})`);
+      return;
+    }
+
+    try {
+      await updateVenforkConfig(repoDir, {
+        pulledPrs: {
+          [localBranch]: {
+            upstreamPrNumber: prNumber,
+            upstreamPrUrl: meta.url,
+            head: headSha,
+            lastSyncedAt: new Date().toISOString(),
+          },
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      p.log.warn(
+        `Could not record pulledPrs entry: ${msg}. \`venfork sync ${localBranch}\` will fall back to convention-based resolution.`
+      );
+    }
+
+    const bodyPreview =
+      meta.body.length > 600
+        ? `${meta.body.slice(0, 600)}\n…(truncated)`
+        : meta.body || '(empty)';
+    const headRepo = meta.headRepositoryOwner?.login
+      ? `${meta.headRepositoryOwner.login}:${meta.headRefName}`
+      : meta.headRefName;
+    p.note(
+      [
+        `Title:  ${meta.title}`,
+        `Author: ${meta.author?.login ?? '(unknown)'}`,
+        `State:  ${meta.state}`,
+        `Base:   ${meta.baseRefName}`,
+        `Head:   ${headRepo}`,
+        `URL:    ${meta.url}`,
+        '',
+        bodyPreview,
+      ].join('\n'),
+      `Upstream PR #${prNumber}`
+    );
+
+    p.note(
+      [
+        `git checkout ${localBranch}`,
+        `# review locally; open an internal PR on the mirror if you want team review`,
+        `# refresh later with: venfork sync ${localBranch}`,
+      ].join('\n'),
+      'Next Steps'
+    );
+
+    p.outro('✨ Pull request imported!');
+  } catch (error) {
+    s.stop('Error occurred');
+    p.log.error(error instanceof Error ? error.message : String(error));
+    p.outro('❌ Pull request import failed');
+    process.exit(1);
+  }
+}
+
+interface IssueMeta {
+  number: number;
+  url: string;
+  title: string;
+  body: string;
+  state: string;
+  author?: { login: string };
+}
+
+async function readIssue(
+  repoPath: string,
+  number: number,
+  cwd: string
+): Promise<IssueMeta> {
+  const result = await $({
+    cwd,
+    reject: false,
+  })`gh issue view ${number} --repo ${repoPath} --json number,url,title,body,state,author`;
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Failed to read issue #${number} from ${repoPath}: ${result.stderr.trim() || `exit ${result.exitCode}`}`
+    );
+  }
+  return JSON.parse(result.stdout) as IssueMeta;
+}
+
+async function createIssue(args: {
+  repoPath: string;
+  title: string;
+  body: string;
+  cwd: string;
+}): Promise<{ url: string; number: number }> {
+  const result = await $({
+    cwd: args.cwd,
+    reject: false,
+    input: args.body,
+  })`gh issue create --repo ${args.repoPath} --title ${args.title} --body-file -`;
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Failed to create issue on ${args.repoPath}: ${result.stderr.trim() || `exit ${result.exitCode}`}`
+    );
+  }
+  const url = result.stdout.trim().split(/\s+/).pop() ?? '';
+  const numberMatch = url.match(/\/issues\/(\d+)/);
+  if (!numberMatch) {
+    throw new Error(`gh issue create returned an unexpected output: ${url}`);
+  }
+  return { url, number: Number(numberMatch[1]) };
+}
+
+function resolveIssueArg(
+  target: string,
+  expectedRepoPath: string
+): { number: number } {
+  const trimmed = target.trim();
+  if (/^\d+$/.test(trimmed)) {
+    return { number: Number(trimmed) };
+  }
+  const match = trimmed.match(
+    /github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?\/issues\/(\d+)/
+  );
+  if (!match) {
+    throw new Error(
+      `Could not parse issue reference: ${target}. Expected an integer or a github.com/<owner>/<repo>/issues/<n> URL.`
+    );
+  }
+  const [, sourceRepoPath, num] = match;
+  if (sourceRepoPath !== expectedRepoPath) {
+    throw new Error(
+      `Refused to use issue URL ${target}: it points to ${sourceRepoPath}, but the expected repo is ${expectedRepoPath}. If this is intentional, pass the issue number directly.`
+    );
+  }
+  return { number: Number(num) };
+}
+
+/**
+ * Issue command: stage an internal issue to upstream, or pull an upstream
+ * issue into the mirror for internal triage. Body translation uses the same
+ * `<!-- venfork:internal -->...<!-- /venfork:internal -->` markers as
+ * `stage --pr`. No comment sync — the linkage is one-shot.
+ */
+export async function issueCommand(
+  action: 'stage' | 'pull' | undefined,
+  target: string | undefined,
+  options: { title?: string } = {}
+): Promise<void> {
+  p.intro('🐛 Venfork Issue');
+
+  const isAuthenticated = await checkGhAuth();
+  if (!isAuthenticated) {
+    throw new AuthenticationError();
+  }
+
+  if (!action || !target) {
+    p.log.error(
+      'Usage: venfork issue <stage|pull> <number-or-url> [--title <text>]'
+    );
+    p.outro('');
+    process.exit(1);
+  }
+
+  if (action !== 'stage' && action !== 'pull') {
+    p.log.error(
+      `Unknown action '${action}'. Usage: venfork issue <stage|pull> <number-or-url> [--title <text>]`
+    );
+    p.outro('');
+    process.exit(1);
+  }
+
+  const s = p.spinner();
+  const repoDir = process.cwd();
+
+  try {
+    s.start('Resolving remotes');
+    const upstreamUrlResult = await $({
+      cwd: repoDir,
+      reject: false,
+    })`git remote get-url upstream`;
+    if (upstreamUrlResult.exitCode !== 0) {
+      throw new RemoteNotFoundError('upstream');
+    }
+    const upstreamRepoPath = parseRepoPath(upstreamUrlResult.stdout.trim());
+    if (!upstreamRepoPath) {
+      throw new Error(
+        `Could not parse upstream remote URL: ${upstreamUrlResult.stdout.trim()}`
+      );
+    }
+    const mirrorRepoPath = await findMirrorRepoPath(repoDir);
+    if (!mirrorRepoPath) {
+      throw new RemoteNotFoundError('origin');
+    }
+    s.stop(`Mirror: ${mirrorRepoPath} | Upstream: ${upstreamRepoPath}`);
+
+    if (action === 'stage') {
+      const { number: internalNumber } = resolveIssueArg(
+        target,
+        mirrorRepoPath
+      );
+
+      s.start(`Reading internal issue #${internalNumber}`);
+      const internal = await readIssue(mirrorRepoPath, internalNumber, repoDir);
+      s.stop(`Read: ${internal.title}`);
+
+      const translatedBody = translateInternalBody(
+        internal.body,
+        internal.url,
+        'issue'
+      );
+      const upstreamTitle = options.title ?? internal.title;
+
+      p.note(
+        [
+          `Internal: #${internal.number} ${internal.title} (${internal.state})`,
+          `Upstream target: ${upstreamRepoPath}`,
+          '',
+          `Title: ${upstreamTitle}`,
+        ].join('\n'),
+        'Issue Stage'
+      );
+      p.note(translatedBody || '(empty)', 'Upstream issue body preview');
+
+      const ok = await confirmOrAutoYes({
+        message: `Open the issue on ${upstreamRepoPath}?`,
+        initialValue: false,
+        allowNonInteractive: true,
+      });
+      if (p.isCancel(ok) || !ok) {
+        p.outro('Stage cancelled');
+        process.exit(0);
+      }
+
+      s.start('Opening upstream issue');
+      const created = await createIssue({
+        repoPath: upstreamRepoPath,
+        title: upstreamTitle,
+        body: translatedBody,
+        cwd: repoDir,
+      });
+      s.stop(`Upstream issue created: ${created.url}`);
+
+      try {
+        await updateVenforkConfig(repoDir, {
+          shippedIssues: {
+            [String(internalNumber)]: {
+              internalIssueNumber: internalNumber,
+              internalIssueUrl: internal.url,
+              upstreamIssueNumber: created.number,
+              upstreamIssueUrl: created.url,
+              shippedAt: new Date().toISOString(),
+            },
+          },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        p.log.warn(`Could not record shippedIssues entry: ${msg}`);
+      }
+
+      p.outro(`✨ Issue staged: ${created.url}`);
+      return;
+    }
+
+    // action === 'pull'
+    const { number: upstreamNumber } = resolveIssueArg(
+      target,
+      upstreamRepoPath
+    );
+
+    s.start(`Reading upstream issue #${upstreamNumber}`);
+    const upstream = await readIssue(upstreamRepoPath, upstreamNumber, repoDir);
+    s.stop(`Read: ${upstream.title} (${upstream.state})`);
+
+    const internalTitle =
+      options.title ?? `[upstream #${upstream.number}] ${upstream.title}`;
+    const internalBody = `${upstream.body || '(no body provided)'}\n\n> Pulled from upstream issue: ${upstream.url}\n> Author: ${upstream.author?.login ?? '(unknown)'}\n> State: ${upstream.state}`;
+
+    p.note(
+      [
+        `Upstream: #${upstream.number} ${upstream.title} (${upstream.state})`,
+        `Mirror target: ${mirrorRepoPath}`,
+        '',
+        `Title: ${internalTitle}`,
+      ].join('\n'),
+      'Issue Pull'
+    );
+    p.note(internalBody, 'Internal issue body preview');
+
+    const ok = await confirmOrAutoYes({
+      message: `Open the issue on ${mirrorRepoPath}?`,
+      initialValue: false,
+      allowNonInteractive: true,
+    });
+    if (p.isCancel(ok) || !ok) {
+      p.outro('Pull cancelled');
+      process.exit(0);
+    }
+
+    s.start('Opening internal issue');
+    const created = await createIssue({
+      repoPath: mirrorRepoPath,
+      title: internalTitle,
+      body: internalBody,
+      cwd: repoDir,
+    });
+    s.stop(`Internal issue created: ${created.url}`);
+
+    try {
+      await updateVenforkConfig(repoDir, {
+        pulledIssues: {
+          [String(created.number)]: {
+            upstreamIssueNumber: upstreamNumber,
+            upstreamIssueUrl: upstream.url,
+            internalIssueNumber: created.number,
+            internalIssueUrl: created.url,
+            pulledAt: new Date().toISOString(),
+          },
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      p.log.warn(`Could not record pulledIssues entry: ${msg}`);
+    }
+
+    p.outro(`✨ Issue pulled: ${created.url}`);
+  } catch (error) {
+    s.stop('Error occurred');
+    p.log.error(error instanceof Error ? error.message : String(error));
+    p.outro('❌ Issue command failed');
     process.exit(1);
   }
 }
@@ -1557,6 +2686,73 @@ export async function statusCommand(): Promise<void> {
   ];
 
   p.note(statusLines.join('\n'), 'Repository Status');
+
+  // Surface PR/issue linkages from venfork-config (best-effort — quietly skip
+  // if the branch is missing or the read fails).
+  if (isSetupComplete) {
+    try {
+      const cfg = await readVenforkConfigFromRepo(process.cwd());
+      const linkageBlocks: string[] = [];
+
+      const formatDate = (iso: string): string => {
+        try {
+          return new Date(iso).toISOString().slice(0, 10);
+        } catch {
+          return iso;
+        }
+      };
+
+      const ship = cfg?.shippedBranches ?? {};
+      if (Object.keys(ship).length > 0) {
+        const lines = Object.entries(ship)
+          .map(
+            ([branch, entry]) =>
+              `  ${branch} → ${entry.upstreamPrUrl} (${formatDate(entry.shippedAt)})`
+          )
+          .join('\n');
+        linkageBlocks.push(`Shipped branches:\n${lines}`);
+      }
+
+      const pulled = cfg?.pulledPrs ?? {};
+      if (Object.keys(pulled).length > 0) {
+        const lines = Object.entries(pulled)
+          .map(
+            ([branch, entry]) =>
+              `  ${branch} → ${entry.upstreamPrUrl} (last sync ${formatDate(entry.lastSyncedAt)})`
+          )
+          .join('\n');
+        linkageBlocks.push(`Pulled PRs:\n${lines}`);
+      }
+
+      const shippedIssues = cfg?.shippedIssues ?? {};
+      if (Object.keys(shippedIssues).length > 0) {
+        const lines = Object.entries(shippedIssues)
+          .map(
+            ([, entry]) =>
+              `  #${entry.internalIssueNumber} → ${entry.upstreamIssueUrl} (${formatDate(entry.shippedAt)})`
+          )
+          .join('\n');
+        linkageBlocks.push(`Shipped issues:\n${lines}`);
+      }
+
+      const pulledIssues = cfg?.pulledIssues ?? {};
+      if (Object.keys(pulledIssues).length > 0) {
+        const lines = Object.entries(pulledIssues)
+          .map(
+            ([, entry]) =>
+              `  #${entry.internalIssueNumber} ← ${entry.upstreamIssueUrl} (${formatDate(entry.pulledAt)})`
+          )
+          .join('\n');
+        linkageBlocks.push(`Pulled issues:\n${lines}`);
+      }
+
+      if (linkageBlocks.length > 0) {
+        p.note(linkageBlocks.join('\n\n'), 'Linkages');
+      }
+    } catch {
+      // Best-effort; status should never fail because of a config read.
+    }
+  }
 
   // Show appropriate outro
   if (isSetupComplete) {
@@ -1619,10 +2815,28 @@ venfork schedule <status|set <cron>|disable>
   Manage scheduled sync config stored in venfork-config
   Set writes/removes ${SYNC_WORKFLOW_PATH} on the private mirror default branch
 
-venfork stage <branch>
+venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing]
   Push branch to public fork for PR to upstream
   When schedule is enabled, strips internal workflow commit before public push
+  With --pr, also opens the upstream PR using the internal-review PR's body
+    (with <!-- venfork:internal -->...<!-- /venfork:internal --> blocks redacted)
+  Options:
+  • --internal-pr <n>      Pin a specific internal review PR number (skips most-recent-open lookup)
+  • --no-update-existing   Do not update an already-open upstream PR body when staging
   This is when your work becomes visible to the client
+
+venfork pull-request <pr-number-or-url> [--branch-name <name>] [--no-push]
+  Bring a third-party upstream PR into the mirror for internal review
+  Fetches pull/<n>/head from upstream into a new branch (default: upstream-pr/<n>)
+  Pushes the branch to origin so the team can see it
+  Refresh later with: venfork sync <branch>
+
+venfork issue <stage|pull> <number-or-url> [--title <text>]
+  Move issue context between the private mirror and upstream
+  • stage: read internal mirror issue, strip venfork:internal blocks,
+    open the upstream counterpart, record linkage in venfork-config
+  • pull: read upstream issue, open an internal triage issue on the mirror,
+    record linkage. No comment sync — the linkage is one-shot.
 
 venfork workflows <status|allow|block|clear> [workflow-file ...]
   Configure workflow allowlist/blocklist policy in venfork-config`,
@@ -1649,10 +2863,13 @@ git checkout -b feature/new-thing
 git push origin feature/new-thing
 # Still private! Create internal PR for team review
 
-# After team approval, stage for upstream
-venfork stage feature/new-thing
-# NOW visible on public fork
-# Create PR: public fork → upstream`,
+# After team approval, stage for upstream and open the PR in one go
+venfork stage feature/new-thing --pr
+# NOW visible on public fork; upstream PR is opened with your internal review body
+
+# Bring a third-party upstream PR in for internal review
+venfork pull-request 1234
+# Refresh as the contributor pushes updates: venfork sync upstream-pr/1234`,
     'Example Workflow'
   );
 
