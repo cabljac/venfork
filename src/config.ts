@@ -79,6 +79,14 @@ export interface VenforkConfig {
   };
   enabledWorkflows?: string[];
   disabledWorkflows?: string[];
+  /**
+   * Allowlist of mirror-only file paths to carry forward across `venfork sync`.
+   * Each entry is a repo-relative path (no leading `/`, no `..` segments).
+   * On sync, every listed path is read from the previous mirror tip
+   * (`origin/<defaultBranch>`) and re-added to the deterministic "+1 commit"
+   * — unless upstream now contains the same path, in which case upstream wins.
+   */
+  preserve?: string[];
   /** Branch -> upstream PR linkage recorded by `venfork stage --pr`. */
   shippedBranches?: Record<string, ShippedBranch>;
   /** Branch -> upstream PR tracking recorded by `venfork pull-request`. */
@@ -106,6 +114,7 @@ export type VenforkConfigPatch = Omit<
   Partial<VenforkConfig>,
   | 'enabledWorkflows'
   | 'disabledWorkflows'
+  | 'preserve'
   | 'shippedBranches'
   | 'pulledPrs'
   | 'shippedIssues'
@@ -113,6 +122,7 @@ export type VenforkConfigPatch = Omit<
 > & {
   enabledWorkflows?: string[] | null;
   disabledWorkflows?: string[] | null;
+  preserve?: string[] | null;
   /**
    * Shallow merge into the existing map. Pass `null` for an entry to delete
    * just that branch, or `null` for the whole field to clear the map.
@@ -329,6 +339,28 @@ function normalizePulledIssue(value: unknown): PulledIssue | null {
   };
 }
 
+/**
+ * Validates a single `preserve` entry: must be a non-empty repo-relative path
+ * with no `..` segments, leading slash, NUL byte, or Windows drive prefix.
+ * Returns the cleaned string, or null if the entry is unusable.
+ */
+export function normalizePreservePath(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.includes('\0')) return null;
+  if (trimmed.startsWith('/')) return null;
+  if (trimmed.includes('\\')) return null;
+  if (/^[A-Za-z]:/.test(trimmed)) return null;
+  const segments = trimmed.split('/');
+  for (const seg of segments) {
+    if (seg === '' || seg === '.' || seg === '..') {
+      return null;
+    }
+  }
+  return trimmed;
+}
+
 function normalizeBranchMap<T>(
   source: Record<string, unknown> | undefined,
   perEntry: (value: unknown) => T | null
@@ -412,6 +444,22 @@ function normalizeConfig(config: VenforkConfig): VenforkConfig | null {
       normalized.disabledWorkflows = cleaned;
     } else {
       delete normalized.disabledWorkflows;
+    }
+  }
+
+  if (normalized.preserve) {
+    const cleaned = Array.from(
+      new Set(
+        normalized.preserve
+          .map((value) => normalizePreservePath(value))
+          .filter((value): value is string => value !== null)
+          .sort()
+      )
+    );
+    if (cleaned.length > 0) {
+      normalized.preserve = cleaned;
+    } else {
+      delete normalized.preserve;
     }
   }
 
@@ -583,6 +631,7 @@ function applyPatchAndNormalize(
   const {
     enabledWorkflows: _enabledWorkflowsPatch,
     disabledWorkflows: _disabledWorkflowsPatch,
+    preserve: _preservePatch,
     shippedBranches: _shippedBranchesPatch,
     pulledPrs: _pulledPrsPatch,
     shippedIssues: _shippedIssuesPatch,
@@ -611,6 +660,12 @@ function applyPatchAndNormalize(
     delete merged.disabledWorkflows;
   } else if (patch.disabledWorkflows !== undefined) {
     merged.disabledWorkflows = patch.disabledWorkflows;
+  }
+
+  if (patch.preserve === null) {
+    delete merged.preserve;
+  } else if (patch.preserve !== undefined) {
+    merged.preserve = patch.preserve;
   }
 
   if (patch.shippedBranches === null) {

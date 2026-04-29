@@ -5,6 +5,7 @@ import { parseCloneCliArgs } from './clone-args.js';
 import {
   cloneCommand,
   issueCommand,
+  preserveCommand,
   pullRequestCommand,
   scheduleCommand,
   setupCommand,
@@ -15,6 +16,7 @@ import {
   workflowsCommand,
 } from './commands.js';
 import { parseIssueCliArgs } from './issue-args.js';
+import { parsePreserveCliArgs } from './preserve-args.js';
 import { parsePullRequestCliArgs } from './pull-request-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
 import { parseStageCliArgs } from './stage-args.js';
@@ -81,6 +83,11 @@ async function main(): Promise<void> {
     case 'workflows': {
       const parsed = parseWorkflowsCliArgs(args.slice(1));
       await workflowsCommand(parsed.action, parsed.workflows);
+      break;
+    }
+    case 'preserve': {
+      const parsed = parsePreserveCliArgs(args.slice(1));
+      await preserveCommand(parsed.action, parsed.paths);
       break;
     }
     case 'pull-request': {

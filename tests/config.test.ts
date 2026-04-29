@@ -161,6 +161,59 @@ describe('updateVenforkConfig', () => {
     );
   });
 
+  test('stores normalized preserve allowlist and round-trips through write', async () => {
+    const updated = await updateVenforkConfig('/tmp/repo', {
+      preserve: [
+        '  .github/workflows/caller.yml ',
+        'docs/MIRROR.md',
+        '.github/workflows/caller.yml',
+      ],
+    });
+
+    expect(updated.preserve).toEqual([
+      '.github/workflows/caller.yml',
+      'docs/MIRROR.md',
+    ]);
+    expect(writeFileCalls.length).toBeGreaterThan(0);
+    expect(writeFileCalls[writeFileCalls.length - 1].content).toContain(
+      '"preserve"'
+    );
+  });
+
+  test('clears preserve list when patch sets it to null', async () => {
+    mockResponses.set(
+      'git show FETCH_HEAD:.venfork/config.json',
+      mockReadResponse({
+        ...baseConfig,
+        preserve: ['.github/workflows/caller.yml'],
+      })
+    );
+
+    const updated = await updateVenforkConfig('/tmp/repo', {
+      preserve: null,
+    });
+
+    expect(updated.preserve).toBeUndefined();
+    expect(writeFileCalls[writeFileCalls.length - 1].content).not.toContain(
+      '"preserve"'
+    );
+  });
+
+  test('drops invalid preserve paths during normalize', async () => {
+    const updated = await updateVenforkConfig('/tmp/repo', {
+      preserve: [
+        '/abs/path',
+        '../escape',
+        'foo/../bar',
+        '.github/workflows/ok.yml',
+        '',
+      ],
+    });
+
+    // Only the well-formed relative path survives.
+    expect(updated.preserve).toEqual(['.github/workflows/ok.yml']);
+  });
+
   test('records and merges shippedBranches entries', async () => {
     // First ship: insert one entry.
     const first = await updateVenforkConfig('/tmp/repo', {
