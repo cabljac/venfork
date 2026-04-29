@@ -105,7 +105,7 @@ venfork sync upstream-pr/1234
 
 ## Commands
 
-### `venfork setup <upstream> [name] [--org <organization>] [--fork-name <repo>]`
+### `venfork setup <upstream> [name] [--org <organization>] [--fork-name <repo>] [--no-public]`
 
 Creates the complete vendor workflow setup:
 
@@ -113,13 +113,15 @@ Creates the complete vendor workflow setup:
 
 **`--fork-name`** sets the **public fork’s repository name** under your chosen owner/org (passed through to `gh repo fork --fork-name`). Use this when **upstream already lives under the same org** you pass to `--org`: GitHub cannot create a second repo with the same name, so the fork must use a different name (e.g. `my-lib-public` while upstream is `my-lib`).
 
+**`--no-public`** skips the public-fork hop entirely. Only `origin` (private mirror) and `upstream` are configured; `venfork stage` later pushes branches **directly to upstream** and `--pr` opens an intra-upstream PR. Use this when you **own the upstream** repo (no client to hide work from) — it removes a redundant fork-and-stage round-trip. Mutually exclusive with `--fork-name`.
+
 **What it creates:**
 - **Private mirror** (`yourname/project-private` or `org/project-private`) - For internal work
-- **Public fork** (`yourname/project` or `org/project`, or the name from **`--fork-name`**) - For staging to upstream
-- **Config branch** (`venfork-config`) - Stores remote URLs for easy team cloning
-- **Local clone** with three remotes configured:
+- **Public fork** (`yourname/project` or `org/project`, or the name from **`--fork-name`**) - For staging to upstream *(skipped with `--no-public`)*
+- **Config branch** (`venfork-config`) - Stores remote URLs (and `mode: 'no-public'` when applicable) for easy team cloning
+- **Local clone** with remotes configured:
   - `origin` → private mirror (default push/pull)
-  - `public` → public fork (for staging)
+  - `public` → public fork (for staging) *(omitted with `--no-public`)*
   - `upstream` → original repo (read-only, push disabled)
 
 **Arguments:**
@@ -127,6 +129,7 @@ Creates the complete vendor workflow setup:
 - `name` - (Optional) Name for private mirror repo (default: `{repo}-private`)
 - `--org <organization>` - (Optional) Create repos under organization instead of personal account
 - `--fork-name <repo>` - (Optional) Public fork repo name under that org/user (default: same basename as upstream)
+- `--no-public` - (Optional) Skip the public-fork hop; stage pushes directly to upstream
 
 **Examples:**
 ```bash
@@ -152,6 +155,11 @@ venfork setup my-org/foo my-foo-private --org my-org --fork-name foo-public
 
 # Shorthand also works with --org + --fork-name (equivalent to git@github.com:firebase/extensions.git)
 venfork setup firebase/extensions firebase-extensions-private --org invertase --fork-name firebase-extensions
+
+# Upstream is already in your org and there is no public-vs-private audience to maintain
+# — skip the fork hop entirely. `stage` will push directly to my-org/foo and open an intra-repo PR.
+venfork setup my-org/foo my-foo-private --org my-org --no-public
+# Creates: my-org/my-foo-private (private), upstream = my-org/foo. No public fork.
 ```
 
 **Re-running setup (repos already on GitHub):** Run the same command again if you need a fresh local clone, remote fixes, or an updated `venfork-config` branch. Venfork uses `gh repo view` to detect a public fork or private mirror that already exists when `gh repo fork` or `gh repo create` fails, then:
@@ -164,7 +172,7 @@ venfork setup firebase/extensions firebase-extensions-private --org invertase --
 
 Pure failures (for example name taken by a **different** repo) still abort setup. If recovery sync stops due to divergent default branches, fix or move those commits, then run **`venfork sync`** again from inside the private mirror.
 
-### `venfork clone <vendor-repo>`
+### `venfork clone <vendor-repo> [--no-public] [--upstream <url>]`
 
 Clone an existing vendor setup and automatically configure all remotes.
 
@@ -172,12 +180,16 @@ Clone an existing vendor setup and automatically configure all remotes.
 
 **What it does:**
 - Clones the private mirror repository
-- **Reads venfork-config branch** for public fork and upstream URLs (if available)
-- Falls back to auto-detection:
+- **Reads venfork-config branch** for layout (`mode`) and URLs (if available)
+- Falls back to auto-detection when the config branch is absent:
   - Public fork (by stripping `-private` suffix)
   - Upstream repository (from public fork's parent)
-- Configures all three remotes (origin, public, upstream)
+- Configures the appropriate remotes (origin/upstream — plus public in standard mode)
 - Disables push to upstream (read-only)
+
+**Options** (only meaningful for **legacy mirrors** without a `venfork-config` branch — when config is present it's authoritative and the flags will error on conflict):
+- `--no-public` - Declare a no-public layout (origin + upstream only). Use when the original setup was created with `venfork setup --no-public` but the config branch is missing.
+- `--upstream <url>` - Provide the upstream URL explicitly. Useful with `--no-public` (no public fork to derive it from) or to skip the auto-detect prompt.
 
 **Use this when:**
 - A teammate has already run `venfork setup`

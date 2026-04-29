@@ -12,6 +12,7 @@ describe('parseSetupCliArgs', () => {
       privateMirrorName: 'b-private',
       organization: undefined,
       publicForkRepoName: undefined,
+      noPublic: false,
     });
   });
 
@@ -23,6 +24,7 @@ describe('parseSetupCliArgs', () => {
       privateMirrorName: 'lib-vendor',
       organization: 'acme',
       publicForkRepoName: undefined,
+      noPublic: false,
     });
   });
 
@@ -32,6 +34,7 @@ describe('parseSetupCliArgs', () => {
       privateMirrorName: 'r-priv',
       organization: 'corp',
       publicForkRepoName: undefined,
+      noPublic: false,
     });
   });
 
@@ -50,6 +53,7 @@ describe('parseSetupCliArgs', () => {
       privateMirrorName: 'p-private',
       organization: 'o',
       publicForkRepoName: 'p-public',
+      noPublic: false,
     });
 
     expect(
@@ -59,6 +63,7 @@ describe('parseSetupCliArgs', () => {
       privateMirrorName: 'priv',
       organization: undefined,
       publicForkRepoName: 'other-fork',
+      noPublic: false,
     });
   });
 
@@ -69,6 +74,7 @@ describe('parseSetupCliArgs', () => {
       privateMirrorName: undefined,
       organization: 'from-env',
       publicForkRepoName: undefined,
+      noPublic: false,
     });
   });
 
@@ -79,6 +85,7 @@ describe('parseSetupCliArgs', () => {
       privateMirrorName: undefined,
       organization: 'flag',
       publicForkRepoName: undefined,
+      noPublic: false,
     });
   });
 
@@ -104,5 +111,36 @@ describe('parseSetupCliArgs', () => {
     expect(() =>
       parseSetupCliArgs(['https://github.com/a/b', '--fork-name='])
     ).toThrow('--fork-name requires a value');
+  });
+
+  test('--no-public sets noPublic flag', () => {
+    expect(parseSetupCliArgs(['a/b', 'b-private', '--no-public'])).toEqual({
+      upstreamUrl: 'a/b',
+      privateMirrorName: 'b-private',
+      organization: undefined,
+      publicForkRepoName: undefined,
+      noPublic: true,
+    });
+  });
+
+  test('--no-public + --fork-name throws (incompatible)', () => {
+    expect(() =>
+      parseSetupCliArgs([
+        'a/b',
+        'b-private',
+        '--no-public',
+        '--fork-name',
+        'foo',
+      ])
+    ).toThrow(/no-public.*cannot be combined.*fork-name/i);
+  });
+
+  test('--no-public coexists with the positional private mirror name', () => {
+    // Positional arg #2 is `privateMirrorName`, not a fork name — only
+    // --fork-name (or --fork-name=) sets `publicForkRepoName`. So
+    // --no-public + a private mirror name must NOT throw.
+    expect(
+      parseSetupCliArgs(['a/b', 'b-private', '--no-public']).noPublic
+    ).toBe(true);
   });
 });

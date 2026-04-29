@@ -260,6 +260,7 @@ async function applyScheduledWorkflowCommit(
   cron: string,
   enabledWorkflows: string[],
   disabledWorkflows: string[],
+  mode: 'standard' | 'no-public',
   cwd?: string
 ): Promise<void> {
   const repoDir = cwd ?? process.cwd();
@@ -278,7 +279,7 @@ async function applyScheduledWorkflowCommit(
     });
     await writeFile(
       path.join(tempDir, SYNC_WORKFLOW_PATH),
-      generateSyncWorkflow(cron)
+      generateSyncWorkflow(cron, mode)
     );
     await $({ cwd: tempDir })`git add ${SYNC_WORKFLOW_PATH}`;
 
@@ -505,7 +506,7 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
 
 async function ensureVenforkRemotes(
   cwd: string,
-  publicUrl: string,
+  publicUrl: string | undefined,
   upstreamUrl: string
 ): Promise<void> {
   const setOrAdd = async (name: string, fetchUrl: string) => {
@@ -520,7 +521,19 @@ async function ensureVenforkRemotes(
     }
   };
 
-  await setOrAdd('public', publicUrl);
+  if (publicUrl) {
+    await setOrAdd('public', publicUrl);
+  } else {
+    // No-public mode: remove a stale `public` remote left over from a prior
+    // standard-mode setup so the local layout matches the recorded config.
+    const existing = await $({
+      cwd,
+      reject: false,
+    })`git remote get-url public`;
+    if (existing.exitCode === 0) {
+      await $({ cwd })`git remote remove public`;
+    }
+  }
   await setOrAdd('upstream', upstreamUrl);
   await $({ cwd })`git remote set-url --push upstream DISABLE`;
 }
@@ -529,13 +542,21 @@ async function ensureVenforkRemotes(
  * Setup command: Create private mirror and public fork
  *
  * @param publicForkRepoName - Optional GitHub repo name for the public fork under `owner` (see `gh repo fork --fork-name`). Defaults to the upstream repo basename. Use when the fork must differ (e.g. same org as upstream).
+ * @param options.noPublic - Skip the public-fork hop entirely. Only `origin` (private mirror) and `upstream` are configured; `stage` later pushes branches directly to `upstream`. Mutually exclusive with `publicForkRepoName`.
  */
 export async function setupCommand(
   upstreamUrl?: string,
   privateMirrorName?: string,
   organization?: string,
-  publicForkRepoName?: string
+  publicForkRepoName?: string,
+  options: { noPublic?: boolean } = {}
 ): Promise<void> {
+  const noPublic = options.noPublic === true;
+  if (noPublic && publicForkRepoName?.trim()) {
+    throw new Error(
+      '--no-public cannot be combined with a public fork name: --no-public skips creating a public fork.'
+    );
+  }
   p.intro('🔧 Venfork Setup');
 
   // Check GitHub CLI authentication
@@ -692,54 +713,58 @@ export async function setupCommand(
       ? `${organization}/${config.privateMirrorName}`
       : `${owner}/${config.privateMirrorName}`;
     const privateCloneUrl = `git@github.com:${owner}/${config.privateMirrorName}.git`;
-    const publicForkUrl = `git@github.com:${owner}/${publicForkName}.git`;
+    const publicForkUrl = noPublic
+      ? undefined
+      : `git@github.com:${owner}/${publicForkName}.git`;
 
-    // Step 1: Create public fork (or accept an existing fork under this owner)
-    s.start('Creating public fork of upstream repository');
-    const forkResult = organization
-      ? useForkNameFlag
-        ? await $({
-            reject: false,
-          })`gh repo fork ${upstreamRepoPath} --clone=false --org ${organization} --fork-name ${publicForkName}`
-        : await $({
-            reject: false,
-          })`gh repo fork ${upstreamRepoPath} --clone=false --org ${organization}`
-      : useForkNameFlag
-        ? await $({
-            reject: false,
-          })`gh repo fork ${upstreamRepoPath} --clone=false --fork-name ${publicForkName}`
-        : await $({
-            reject: false,
-          })`gh repo fork ${upstreamRepoPath} --clone=false`;
-
+    // Step 1: Create public fork (or accept an existing fork under this owner) — skipped in --no-public mode
     let forkPreexisted = false;
-    if (forkResult.exitCode !== 0) {
-      if (publicForkFullName === upstreamRepoPath && !useForkNameFlag) {
-        throw new Error(
-          `The upstream repo is already under ${owner}. Use --fork-name to give the public fork a different name.`
+    if (!noPublic) {
+      s.start('Creating public fork of upstream repository');
+      const forkResult = organization
+        ? useForkNameFlag
+          ? await $({
+              reject: false,
+            })`gh repo fork ${upstreamRepoPath} --clone=false --org ${organization} --fork-name ${publicForkName}`
+          : await $({
+              reject: false,
+            })`gh repo fork ${upstreamRepoPath} --clone=false --org ${organization}`
+        : useForkNameFlag
+          ? await $({
+              reject: false,
+            })`gh repo fork ${upstreamRepoPath} --clone=false --fork-name ${publicForkName}`
+          : await $({
+              reject: false,
+            })`gh repo fork ${upstreamRepoPath} --clone=false`;
+
+      if (forkResult.exitCode !== 0) {
+        if (publicForkFullName === upstreamRepoPath && !useForkNameFlag) {
+          throw new Error(
+            `The upstream repo is already under ${owner}. Use --fork-name to give the public fork a different name, or pass --no-public to skip the public fork hop entirely.`
+          );
+        }
+        const exists = await ghRepoExists(publicForkFullName);
+        if (!exists) {
+          throw new Error(
+            forkResult.stderr.trim() ||
+              forkResult.stdout.trim() ||
+              'gh repo fork failed'
+          );
+        }
+        const isExpectedFork = await ghRepoIsForkOf(
+          publicForkFullName,
+          upstreamRepoPath
         );
+        if (!isExpectedFork) {
+          throw new Error(
+            `Cannot reuse ${publicForkFullName} as public fork: it is not a fork of ${upstreamRepoPath}. Choose a different --fork-name.`
+          );
+        }
+        forkPreexisted = true;
+        s.stop('Public fork already exists');
+      } else {
+        s.stop('Public fork created');
       }
-      const exists = await ghRepoExists(publicForkFullName);
-      if (!exists) {
-        throw new Error(
-          forkResult.stderr.trim() ||
-            forkResult.stdout.trim() ||
-            'gh repo fork failed'
-        );
-      }
-      const isExpectedFork = await ghRepoIsForkOf(
-        publicForkFullName,
-        upstreamRepoPath
-      );
-      if (!isExpectedFork) {
-        throw new Error(
-          `Cannot reuse ${publicForkFullName} as public fork: it is not a fork of ${upstreamRepoPath}. Choose a different --fork-name.`
-        );
-      }
-      forkPreexisted = true;
-      s.stop('Public fork already exists');
-    } else {
-      s.stop('Public fork created');
     }
 
     // Step 2: Create private mirror (or accept an existing repo)
@@ -838,7 +863,12 @@ export async function setupCommand(
 
     // Step 8: Venfork config branch
     s.start('Creating venfork configuration');
-    await createConfigBranch(repoDir, publicForkUrl, config.upstreamUrl);
+    await createConfigBranch(
+      repoDir,
+      noPublic ? null : (publicForkUrl ?? null),
+      config.upstreamUrl,
+      noPublic ? 'no-public' : 'standard'
+    );
     s.stop('Venfork configuration created');
 
     const recovered = forkPreexisted || mirrorPreexisted;
@@ -857,7 +887,10 @@ export async function setupCommand(
     p.note(remotesText.trim(), 'Git Remote Configuration');
 
     p.note(
-      `Private Mirror: https://github.com/${privateMirrorGhPath} (for internal work)
+      noPublic
+        ? `Private Mirror: https://github.com/${privateMirrorGhPath} (for internal work)
+Upstream: ${config.upstreamUrl} (read-only; stage pushes branches here directly)`
+        : `Private Mirror: https://github.com/${privateMirrorGhPath} (for internal work)
 Public Fork: https://github.com/${publicForkFullName} (for staging to upstream)
 Upstream: ${config.upstreamUrl} (read-only)`,
       recovered ? 'Repositories (existing)' : 'Repositories Created'
@@ -887,7 +920,10 @@ Upstream: ${config.upstreamUrl} (read-only)`,
 /**
  * Clone command: Clone vendor repository and configure all remotes
  */
-export async function cloneCommand(vendorRepoUrl?: string): Promise<void> {
+export async function cloneCommand(
+  vendorRepoUrl?: string,
+  options: { noPublic?: boolean; upstreamUrl?: string } = {}
+): Promise<void> {
   p.intro('🔧 Venfork Clone');
 
   // Validate vendor repo URL provided
@@ -943,91 +979,150 @@ export async function cloneCommand(vendorRepoUrl?: string): Promise<void> {
     s.start('Fetching venfork configuration');
     const config = await fetchVenforkConfig(vendorCloneUrl);
 
-    let publicForkUrl: string;
+    let publicForkUrl: string | undefined;
     let upstreamUrl: string;
+    let noPublic: boolean;
 
     if (config) {
-      // Config found! Use the URLs from config
+      // Config branch is authoritative when present. Reject inconsistent
+      // user flags up front so the user notices the contradiction.
+      const configMode: 'standard' | 'no-public' =
+        config.mode === 'no-public' ? 'no-public' : 'standard';
+      if (options.noPublic && configMode === 'standard') {
+        throw new Error(
+          'Refusing to clone with --no-public: the venfork-config branch records mode=standard. To convert an existing setup, re-run `venfork setup` instead.'
+        );
+      }
+      if (options.upstreamUrl && options.upstreamUrl !== config.upstreamUrl) {
+        throw new Error(
+          `Refusing to override venfork-config: --upstream='${options.upstreamUrl}' but config records upstreamUrl='${config.upstreamUrl}'.`
+        );
+      }
+
+      noPublic = configMode === 'no-public';
       publicForkUrl = config.publicForkUrl;
       upstreamUrl = config.upstreamUrl;
 
-      const publicRepoPath = parseRepoPath(publicForkUrl);
       const upstreamRepoPath = parseRepoPath(upstreamUrl);
 
       s.stop('Configuration found');
       p.log.success(`✓ Using config from venfork-config branch`);
-      p.note(
-        `Public fork: ${publicRepoPath}\nUpstream: ${upstreamRepoPath}`,
-        'Configuration'
-      );
+      if (noPublic) {
+        p.note(
+          `Mode: no-public\nUpstream: ${upstreamRepoPath}`,
+          'Configuration'
+        );
+      } else {
+        const publicRepoPath = publicForkUrl
+          ? parseRepoPath(publicForkUrl)
+          : '(missing)';
+        p.note(
+          `Public fork: ${publicRepoPath}\nUpstream: ${upstreamRepoPath}`,
+          'Configuration'
+        );
+      }
     } else {
-      // No config found, fall back to auto-detection
-      s.stop('No configuration found, using auto-detection');
+      // No config branch (legacy mirror). Fall back to auto-detection,
+      // honoring `--no-public` / `--upstream` flags as the explicit override.
+      noPublic = options.noPublic === true;
+      s.stop(
+        noPublic
+          ? 'No configuration found, using --no-public layout'
+          : 'No configuration found, using auto-detection'
+      );
 
-      // Step 3a: Auto-detect public fork
-      s.start('Detecting public fork');
+      if (noPublic) {
+        // No public fork to look up; only resolve upstream.
+        publicForkUrl = undefined;
+        if (options.upstreamUrl) {
+          upstreamUrl = options.upstreamUrl;
+        } else {
+          const response = await p.text({
+            message:
+              'Upstream URL? (no venfork-config branch was found, so it cannot be auto-detected)',
+            placeholder: 'git@github.com:owner/repo.git',
+          });
+          if (p.isCancel(response) || !(response as string).trim()) {
+            p.outro('❌ Clone cancelled');
+            process.exit(1);
+          }
+          upstreamUrl = (response as string).trim();
+        }
+      } else {
+        // Step 3a: Auto-detect public fork
+        s.start('Detecting public fork');
 
-      // Try to strip -private suffix
-      let publicRepoName = vendorRepoName;
-      if (vendorRepoName.endsWith('-private')) {
-        publicRepoName = vendorRepoName.replace(/-private$/, '');
-      }
-
-      // Verify public fork exists
-      try {
-        await $`gh repo view ${owner}/${publicRepoName}`;
-        publicForkUrl = `git@github.com:${owner}/${publicRepoName}.git`;
-        s.stop(`Found public fork: ${owner}/${publicRepoName}`);
-      } catch {
-        s.stop('Public fork not found');
-
-        p.log.warn('⚠️  Could not auto-detect public fork.');
-        p.note(`Tried: ${owner}/${publicRepoName}`, 'Detection Failed');
-
-        const response = await p.text({
-          message: 'Please provide the public fork URL:',
-          placeholder: 'git@github.com:owner/repo.git',
-        });
-
-        if (p.isCancel(response)) {
-          p.outro('❌ Clone cancelled');
-          process.exit(1);
+        // Try to strip -private suffix
+        let publicRepoName = vendorRepoName;
+        if (vendorRepoName.endsWith('-private')) {
+          publicRepoName = vendorRepoName.replace(/-private$/, '');
         }
 
-        publicForkUrl = response as string;
-        publicRepoName = parseRepoName(publicForkUrl);
-      }
+        // Verify public fork exists
+        try {
+          await $`gh repo view ${owner}/${publicRepoName}`;
+          publicForkUrl = `git@github.com:${owner}/${publicRepoName}.git`;
+          s.stop(`Found public fork: ${owner}/${publicRepoName}`);
+        } catch {
+          s.stop('Public fork not found');
 
-      // Step 3b: Auto-detect upstream from public fork's parent
-      s.start('Detecting upstream repository');
+          p.log.warn('⚠️  Could not auto-detect public fork.');
+          p.note(
+            `Tried: ${owner}/${publicRepoName}\n\nTip: if this mirror has no public fork, re-run with --no-public --upstream <url>.`,
+            'Detection Failed'
+          );
 
-      try {
-        const result =
-          await $`gh repo view ${owner}/${publicRepoName} --json parent --jq '.parent.url'`;
-        upstreamUrl = result.stdout.trim();
+          const response = await p.text({
+            message: 'Please provide the public fork URL:',
+            placeholder: 'git@github.com:owner/repo.git',
+          });
 
-        if (!upstreamUrl || upstreamUrl === 'null') {
-          throw new Error('No parent found');
+          if (p.isCancel(response)) {
+            p.outro('❌ Clone cancelled');
+            process.exit(1);
+          }
+
+          publicForkUrl = response as string;
+          publicRepoName = parseRepoName(publicForkUrl);
         }
 
-        const upstreamPath = parseRepoPath(upstreamUrl);
-        s.stop(`Found upstream: ${upstreamPath}`);
-      } catch {
-        s.stop('Upstream not found');
+        // Step 3b: Auto-detect upstream from public fork's parent — or use
+        // --upstream if the user supplied it explicitly.
+        s.start('Detecting upstream repository');
 
-        p.log.warn('⚠️  Public fork has no parent repository.');
+        if (options.upstreamUrl) {
+          upstreamUrl = options.upstreamUrl;
+          s.stop(`Using --upstream: ${parseRepoPath(upstreamUrl)}`);
+        } else {
+          try {
+            const result =
+              await $`gh repo view ${owner}/${publicRepoName} --json parent --jq '.parent.url'`;
+            upstreamUrl = result.stdout.trim();
 
-        const response = await p.text({
-          message: 'Please provide the upstream URL:',
-          placeholder: 'git@github.com:original/repo.git',
-        });
+            if (!upstreamUrl || upstreamUrl === 'null') {
+              throw new Error('No parent found');
+            }
 
-        if (p.isCancel(response)) {
-          p.outro('❌ Clone cancelled');
-          process.exit(1);
+            const upstreamPath = parseRepoPath(upstreamUrl);
+            s.stop(`Found upstream: ${upstreamPath}`);
+          } catch {
+            s.stop('Upstream not found');
+
+            p.log.warn('⚠️  Public fork has no parent repository.');
+
+            const response = await p.text({
+              message: 'Please provide the upstream URL:',
+              placeholder: 'git@github.com:original/repo.git',
+            });
+
+            if (p.isCancel(response)) {
+              p.outro('❌ Clone cancelled');
+              process.exit(1);
+            }
+
+            upstreamUrl = response as string;
+          }
         }
-
-        upstreamUrl = response as string;
       }
     }
 
@@ -1036,8 +1131,12 @@ export async function cloneCommand(vendorRepoUrl?: string): Promise<void> {
 
     // origin is already configured from clone
 
-    // Add public fork remote
-    await $({ cwd: vendorRepoName })`git remote add public ${publicForkUrl}`;
+    // Add public fork remote (skipped in no-public mode)
+    if (!noPublic && publicForkUrl) {
+      await $({
+        cwd: vendorRepoName,
+      })`git remote add public ${publicForkUrl}`;
+    }
 
     // Add upstream remote (with push disabled)
     await $({ cwd: vendorRepoName })`git remote add upstream ${upstreamUrl}`;
@@ -1195,17 +1294,21 @@ export async function syncCommand(
       }
     }
 
+    const config = await readVenforkConfigFromRepo(repoDir);
+    const noPublic = config?.mode === 'no-public';
+
     // Step 1: Fetch from upstream
     s.start('Fetching from upstream');
     await $(cwdOpt)`git fetch upstream`;
     await $(cwdOpt)`git fetch origin`;
-    await $(cwdOpt)`git fetch public`;
+    if (!noPublic) {
+      await $(cwdOpt)`git fetch public`;
+    }
     s.stop('Fetched from all remotes');
 
     // Step 2: Detect default branch if not specified
     const defaultBranch =
       targetBranch || (await getDefaultBranch('upstream', options?.cwd));
-    const config = await readVenforkConfigFromRepo(repoDir);
     const scheduleConfig = config?.schedule;
     const enabledWorkflows = config?.enabledWorkflows ?? [];
     const disabledWorkflows = config?.disabledWorkflows ?? [];
@@ -1237,7 +1340,7 @@ export async function syncCommand(
     };
 
     const originDivergence = await checkDivergence('origin');
-    const publicDivergence = await checkDivergence('public');
+    const publicDivergence = noPublic ? 0 : await checkDivergence('public');
 
     s.stop('Checked for divergence');
 
@@ -1273,17 +1376,23 @@ To force sync anyway: git push origin upstream/${defaultBranch}:refs/heads/${def
       process.exit(1);
     }
 
-    // Step 5: Push upstream default branch to origin and public
-    s.start(`Syncing ${defaultBranch} to origin and public`);
+    // Step 5: Push upstream default branch to origin (and public, in standard mode)
+    s.start(
+      noPublic
+        ? `Syncing ${defaultBranch} to origin`
+        : `Syncing ${defaultBranch} to origin and public`
+    );
 
     await $(
       cwdOpt
     )`git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} --force-with-lease`;
-    await $(
-      cwdOpt
-    )`git push public upstream/${defaultBranch}:refs/heads/${defaultBranch} --force-with-lease`;
+    if (!noPublic) {
+      await $(
+        cwdOpt
+      )`git push public upstream/${defaultBranch}:refs/heads/${defaultBranch} --force-with-lease`;
+    }
 
-    s.stop('Synced to all remotes');
+    s.stop(noPublic ? 'Synced to origin' : 'Synced to all remotes');
 
     // Step 6: Enforce mirror "+1 commit" model for scheduled sync workflow.
     // Scheduling config lives on `venfork-config`; when enabled we re-stamp
@@ -1295,6 +1404,7 @@ To force sync anyway: git push origin upstream/${defaultBranch}:refs/heads/${def
         scheduleConfig.cron,
         enabledWorkflows,
         disabledWorkflows,
+        noPublic ? 'no-public' : 'standard',
         options?.cwd
       );
       s.stop('Scheduled workflow commit normalized');
@@ -1302,7 +1412,9 @@ To force sync anyway: git push origin upstream/${defaultBranch}:refs/heads/${def
 
     if (!quiet) {
       p.outro(
-        `✨ Sync complete! origin/${defaultBranch} and public/${defaultBranch} are now up to date with upstream/${defaultBranch}`
+        noPublic
+          ? `✨ Sync complete! origin/${defaultBranch} is now up to date with upstream/${defaultBranch}`
+          : `✨ Sync complete! origin/${defaultBranch} and public/${defaultBranch} are now up to date with upstream/${defaultBranch}`
       );
     }
   } catch (error) {
@@ -1343,16 +1455,19 @@ export async function scheduleCommand(
       }
 
       s.start('Updating schedule in venfork-config');
-      await updateVenforkConfig(repoDir, {
+      const updatedConfig = await updateVenforkConfig(repoDir, {
         schedule: { enabled: true, cron },
       });
       s.stop('Schedule configuration updated');
+
+      const scheduleMode: 'standard' | 'no-public' =
+        updatedConfig.mode === 'no-public' ? 'no-public' : 'standard';
 
       await $`git fetch origin`;
       s.start('Updating workflow on default branch');
       await updateWorkflowOnOriginDefault(
         defaultBranch,
-        generateSyncWorkflow(cron),
+        generateSyncWorkflow(cron, scheduleMode),
         repoDir
       );
       s.stop('Workflow updated');
@@ -1519,17 +1634,27 @@ export async function workflowsCommand(
  * any user confirmation so the caller can show a preview, and reused for the
  * actual push (`executeStagingPush`) and any follow-on work (e.g. opening an
  * upstream PR in `shipCommand`).
+ *
+ * `pushRemote` is the remote we push the staged branch to: `'public'` in the
+ * standard 3-remote layout, `'upstream'` in `--no-public` mode (where the
+ * branch lands directly on upstream as a same-repo PR head).
  */
 export interface StagingPlan {
   branch: string;
-  publicUrl: string;
-  publicRepoPath: string;
+  /** URL of the remote we push the staged branch to (`public` or `upstream`). */
+  pushUrl: string;
+  /** `owner/name` of the remote we push to. */
+  pushRepoPath: string;
+  /** Owner segment of `pushRepoPath` — used as the cross-repo head prefix when the PR head is in a different repo than the base. */
+  pushOwner: string;
+  /** `'public'` or `'upstream'` — which git remote name to push to. */
+  pushRemote: 'public' | 'upstream';
   upstreamUrl: string;
   upstreamRepoPath: string;
   upstreamDefaultBranch: string;
   scheduleEnabled: boolean;
-  /** owner of the public fork — first half of `publicRepoPath`. */
-  publicOwner: string;
+  /** True when the head and base of the upstream PR live in the same repo (no-public mode). */
+  noPublic: boolean;
 }
 
 /**
@@ -1546,16 +1671,8 @@ async function planStaging(branch: string, cwd: string): Promise<StagingPlan> {
     throw new BranchNotFoundError(branch);
   }
 
-  const publicUrlResult = await $({
-    cwd,
-    reject: false,
-  })`git remote get-url public`;
-  if (publicUrlResult.exitCode !== 0) {
-    throw new RemoteNotFoundError('public');
-  }
-  const publicUrl = publicUrlResult.stdout.trim();
-  const publicRepoPath = parseRepoPath(publicUrl);
-  const publicOwner = publicRepoPath.split('/')[0] ?? '';
+  const config = await readVenforkConfigFromRepo(cwd);
+  const noPublic = config?.mode === 'no-public';
 
   const upstreamUrlResult = await $({
     cwd,
@@ -1567,18 +1684,41 @@ async function planStaging(branch: string, cwd: string): Promise<StagingPlan> {
   const upstreamUrl = upstreamUrlResult.stdout.trim();
   const upstreamRepoPath = parseRepoPath(upstreamUrl);
 
+  let pushUrl: string;
+  let pushRepoPath: string;
+  let pushRemote: 'public' | 'upstream';
+  if (noPublic) {
+    pushUrl = upstreamUrl;
+    pushRepoPath = upstreamRepoPath;
+    pushRemote = 'upstream';
+  } else {
+    const publicUrlResult = await $({
+      cwd,
+      reject: false,
+    })`git remote get-url public`;
+    if (publicUrlResult.exitCode !== 0) {
+      throw new RemoteNotFoundError('public');
+    }
+    pushUrl = publicUrlResult.stdout.trim();
+    pushRepoPath = parseRepoPath(pushUrl);
+    pushRemote = 'public';
+  }
+  const pushOwner = pushRepoPath.split('/')[0] ?? '';
+
   const upstreamDefaultBranch = await getDefaultBranch('upstream');
   const scheduleEnabled = await isScheduleEnabled(cwd);
 
   return {
     branch,
-    publicUrl,
-    publicRepoPath,
+    pushUrl,
+    pushRepoPath,
+    pushOwner,
+    pushRemote,
     upstreamUrl,
     upstreamRepoPath,
     upstreamDefaultBranch,
     scheduleEnabled,
-    publicOwner,
+    noPublic,
   };
 }
 
@@ -1594,10 +1734,18 @@ async function executeStagingPush(
   cwd: string,
   s: ReturnType<typeof p.spinner>
 ): Promise<string> {
+  // In no-public mode the `upstream` remote has its push URL set to DISABLE
+  // (so a stray `git push upstream main` from CLI/IDE can't ship the private
+  // mirror's history to upstream's default branch). Stage opts in explicitly
+  // by pushing to the URL, which bypasses the disabled push URL while
+  // leaving the safeguard in place for non-stage workflows.
+  const pushDest = plan.noPublic ? plan.pushUrl : plan.pushRemote;
+  const target = plan.noPublic ? 'upstream' : 'public fork';
+
   if (plan.scheduleEnabled) {
     await $({ cwd })`git fetch upstream`;
     await $({ cwd })`git fetch origin`;
-    s.start('Preparing sanitized branch for public staging');
+    s.start(`Preparing sanitized branch for ${target} staging`);
     const stageHead = await buildPublicStageHeadWithoutWorkflowCommit(
       plan.branch,
       plan.upstreamDefaultBranch,
@@ -1605,22 +1753,44 @@ async function executeStagingPush(
     );
     s.stop('Prepared sanitized branch');
 
-    s.start('Pushing sanitized branch to public fork');
-    if (await remoteBranchExists('public', plan.branch)) {
-      await $({
+    s.start(`Pushing sanitized branch to ${target}`);
+    if (plan.noPublic) {
+      // URL push: `--force-with-lease=<ref>` (no expect) relies on a
+      // remote-tracking ref that doesn't exist for URL pushes, so resolve
+      // the remote tip explicitly via ls-remote and pass it as the lease.
+      const ls = await $({
         cwd,
-      })`git push public ${stageHead}:refs/heads/${plan.branch} --force-with-lease=refs/heads/${plan.branch}`;
+        reject: false,
+      })`git ls-remote --exit-code ${pushDest} refs/heads/${plan.branch}`;
+      if (ls.exitCode === 0) {
+        const expectedSha = ls.stdout.trim().split(/\s+/)[0] ?? '';
+        await $({
+          cwd,
+        })`git push ${pushDest} ${stageHead}:refs/heads/${plan.branch} --force-with-lease=refs/heads/${plan.branch}:${expectedSha}`;
+      } else {
+        await $({
+          cwd,
+        })`git push ${pushDest} ${stageHead}:refs/heads/${plan.branch}`;
+      }
     } else {
-      await $({
-        cwd,
-      })`git push public ${stageHead}:refs/heads/${plan.branch}`;
+      // Standard mode: remote name with the implicit-lease form (lease
+      // value comes from refs/remotes/public/<branch>).
+      if (await remoteBranchExists(plan.pushRemote, plan.branch)) {
+        await $({
+          cwd,
+        })`git push ${plan.pushRemote} ${stageHead}:refs/heads/${plan.branch} --force-with-lease=refs/heads/${plan.branch}`;
+      } else {
+        await $({
+          cwd,
+        })`git push ${plan.pushRemote} ${stageHead}:refs/heads/${plan.branch}`;
+      }
     }
     s.stop('Push successful');
     return stageHead;
   }
 
-  s.start('Pushing to public fork');
-  await $({ cwd })`git push public ${plan.branch}`;
+  s.start(`Pushing to ${target}`);
+  await $({ cwd })`git push ${pushDest} ${plan.branch}`;
   s.stop('Push successful');
   const headResult = await $({
     cwd,
@@ -1869,7 +2039,10 @@ async function buildUpstreamPrPayload(
  */
 async function createUpstreamPr(args: {
   upstreamRepoPath: string;
-  publicOwner: string;
+  /** Owner where the head branch lives. Same as upstream owner in no-public mode. */
+  headOwner: string;
+  /** True when head and base live in the same repo (no-public mode) — gh wants a bare branch name in that case, not `owner:branch`. */
+  sameRepoHead: boolean;
   branch: string;
   base: string;
   title: string;
@@ -1877,7 +2050,9 @@ async function createUpstreamPr(args: {
   draft: boolean;
   cwd: string;
 }): Promise<{ url: string; alreadyExists: boolean }> {
-  const head = `${args.publicOwner}:${args.branch}`;
+  const head = args.sameRepoHead
+    ? args.branch
+    : `${args.headOwner}:${args.branch}`;
   const result = await $({
     cwd: args.cwd,
     reject: false,
@@ -1977,14 +2152,23 @@ export async function stageCommand(
       );
     }
 
-    const detailLines = [
-      `Branch '${plan.branch}' will be pushed to your public fork.`,
-      'This makes your work visible and ready for PR to upstream.',
-      '',
-      `  From: Private vendor repo (current)`,
-      `  To:   ${plan.publicUrl}`,
-      `  PR:   ${plan.publicRepoPath} → ${plan.upstreamRepoPath}`,
-    ];
+    const detailLines = plan.noPublic
+      ? [
+          `Branch '${plan.branch}' will be pushed directly to upstream.`,
+          'This makes your work visible and ready for PR within upstream.',
+          '',
+          `  From: Private vendor repo (current)`,
+          `  To:   ${plan.pushUrl}`,
+          `  PR:   ${plan.upstreamRepoPath}@${plan.branch} → ${plan.upstreamRepoPath}`,
+        ]
+      : [
+          `Branch '${plan.branch}' will be pushed to your public fork.`,
+          'This makes your work visible and ready for PR to upstream.',
+          '',
+          `  From: Private vendor repo (current)`,
+          `  To:   ${plan.pushUrl}`,
+          `  PR:   ${plan.pushRepoPath} → ${plan.upstreamRepoPath}`,
+        ];
     if (createPr) {
       detailLines.push(
         '',
@@ -2004,9 +2188,13 @@ export async function stageCommand(
     }
 
     const shouldStage = await confirmOrAutoYes({
-      message: createPr
-        ? 'Push to public fork and open the upstream PR?'
-        : 'Push to public fork?',
+      message: plan.noPublic
+        ? createPr
+          ? 'Push to upstream and open the PR?'
+          : 'Push to upstream?'
+        : createPr
+          ? 'Push to public fork and open the upstream PR?'
+          : 'Push to public fork?',
       initialValue: false,
       allowNonInteractive: createPr,
     });
@@ -2030,7 +2218,8 @@ export async function stageCommand(
       try {
         const result = await createUpstreamPr({
           upstreamRepoPath: plan.upstreamRepoPath,
-          publicOwner: plan.publicOwner,
+          headOwner: plan.pushOwner,
+          sameRepoHead: plan.noPublic,
           branch: plan.branch,
           base: baseBranch,
           title: prTitle,
@@ -2095,8 +2284,11 @@ export async function stageCommand(
 
     // Use the resolved baseBranch (which respects --base) so the compare URL
     // points at the same base the user asked for, even if --pr wasn't set
-    // or `gh pr create` failed earlier.
-    const prUrl = `https://github.com/${plan.upstreamRepoPath}/compare/${baseBranch}...${plan.publicOwner}:${plan.branch}?expand=1`;
+    // or `gh pr create` failed earlier. In no-public mode the head and base
+    // live in the same repo, so gh's compare URL accepts a bare branch name.
+    const prUrl = plan.noPublic
+      ? `https://github.com/${plan.upstreamRepoPath}/compare/${baseBranch}...${plan.branch}?expand=1`
+      : `https://github.com/${plan.upstreamRepoPath}/compare/${baseBranch}...${plan.pushOwner}:${plan.branch}?expand=1`;
 
     if (createPr && upstreamPrUrl) {
       const lines = [`Upstream PR: ${upstreamPrUrl}`];
@@ -2106,7 +2298,9 @@ export async function stageCommand(
       p.note(lines.join('\n'), 'Next Steps');
     } else {
       p.note(
-        `Your branch is now on the public fork!\n\nCreate a pull request to upstream:\n  ${prUrl}\n\n(Tip: re-run with --pr to open it automatically.)`,
+        plan.noPublic
+          ? `Your branch is now on upstream!\n\nCreate a pull request:\n  ${prUrl}\n\n(Tip: re-run with --pr to open it automatically.)`
+          : `Your branch is now on the public fork!\n\nCreate a pull request to upstream:\n  ${prUrl}\n\n(Tip: re-run with --pr to open it automatically.)`,
         'Next Steps'
       );
     }
@@ -2657,8 +2851,21 @@ export async function statusCommand(): Promise<void> {
   const hasPublic = await hasRemote('public');
   const hasUpstream = await hasRemote('upstream');
 
+  // Mode is read from venfork-config; absent ⇒ standard. Use a best-effort
+  // read so a missing/unreadable config doesn't break `status`.
+  let mode: 'standard' | 'no-public' = 'standard';
+  try {
+    const cfgForMode = await readVenforkConfigFromRepo(process.cwd());
+    if (cfgForMode?.mode === 'no-public') {
+      mode = 'no-public';
+    }
+  } catch {
+    // Fall through to 'standard'.
+  }
+  const noPublic = mode === 'no-public';
+
   // Check if setup is complete
-  const isSetupComplete = hasOrigin && hasPublic && hasUpstream;
+  const isSetupComplete = hasOrigin && hasUpstream && (noPublic || hasPublic);
 
   // Display git remotes
   if (Object.keys(remotes).length > 0) {
@@ -2678,12 +2885,15 @@ export async function statusCommand(): Promise<void> {
   // Display status
   const statusLines = [
     `Current branch: ${currentBranch || '(detached HEAD)'}`,
+    `Mode: ${mode}`,
     '',
     'Setup status:',
     `  ${hasOrigin ? '✓' : '✗'} origin (private mirror)`,
-    `  ${hasPublic ? '✓' : '✗'} public (public fork)`,
-    `  ${hasUpstream ? '✓' : '✗'} upstream (original repo)`,
   ];
+  if (!noPublic) {
+    statusLines.push(`  ${hasPublic ? '✓' : '✗'} public (public fork)`);
+  }
+  statusLines.push(`  ${hasUpstream ? '✓' : '✗'} upstream (original repo)`);
 
   p.note(statusLines.join('\n'), 'Repository Status');
 
@@ -2760,7 +2970,7 @@ export async function statusCommand(): Promise<void> {
   } else {
     const missingRemotes = [];
     if (!hasOrigin) missingRemotes.push('origin');
-    if (!hasPublic) missingRemotes.push('public');
+    if (!noPublic && !hasPublic) missingRemotes.push('public');
     if (!hasUpstream) missingRemotes.push('upstream');
 
     p.note(
@@ -2778,7 +2988,7 @@ export function showHelp(): void {
   p.intro('🔧 Venfork - Private Repository Mirrors for Vendor Development');
 
   p.note(
-    `venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>]
+    `venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public]
   Create private mirror + public fork for vendor workflow
   <upstream>: GitHub HTTPS/SSH URL, or shorthand owner/repo (e.g. facebook/react)
 
@@ -2786,20 +2996,29 @@ export function showHelp(): void {
   • --org <name>       Create repos under organization instead of user account
   • --fork-name <name> Public fork repo name under owner (gh repo fork --fork-name).
                        Use when upstream is already owner/repo so the fork needs a different name.
+  • --no-public        Skip the public fork hop entirely. Only origin + upstream are
+                       configured; \`venfork stage\` later pushes branches directly to upstream.
+                       Use when you own the upstream repo (no need to round-trip through a fork).
+                       Mutually exclusive with --fork-name.
 
   Creates:
   • Private mirror (yourname/project-private) - internal work
-  • Public fork (yourname/project) - staging for upstream
-  • Configures remotes: origin, public, upstream
+  • Public fork (yourname/project) - staging for upstream (omitted with --no-public)
+  • Configures remotes: origin, public, upstream (public omitted with --no-public)
 
-venfork clone <vendor-repo>
+venfork clone <vendor-repo> [--no-public] [--upstream <url>]
   Clone an existing vendor setup and configure remotes automatically
   <vendor-repo>: URL or owner/repo for the private mirror
 
-  Auto-detects:
+  Reads layout (mode + URLs) from the venfork-config branch when present.
+  Falls back to auto-detection when the branch is absent (legacy mirrors):
   • Public fork (strips -private suffix)
   • Upstream repository (from public fork's parent)
-  • Configures all three remotes (origin, public, upstream)
+  • Configures three remotes (origin, public, upstream)
+
+  Options (only meaningful when venfork-config is absent):
+  • --no-public        Declare a no-public layout (origin + upstream only)
+  • --upstream <url>   Provide the upstream URL explicitly (skips auto-detect/prompt)
 
 venfork status
   Show current repository setup and configuration

@@ -15,9 +15,45 @@ function escapeCronForYaml(cron: string): string {
 
 /**
  * Generates deterministic GitHub Actions workflow YAML for scheduled sync.
+ *
+ * In `'standard'` mode the workflow configures both `upstream` and `public`
+ * remotes; in `'no-public'` mode the public-remote block is omitted so the
+ * sync only mirrors upstream → origin.
  */
-export function generateSyncWorkflow(cron: string): string {
+export function generateSyncWorkflow(
+  cron: string,
+  mode: 'standard' | 'no-public' = 'standard'
+): string {
   const safeCron = escapeCronForYaml(cron);
+  const noPublic = mode === 'no-public';
+
+  const remotesScript = noPublic
+    ? `          set -euo pipefail
+          git fetch origin venfork-config
+          CONFIG_JSON="$(git show FETCH_HEAD:.venfork/config.json)"
+          UPSTREAM_URL="$(node -e "const c = JSON.parse(process.argv[1]); process.stdout.write(c.upstreamUrl || '')" "$CONFIG_JSON")"
+          if [ -z "$UPSTREAM_URL" ]; then
+            echo "Missing upstream URL in venfork-config"
+            exit 1
+          fi
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "$UPSTREAM_URL"
+          git remote set-url --push upstream DISABLE`
+    : `          set -euo pipefail
+          git fetch origin venfork-config
+          CONFIG_JSON="$(git show FETCH_HEAD:.venfork/config.json)"
+          UPSTREAM_URL="$(node -e "const c = JSON.parse(process.argv[1]); process.stdout.write(c.upstreamUrl || '')" "$CONFIG_JSON")"
+          PUBLIC_URL="$(node -e "const c = JSON.parse(process.argv[1]); process.stdout.write(c.publicForkUrl || '')" "$CONFIG_JSON")"
+          if [ -z "$UPSTREAM_URL" ] || [ -z "$PUBLIC_URL" ]; then
+            echo "Missing upstream/public URL in venfork-config"
+            exit 1
+          fi
+          git remote remove upstream 2>/dev/null || true
+          git remote remove public 2>/dev/null || true
+          git remote add upstream "$UPSTREAM_URL"
+          git remote set-url --push upstream DISABLE
+          git remote add public "$PUBLIC_URL"`;
+
   return `name: ${WORKFLOW_NAME}
 on:
   schedule:
@@ -51,20 +87,7 @@ jobs:
       - name: Configure venfork remotes
         shell: bash
         run: |
-          set -euo pipefail
-          git fetch origin venfork-config
-          CONFIG_JSON="$(git show FETCH_HEAD:.venfork/config.json)"
-          UPSTREAM_URL="$(node -e "const c = JSON.parse(process.argv[1]); process.stdout.write(c.upstreamUrl || '')" "$CONFIG_JSON")"
-          PUBLIC_URL="$(node -e "const c = JSON.parse(process.argv[1]); process.stdout.write(c.publicForkUrl || '')" "$CONFIG_JSON")"
-          if [ -z "$UPSTREAM_URL" ] || [ -z "$PUBLIC_URL" ]; then
-            echo "Missing upstream/public URL in venfork-config"
-            exit 1
-          fi
-          git remote remove upstream 2>/dev/null || true
-          git remote remove public 2>/dev/null || true
-          git remote add upstream "$UPSTREAM_URL"
-          git remote set-url --push upstream DISABLE
-          git remote add public "$PUBLIC_URL"
+${remotesScript}
       - name: Sync from upstream
         run: venfork sync
 `;

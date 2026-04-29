@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import * as p from '@clack/prompts';
+import { parseCloneCliArgs } from './clone-args.js';
 import {
   cloneCommand,
   issueCommand,
@@ -43,13 +44,19 @@ async function main(): Promise<void> {
         parsed.upstreamUrl,
         parsed.privateMirrorName,
         parsed.organization,
-        parsed.publicForkRepoName
+        parsed.publicForkRepoName,
+        { noPublic: parsed.noPublic }
       );
       break;
     }
-    case 'clone':
-      await cloneCommand(args[1]);
+    case 'clone': {
+      const parsed = parseCloneCliArgs(args.slice(1));
+      await cloneCommand(parsed.vendorRepoUrl, {
+        noPublic: parsed.noPublic,
+        upstreamUrl: parsed.upstreamUrl,
+      });
       break;
+    }
     case 'sync':
       await syncCommand(args[1]);
       break;
