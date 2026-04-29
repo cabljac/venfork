@@ -1,5 +1,12 @@
 # venfork
 
+## [0.8.0](https://github.com/cabljac/venfork/compare/v0.7.0...v0.8.0) (2026-04-29)
+
+
+### Features
+
+* preserve allowlist for mirror-only files across sync ([#36](https://github.com/cabljac/venfork/issues/36)) ([90c06e1](https://github.com/cabljac/venfork/commit/90c06e104f99d9c32f344c6a8dec7d33f02826be))
+
 ## [0.7.0](https://github.com/cabljac/venfork/compare/v0.6.0...v0.7.0) (2026-04-29)
 
 
