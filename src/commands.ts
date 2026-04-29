@@ -523,6 +523,16 @@ async function ensureVenforkRemotes(
 
   if (publicUrl) {
     await setOrAdd('public', publicUrl);
+  } else {
+    // No-public mode: remove a stale `public` remote left over from a prior
+    // standard-mode setup so the local layout matches the recorded config.
+    const existing = await $({
+      cwd,
+      reject: false,
+    })`git remote get-url public`;
+    if (existing.exitCode === 0) {
+      await $({ cwd })`git remote remove public`;
+    }
   }
   await setOrAdd('upstream', upstreamUrl);
   await $({ cwd })`git remote set-url --push upstream DISABLE`;
@@ -1724,8 +1734,14 @@ async function executeStagingPush(
   cwd: string,
   s: ReturnType<typeof p.spinner>
 ): Promise<string> {
-  const remote = plan.pushRemote;
+  // In no-public mode the `upstream` remote has its push URL set to DISABLE
+  // (so a stray `git push upstream main` from CLI/IDE can't ship the private
+  // mirror's history to upstream's default branch). Stage opts in explicitly
+  // by pushing to the URL, which bypasses the disabled push URL while
+  // leaving the safeguard in place for non-stage workflows.
+  const pushDest = plan.noPublic ? plan.pushUrl : plan.pushRemote;
   const target = plan.noPublic ? 'upstream' : 'public fork';
+
   if (plan.scheduleEnabled) {
     await $({ cwd })`git fetch upstream`;
     await $({ cwd })`git fetch origin`;
@@ -1738,21 +1754,43 @@ async function executeStagingPush(
     s.stop('Prepared sanitized branch');
 
     s.start(`Pushing sanitized branch to ${target}`);
-    if (await remoteBranchExists(remote, plan.branch)) {
-      await $({
+    if (plan.noPublic) {
+      // URL push: `--force-with-lease=<ref>` (no expect) relies on a
+      // remote-tracking ref that doesn't exist for URL pushes, so resolve
+      // the remote tip explicitly via ls-remote and pass it as the lease.
+      const ls = await $({
         cwd,
-      })`git push ${remote} ${stageHead}:refs/heads/${plan.branch} --force-with-lease=refs/heads/${plan.branch}`;
+        reject: false,
+      })`git ls-remote --exit-code ${pushDest} refs/heads/${plan.branch}`;
+      if (ls.exitCode === 0) {
+        const expectedSha = ls.stdout.trim().split(/\s+/)[0] ?? '';
+        await $({
+          cwd,
+        })`git push ${pushDest} ${stageHead}:refs/heads/${plan.branch} --force-with-lease=refs/heads/${plan.branch}:${expectedSha}`;
+      } else {
+        await $({
+          cwd,
+        })`git push ${pushDest} ${stageHead}:refs/heads/${plan.branch}`;
+      }
     } else {
-      await $({
-        cwd,
-      })`git push ${remote} ${stageHead}:refs/heads/${plan.branch}`;
+      // Standard mode: remote name with the implicit-lease form (lease
+      // value comes from refs/remotes/public/<branch>).
+      if (await remoteBranchExists(plan.pushRemote, plan.branch)) {
+        await $({
+          cwd,
+        })`git push ${plan.pushRemote} ${stageHead}:refs/heads/${plan.branch} --force-with-lease=refs/heads/${plan.branch}`;
+      } else {
+        await $({
+          cwd,
+        })`git push ${plan.pushRemote} ${stageHead}:refs/heads/${plan.branch}`;
+      }
     }
     s.stop('Push successful');
     return stageHead;
   }
 
   s.start(`Pushing to ${target}`);
-  await $({ cwd })`git push ${remote} ${plan.branch}`;
+  await $({ cwd })`git push ${pushDest} ${plan.branch}`;
   s.stop('Push successful');
   const headResult = await $({
     cwd,

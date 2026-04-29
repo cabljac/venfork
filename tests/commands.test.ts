@@ -2951,6 +2951,34 @@ describe('no-public mode', () => {
         )
       ).rejects.toThrow(/no-public.*public fork name/i);
     });
+
+    test('removes a stale `public` remote when re-running in no-public mode', async () => {
+      // Simulate a repo that previously had a `public` remote configured —
+      // `git remote get-url public` succeeds with a URL. Re-running setup
+      // with --no-public should explicitly remove it so the local layout
+      // matches the recorded config.
+      mockResponses.set('git remote get-url public', {
+        exitCode: 0,
+        stdout: 'git@github.com:test/repo.git',
+        stderr: '',
+      });
+
+      try {
+        await setupCommand(
+          'git@github.com:test/repo.git',
+          'test-vendor',
+          undefined,
+          undefined,
+          { noPublic: true }
+        );
+      } catch {
+        // Expected in mocked env
+      }
+
+      expect(
+        execaCalls.some((c) => c.includes('git remote remove public'))
+      ).toBe(true);
+    });
   });
 
   describe('syncCommand in no-public mode', () => {
@@ -2996,7 +3024,7 @@ describe('no-public mode', () => {
   });
 
   describe('stageCommand in no-public mode', () => {
-    test('pushes to upstream remote, not public', async () => {
+    test('pushes by upstream URL (not by remote name) so DISABLE push URL is bypassed', async () => {
       mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
         exitCode: 0,
         stdout: noPublicConfig(),
@@ -3021,8 +3049,54 @@ describe('no-public mode', () => {
       ).toBe(false);
 
       const pushCalls = execaCalls.filter((c) => c.includes('git push'));
-      expect(pushCalls.some((c) => c.includes('git push upstream'))).toBe(true);
+      // Push goes to the upstream URL (so the DISABLEd push URL on the
+      // `upstream` remote is bypassed). The literal `git push upstream <branch>`
+      // form must NOT appear.
+      expect(
+        pushCalls.some((c) =>
+          c.includes('git push git@github.com:upstream/repo.git')
+        )
+      ).toBe(true);
+      expect(pushCalls.some((c) => /git push upstream\b/.test(c))).toBe(false);
       expect(pushCalls.some((c) => c.includes('git push public'))).toBe(false);
+    });
+
+    test('schedule-mode push by URL uses explicit-SHA lease via ls-remote', async () => {
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: noPublicConfig({
+          schedule: { enabled: true, cron: '0 */6 * * *' },
+        }),
+        stderr: '',
+      });
+      mockResponses.set('git remote get-url upstream', {
+        exitCode: 0,
+        stdout: 'git@github.com:upstream/repo.git',
+        stderr: '',
+      });
+      // Simulate the branch existing on upstream — ls-remote returns a SHA.
+      mockResponses.set('git ls-remote --exit-code', {
+        exitCode: 0,
+        stdout: 'cafef00d\trefs/heads/feature-branch',
+        stderr: '',
+      });
+
+      try {
+        await stageCommand('feature-branch');
+      } catch {
+        // Expected
+      }
+
+      // The push must use --force-with-lease with the explicit SHA,
+      // targeting the upstream URL (not the `upstream` remote name).
+      const pushCalls = execaCalls.filter((c) => c.includes('git push'));
+      expect(
+        pushCalls.some(
+          (c) =>
+            c.includes('git push git@github.com:upstream/repo.git') &&
+            c.includes('--force-with-lease=refs/heads/feature-branch:cafef00d')
+        )
+      ).toBe(true);
     });
   });
 
