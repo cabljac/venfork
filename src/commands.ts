@@ -69,8 +69,23 @@ async function confirmOrAutoYes(opts: {
 }
 
 const SYNC_WORKFLOW_PATH = getSyncWorkflowPath();
-const WORKFLOW_COMMIT_MESSAGE =
-  'chore: add/update scheduled sync workflow (venfork)';
+/**
+ * Subject line emitted on every venfork-managed "+1 commit" — both the
+ * scheduled-workflow case and the preserve-only case. Generalized from the
+ * original "scheduled sync workflow" wording because the same commit can now
+ * carry preserve content with no workflow involvement; an honest subject
+ * keeps `git log` readable and lets `isManagedCommit` rely on a single
+ * canonical match without misclassifying preserve-only commits.
+ */
+const MANAGED_COMMIT_MESSAGE = 'chore: venfork-managed mirror commit';
+/**
+ * Subjects emitted by older venfork versions for the same "+1 commit" role.
+ * Recognized by `isManagedCommit` so existing mirrors don't suddenly classify
+ * historical managed commits as user-authored divergence after upgrading.
+ */
+const LEGACY_MANAGED_COMMIT_MESSAGES: readonly string[] = [
+  'chore: add/update scheduled sync workflow (venfork)',
+];
 const WORKFLOWS_DIR = '.github/workflows';
 const VENFORK_BOT_NAME = 'venfork-bot';
 const VENFORK_BOT_EMAIL = 'venfork-bot@users.noreply.github.com';
@@ -133,18 +148,24 @@ async function commitTouchesWorkflowPath(
 }
 
 /**
- * Internal workflow commit marker used by the mirror "+1 commit" model.
+ * Detects the venfork-managed "+1 commit" so sync's divergence check and
+ * stage's cherry-pick filter can skip it without losing user work.
  *
- * We identify this commit by its deterministic message and also accept commits
- * that touch the managed `venfork-sync.yml` plus only sibling files under
- * `.github/workflows/` — so historical rollouts that bundled extra workflow
- * files alongside the managed one are still classified as managed, while
- * user-authored commits to *other* workflow files (e.g. ci.yml) are preserved.
+ * Three signals all classify a commit as managed:
+ *  1. Subject matches the current `MANAGED_COMMIT_MESSAGE`.
+ *  2. Subject matches one of `LEGACY_MANAGED_COMMIT_MESSAGES` — covers
+ *     mirrors created before the message was generalized.
+ *  3. Path heuristic: commit touches the managed `venfork-sync.yml` and
+ *     reaches no further than `.github/workflows/`. This rescues historical
+ *     rollouts that bundled extra workflow files alongside the managed one,
+ *     while keeping user-authored commits to *other* workflow files (e.g.
+ *     ci.yml) classified as user content.
  */
-async function isWorkflowCommit(ref: string, cwd?: string): Promise<boolean> {
+async function isManagedCommit(ref: string, cwd?: string): Promise<boolean> {
   const subject = await commitSubject(ref, cwd);
-  if (subject === WORKFLOW_COMMIT_MESSAGE) {
-    return true;
+  if (subject !== null) {
+    if (subject === MANAGED_COMMIT_MESSAGE) return true;
+    if (LEGACY_MANAGED_COMMIT_MESSAGES.includes(subject)) return true;
   }
   return commitTouchesWorkflowPath(ref, cwd);
 }
@@ -381,7 +402,7 @@ async function applyMirrorPlusOneCommit(args: {
 
     await $({
       cwd: tempDir,
-    })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit --allow-empty -m ${WORKFLOW_COMMIT_MESSAGE}`;
+    })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit --allow-empty -m ${MANAGED_COMMIT_MESSAGE}`;
 
     await $({
       cwd: tempDir,
@@ -477,7 +498,7 @@ async function updateWorkflowOnOriginDefault(
 
     await $({
       cwd: tempDir,
-    })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${WORKFLOW_COMMIT_MESSAGE}`;
+    })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${MANAGED_COMMIT_MESSAGE}`;
     await $({
       cwd: tempDir,
     })`git push origin HEAD:${defaultBranch} --force-with-lease`;
@@ -576,7 +597,7 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
     // to pull `origin/<default>` back in after a sync rewrite. `--no-merges`
     // still walks *both* sides of any merge, so non-merge content from either
     // side is cherry-picked as normal (workflow commits introduced via the
-    // merged-in side are then filtered by `isWorkflowCommit` below).
+    // merged-in side are then filtered by `isManagedCommit` below).
     // `--topo-order` makes the parent-before-child guarantee explicit (with
     // `--reverse`: ancestors first, descendants last). The default order is
     // pseudo-chronological and can violate topology when commit timestamps
@@ -592,7 +613,7 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
 
     const commitsToPick: string[] = [];
     for (const commit of branchCommits) {
-      if (!(await isWorkflowCommit(commit, repoDir))) {
+      if (!(await isManagedCommit(commit, repoDir))) {
         commitsToPick.push(commit);
       }
     }
@@ -1458,7 +1479,7 @@ export async function syncCommand(
         let count = 0;
         const files = new Set<string>();
         for (const commit of divergentCommits) {
-          if (await isWorkflowCommit(commit, options?.cwd)) continue;
+          if (await isManagedCommit(commit, options?.cwd)) continue;
           if (
             allowPreserved &&
             (await isPreservedCommit(commit, preserveList, options?.cwd))
@@ -1850,7 +1871,7 @@ export async function preserveCommand(
       const cleaned = normalizePreservePath(candidate);
       if (!cleaned) {
         throw new Error(
-          `Invalid preserve path '${candidate}': must be a relative path with no leading '/' or '..' segments.`
+          `Invalid preserve path '${candidate}': must be a clean relative path (no leading '/', no '..' / '.' / empty segments, no backslashes, NUL bytes, Windows drive prefixes, or whitespace).`
         );
       }
       validated.push(cleaned);

@@ -81,7 +81,17 @@ export interface VenforkConfig {
   disabledWorkflows?: string[];
   /**
    * Allowlist of mirror-only file paths to carry forward across `venfork sync`.
-   * Each entry is a repo-relative path (no leading `/`, no `..` segments).
+   *
+   * Each entry must be a clean repo-relative path:
+   *   - no leading `/`
+   *   - no `..`, `.`, or empty path segments
+   *   - no backslashes, NUL bytes, Windows drive prefixes (e.g. `C:`)
+   *   - no whitespace anywhere in the path
+   *
+   * Whitespace is forbidden so the divergence-error hint
+   * (`venfork preserve add <path>`) stays copy/paste-safe without quoting.
+   * Entries that don't match are dropped during config normalization.
+   *
    * On sync, every listed path is read from the previous mirror tip
    * (`origin/<defaultBranch>`) and re-added to the deterministic "+1 commit"
    * — unless upstream now contains the same path, in which case upstream wins.
@@ -340,15 +350,21 @@ function normalizePulledIssue(value: unknown): PulledIssue | null {
 }
 
 /**
- * Validates a single `preserve` entry: must be a non-empty repo-relative path
- * with no `..` segments, leading slash, NUL byte, or Windows drive prefix.
- * Returns the cleaned string, or null if the entry is unusable.
+ * Validates a single `preserve` entry. Rejects (returns null) anything that
+ * isn't a clean repo-relative path: empty/whitespace-only, NUL bytes,
+ * leading `/`, backslashes, Windows drive prefixes, or `..` / `.` / empty
+ * segments. Whitespace anywhere in the value is rejected too — preserve
+ * paths surface verbatim in the divergence-error hint
+ * (`venfork preserve add <path>`), so disallowing whitespace keeps that
+ * copy/paste-safe without quoting and rules out an entire bug class for a
+ * negligible cost (workflow/script paths conventionally don't use spaces).
  */
 export function normalizePreservePath(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
   if (trimmed.includes('\0')) return null;
+  if (/\s/.test(trimmed)) return null;
   if (trimmed.startsWith('/')) return null;
   if (trimmed.includes('\\')) return null;
   if (/^[A-Za-z]:/.test(trimmed)) return null;

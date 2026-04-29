@@ -207,6 +207,14 @@ describe('updateVenforkConfig', () => {
         'foo/../bar',
         '.github/workflows/ok.yml',
         '',
+        // Whitespace anywhere in the path is rejected — keeps the
+        // `venfork preserve add <path>` divergence-error hint
+        // copy/paste-safe without any quoting.
+        'has space.yml',
+        'tabs\there.yml',
+        // Backslashes and Windows drive prefixes are rejected too.
+        'win\\path.yml',
+        'C:/abs.yml',
       ],
     });
 

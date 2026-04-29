@@ -553,7 +553,7 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'commit --allow-empty -m chore: add/update scheduled sync workflow (venfork)'
+          'commit --allow-empty -m chore: venfork-managed mirror commit'
         )
       )
     ).toBe(true);
@@ -729,7 +729,7 @@ describe('syncCommand', () => {
       execaCalls.some(
         (cmd) =>
           cmd.includes('commit --allow-empty') &&
-          cmd.includes('chore: add/update scheduled sync workflow')
+          cmd.includes('chore: venfork-managed mirror commit')
       )
     ).toBe(false);
   });
@@ -871,6 +871,56 @@ describe('syncCommand', () => {
     const messages = noteCalls.map((n) => n.message).join('\n---\n');
     expect(messages).toContain('venfork preserve add agent.yml');
     expect(messages).toContain('agent.yml');
+  });
+
+  test('legacy "+1 commit" subjects from older venfork versions still classify as managed (no spurious divergence)', async () => {
+    // Older venfork emitted `chore: add/update scheduled sync workflow
+    // (venfork)` for the +1 commit. Mirrors created with that version
+    // still have those subjects in their history. After upgrading, the
+    // divergence check must continue to recognize them — otherwise the
+    // first sync after upgrade aborts with a false-positive on every
+    // mirror in the wild.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream/main..origin/main', {
+      exitCode: 0,
+      stdout: 'legacycommit11111\n',
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream/main..public/main', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    // Subject = the OLD message string. Must be recognized as managed.
+    mockResponses.set('git log -1 --format=%s legacycommit11111', {
+      exitCode: 0,
+      stdout: 'chore: add/update scheduled sync workflow (venfork)\n',
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // Sync must NOT have aborted on the legacy-message commit — the
+    // upstream→origin force-push should still happen.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git push origin upstream/main:refs/heads/main --force-with-lease'
+        )
+      )
+    ).toBe(true);
   });
 
   test('divergence check tolerates a commit whose changed files are all preserved', async () => {
