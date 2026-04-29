@@ -84,6 +84,7 @@ export interface VenforkConfig {
    *
    * Each entry must be a clean repo-relative path:
    *   - no leading `/`
+   *   - no leading `-` (would parse as a flag in `git add`/etc.)
    *   - no `..`, `.`, or empty path segments
    *   - no backslashes, NUL bytes, Windows drive prefixes (e.g. `C:`)
    *   - no whitespace anywhere in the path
@@ -202,7 +203,7 @@ async function writeConfigBranch(
 
     await $({ cwd: tempDir })`git init`;
     await $({ cwd: tempDir })`git checkout --orphan ${CONFIG_BRANCH}`;
-    await $({ cwd: tempDir })`git add ${CONFIG_DIR}/${CONFIG_FILE}`;
+    await $({ cwd: tempDir })`git add -- ${CONFIG_DIR}/${CONFIG_FILE}`;
     await $({
       cwd: tempDir,
     })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${commitMessage}`;
@@ -352,12 +353,17 @@ function normalizePulledIssue(value: unknown): PulledIssue | null {
 /**
  * Validates a single `preserve` entry. Rejects (returns null) anything that
  * isn't a clean repo-relative path: empty/whitespace-only, NUL bytes,
- * leading `/`, backslashes, Windows drive prefixes, or `..` / `.` / empty
- * segments. Whitespace anywhere in the value is rejected too — preserve
- * paths surface verbatim in the divergence-error hint
+ * leading `/`, backslashes, Windows drive prefixes, leading `-`, or
+ * `..` / `.` / empty segments. Whitespace anywhere in the value is rejected
+ * too — preserve paths surface verbatim in the divergence-error hint
  * (`venfork preserve add <path>`), so disallowing whitespace keeps that
  * copy/paste-safe without quoting and rules out an entire bug class for a
  * negligible cost (workflow/script paths conventionally don't use spaces).
+ *
+ * Leading `-` is forbidden so a preserved filename can't be parsed as a git
+ * option (e.g. `git add --all`). Every internal call site already passes
+ * paths after `--`, but rejecting up-front means an attacker-controlled or
+ * accidentally-malformed entry can't reach those call sites at all.
  */
 export function normalizePreservePath(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -366,6 +372,7 @@ export function normalizePreservePath(value: unknown): string | null {
   if (trimmed.includes('\0')) return null;
   if (/\s/.test(trimmed)) return null;
   if (trimmed.startsWith('/')) return null;
+  if (trimmed.startsWith('-')) return null;
   if (trimmed.includes('\\')) return null;
   if (/^[A-Za-z]:/.test(trimmed)) return null;
   const segments = trimmed.split('/');

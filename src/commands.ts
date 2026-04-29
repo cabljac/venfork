@@ -257,7 +257,7 @@ async function listWorkflowFiles(cwd: string): Promise<string[]> {
   const result = await $({
     cwd,
     reject: false,
-  })`git ls-tree -r --name-only HEAD ${WORKFLOWS_DIR}`;
+  })`git ls-tree -r --name-only HEAD -- ${WORKFLOWS_DIR}`;
   if (result.exitCode !== 0 || !result.stdout.trim()) {
     return [];
   }
@@ -325,7 +325,7 @@ async function applyMirrorPlusOneCommit(args: {
         path.join(tempDir, SYNC_WORKFLOW_PATH),
         generateSyncWorkflow(schedule.cron, schedule.mode)
       );
-      await $({ cwd: tempDir })`git add ${SYNC_WORKFLOW_PATH}`;
+      await $({ cwd: tempDir })`git add -- ${SYNC_WORKFLOW_PATH}`;
 
       // Filter upstream workflow files as part of the managed "+1" commit.
       // Precedence: enabledWorkflows allowlist > disabledWorkflows blocklist.
@@ -344,7 +344,7 @@ async function applyMirrorPlusOneCommit(args: {
             await $({
               cwd: tempDir,
               reject: false,
-            })`git rm --quiet --ignore-unmatch ${workflowFile}`;
+            })`git rm --quiet --ignore-unmatch -- ${workflowFile}`;
           }
         }
       }
@@ -396,7 +396,7 @@ async function applyMirrorPlusOneCommit(args: {
         if (treeMode === '100755') {
           await chmod(targetPath, 0o755);
         }
-        await $({ cwd: tempDir })`git add ${preservePath}`;
+        await $({ cwd: tempDir })`git add -- ${preservePath}`;
       }
     }
 
@@ -445,18 +445,20 @@ async function changedFilesInCommit(
 }
 
 /**
- * Returns true when every file changed by `ref` is in the preserve allowlist.
+ * Returns true when every file in `changedFiles` is in the preserve allowlist.
  * Used by sync's divergence check to allow user-authored mirror-only commits
  * (e.g. a caller workflow) ahead of upstream — as long as every changed file
  * is something the user has explicitly opted into preserving.
+ *
+ * Takes pre-computed `changedFiles` rather than fetching them itself so the
+ * caller can amortize the `git diff-tree` invocation across this predicate
+ * AND the divergence-error file collection. Pure / synchronous: no I/O.
  */
-async function isPreservedCommit(
-  ref: string,
-  preserveList: string[],
-  cwd?: string
-): Promise<boolean> {
+function isPreservedCommit(
+  changedFiles: string[],
+  preserveList: string[]
+): boolean {
   if (preserveList.length === 0) return false;
-  const changedFiles = await changedFilesInCommit(ref, cwd);
   if (changedFiles.length === 0) return false;
   const allowed = new Set(preserveList);
   return changedFiles.every((file) => allowed.has(file));
@@ -479,13 +481,13 @@ async function updateWorkflowOnOriginDefault(
       await $({
         cwd: tempDir,
         reject: false,
-      })`git rm --quiet --ignore-unmatch ${SYNC_WORKFLOW_PATH}`;
+      })`git rm --quiet --ignore-unmatch -- ${SYNC_WORKFLOW_PATH}`;
     } else {
       await mkdir(path.join(tempDir, '.github', 'workflows'), {
         recursive: true,
       });
       await writeFile(path.join(tempDir, SYNC_WORKFLOW_PATH), workflowContent);
-      await $({ cwd: tempDir })`git add ${SYNC_WORKFLOW_PATH}`;
+      await $({ cwd: tempDir })`git add -- ${SYNC_WORKFLOW_PATH}`;
     }
 
     const stagedDiff = await $({
@@ -1480,14 +1482,15 @@ export async function syncCommand(
         const files = new Set<string>();
         for (const commit of divergentCommits) {
           if (await isManagedCommit(commit, options?.cwd)) continue;
-          if (
-            allowPreserved &&
-            (await isPreservedCommit(commit, preserveList, options?.cwd))
-          ) {
+          // Compute the changed files once — both the preserve check and the
+          // divergence-error file aggregation want the same list, and
+          // `git diff-tree` isn't free.
+          const commitFiles = await changedFilesInCommit(commit, options?.cwd);
+          if (allowPreserved && isPreservedCommit(commitFiles, preserveList)) {
             continue;
           }
           count += 1;
-          for (const file of await changedFilesInCommit(commit, options?.cwd)) {
+          for (const file of commitFiles) {
             files.add(file);
           }
         }
@@ -1532,9 +1535,29 @@ export async function syncCommand(
             .map((f) => `  • ${f}`)
             .join('\n')}`
         );
-        sections.push(
-          `If these are mirror-only files you want to keep across sync, add them to preserve:\n  venfork preserve add ${originDivergence.files.join(' ')}`
-        );
+        // Only suggest preserve for paths the validator would actually
+        // accept — otherwise the copy/paste command line would fail.
+        // If every divergent path is invalid for preserve, suppress the hint
+        // entirely (rebase/force-sync below still apply).
+        const validForPreserve: string[] = [];
+        const invalidForPreserve: string[] = [];
+        for (const file of originDivergence.files) {
+          if (normalizePreservePath(file) !== null) {
+            validForPreserve.push(file);
+          } else {
+            invalidForPreserve.push(file);
+          }
+        }
+        if (validForPreserve.length > 0) {
+          sections.push(
+            `If these are mirror-only files you want to keep across sync, add them to preserve:\n  venfork preserve add ${validForPreserve.join(' ')}`
+          );
+          if (invalidForPreserve.length > 0) {
+            sections.push(
+              `(skipped from the hint — paths can't be expressed in the preserve allowlist: ${invalidForPreserve.join(', ')})`
+            );
+          }
+        }
       }
       sections.push(
         `Otherwise:\n- Rebase or cherry-pick to a feature branch before running sync\n- Force-sync (DESTRUCTIVE — permanently discards the commits): git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} -f`
@@ -1826,8 +1849,9 @@ export async function workflowsCommand(
 
 /**
  * Preserve command: manage the `preserve` allowlist of mirror-only file paths
- * carried forward by `venfork sync`. Additive-only — there's no "deny preserve"
- * concept, since preserve already opts into protection rather than out of it.
+ * carried forward by `venfork sync`. Allowlist-only / opt-in: there's no
+ * "deny preserve" concept (entries can still be added, removed, or cleared
+ * — only the deny-direction has no semantics).
  */
 export async function preserveCommand(
   action: 'list' | 'add' | 'remove' | 'clear',

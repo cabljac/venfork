@@ -643,7 +643,7 @@ describe('syncCommand', () => {
     // The preserved file is added in the temp worktree.
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git add .github/workflows/caller.yml')
+        cmd.includes('git add -- .github/workflows/caller.yml')
       )
     ).toBe(true);
     // The deterministic commit + force-push happen.
@@ -690,7 +690,9 @@ describe('syncCommand', () => {
     ).toBe(false);
     // git add for the preserved path should NOT be called either.
     expect(
-      execaCalls.some((cmd) => cmd.includes('git add .github/workflows/ci.yml'))
+      execaCalls.some((cmd) =>
+        cmd.includes('git add -- .github/workflows/ci.yml')
+      )
     ).toBe(false);
   });
 
@@ -800,7 +802,7 @@ describe('syncCommand', () => {
     expect(String(agentWrite?.content)).toBe('agent: v2');
 
     // And: agent.yml is `git add`ed, then committed and force-pushed back.
-    expect(execaCalls.some((cmd) => cmd.includes('git add agent.yml'))).toBe(
+    expect(execaCalls.some((cmd) => cmd.includes('git add -- agent.yml'))).toBe(
       true
     );
     expect(

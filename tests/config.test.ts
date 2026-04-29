@@ -215,6 +215,11 @@ describe('updateVenforkConfig', () => {
         // Backslashes and Windows drive prefixes are rejected too.
         'win\\path.yml',
         'C:/abs.yml',
+        // Leading `-` is rejected so a filename can't be parsed as a git
+        // option (e.g. `git add --all`). All internal call sites use `--`,
+        // but rejecting up-front means a malformed entry can't reach them.
+        '-rf',
+        '--all',
       ],
     });
 
