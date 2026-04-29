@@ -23,11 +23,13 @@ type MockResponse =
 const execaCalls: string[] = [];
 const rmCalls: RmCall[] = [];
 const writeFileCalls: WriteFileCall[] = [];
+const noteCalls: Array<{ message: string; title?: string }> = [];
 const signalHandlers = new Map<string, SignalHandler>();
 let shouldHangOnFork = false;
 const mockResponses: Map<string, MockResponse> = new Map();
 let confirmResponse = true; // Default to true for most tests
 let tempDirCounter = 0;
+let accessExists: (filePath: string) => boolean = () => false;
 
 // Store originals
 const originalProcessOn = process.on;
@@ -164,7 +166,11 @@ mock.module('node:fs/promises', () => ({
     rmCalls.push({ path, options });
     return Promise.resolve();
   }),
-  access: mock(() => Promise.reject(new Error('ENOENT'))),
+  access: mock((filePath: string) =>
+    accessExists(filePath)
+      ? Promise.resolve()
+      : Promise.reject(new Error('ENOENT'))
+  ),
 }));
 
 // Mock prompts BEFORE any imports
@@ -174,7 +180,9 @@ mock.module('@clack/prompts', () => ({
     start: mock(() => {}),
     stop: mock(() => {}),
   })),
-  note: mock(() => {}),
+  note: mock((message: string, title?: string) => {
+    noteCalls.push({ message, title });
+  }),
   outro: mock(() => {}),
   cancel: mock(() => {}),
   log: { error: mock(() => {}), warn: mock(() => {}), info: mock(() => {}) },
@@ -224,11 +232,13 @@ beforeEach(() => {
   execaCalls.length = 0;
   rmCalls.length = 0;
   writeFileCalls.length = 0;
+  noteCalls.length = 0;
   signalHandlers.clear();
   shouldHangOnFork = false;
   mockResponses.clear();
   confirmResponse = true; // Reset to true for each test
   tempDirCounter = 0;
+  accessExists = () => false;
 
   // Clear VENFORK_ORG environment variable
   delete process.env.VENFORK_ORG;
@@ -543,7 +553,7 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'commit --allow-empty -m chore: add/update scheduled sync workflow (venfork)'
+          'commit --allow-empty -m chore: venfork-managed mirror commit'
         )
       )
     ).toBe(true);
@@ -585,6 +595,397 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some((cmd) => cmd.includes('git worktree add --detach'))
     ).toBe(false);
+  });
+
+  test('preserve carries mirror-only files forward across sync', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['.github/workflows/caller.yml'],
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify origin/main', {
+      exitCode: 0,
+      stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/caller.yml',
+      {
+        exitCode: 0,
+        stdout: 'name: caller\non: workflow_dispatch\n',
+        stderr: '',
+      }
+    );
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // The "+1 commit" path runs even though schedule is disabled.
+    expect(
+      execaCalls.some((cmd) => cmd.includes('git worktree add --detach'))
+    ).toBe(true);
+    // git show is called against the captured previous mirror tip.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/caller.yml'
+        )
+      )
+    ).toBe(true);
+    // The preserved file is added in the temp worktree.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git add -- .github/workflows/caller.yml')
+      )
+    ).toBe(true);
+    // The deterministic commit + force-push happen.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git push origin HEAD:main --force-with-lease')
+      )
+    ).toBe(true);
+  });
+
+  test('preserve skips paths that already exist upstream (upstream wins)', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['.github/workflows/ci.yml'],
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify origin/main', {
+      exitCode: 0,
+      stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+      stderr: '',
+    });
+    // Pretend the temp worktree (started from upstream) already has the file.
+    accessExists = (p) => p.includes('.github/workflows/ci.yml');
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // git show against the previous mirror tip should NOT be called for the
+    // colliding path — upstream's version wins, and the carry-forward is skipped.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/ci.yml'
+        )
+      )
+    ).toBe(false);
+    // git add for the preserved path should NOT be called either.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git add -- .github/workflows/ci.yml')
+      )
+    ).toBe(false);
+  });
+
+  test('preserve fails loudly when source path is missing on previous mirror tip', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['.github/workflows/missing.yml'],
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify origin/main', {
+      exitCode: 0,
+      stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/missing.yml',
+      { exitCode: 128, stdout: '', stderr: 'fatal: path ... does not exist' }
+    );
+
+    let caught = false;
+    try {
+      await syncCommand('main');
+    } catch {
+      caught = true;
+    }
+
+    // process.exit(1) is mocked to throw — sync should have errored before
+    // creating the deterministic commit on the temp worktree.
+    expect(caught).toBe(true);
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('commit --allow-empty') &&
+          cmd.includes('chore: venfork-managed mirror commit')
+      )
+    ).toBe(false);
+  });
+
+  test('preserve carries the user-committed content forward (v2 wins, not v1, not upstream, not absent)', async () => {
+    // Mirror tip already has agent.yml@v1; user commits v2 directly to
+    // origin/main and pushes. Sync runs. Post-sync, the worktree write that
+    // feeds the +1 commit must contain v2 — not v1, not upstream's version,
+    // not absent. This pins the contract that previousMirrorTip is captured
+    // *after* fetch and *before* the force-push, so it sees the user's
+    // most-recent commit.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['agent.yml'],
+      }),
+      stderr: '',
+    });
+    // Local origin/main (post-fetch) is the SHA of the user's v2 commit.
+    mockResponses.set('git rev-parse --verify origin/main', {
+      exitCode: 0,
+      stdout: 'v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2',
+      stderr: '',
+    });
+    // Reading agent.yml from the v2 SHA returns the user's v2 content.
+    mockResponses.set(
+      'git show v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2:agent.yml',
+      { exitCode: 0, stdout: 'agent: v2', stderr: '' }
+    );
+    mockResponses.set('git ls-tree v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2', {
+      exitCode: 0,
+      stdout: '100644 blob deadbeef\tagent.yml\n',
+      stderr: '',
+    });
+    // Divergence check: the v2 commit is on origin (the user's commit).
+    mockResponses.set('git rev-list upstream/main..origin/main', {
+      exitCode: 0,
+      stdout: 'v2v2v2v2v2v2v2v2\n',
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream/main..public/main', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git diff-tree -r --no-commit-id --name-only -m --first-parent v2v2v2v2v2v2v2v2',
+      { exitCode: 0, stdout: 'agent.yml\n', stderr: '' }
+    );
+    mockResponses.set('git log -1 --format=%s v2v2v2v2v2v2v2v2', {
+      exitCode: 0,
+      stdout: 'mirror: bump agent to v2\n',
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // The write that feeds the deterministic +1 commit must contain v2.
+    const agentWrite = writeFileCalls.find((w) => w.path.endsWith('agent.yml'));
+    expect(agentWrite).toBeDefined();
+    expect(String(agentWrite?.content)).toBe('agent: v2');
+
+    // And: agent.yml is `git add`ed, then committed and force-pushed back.
+    expect(execaCalls.some((cmd) => cmd.includes('git add -- agent.yml'))).toBe(
+      true
+    );
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git push origin HEAD:main --force-with-lease')
+      )
+    ).toBe(true);
+  });
+
+  test('removing a preserve entry re-asserts strictness on the orphaned mirror commit', async () => {
+    // Sequence simulated: previously, `preserve: ['agent.yml']` was set and a
+    // user commit landed on origin (passing divergence under the allowlist).
+    // The user has now run `venfork preserve remove agent.yml`. The commit is
+    // still on origin/main but preserve no longer covers it — divergence
+    // check should flag it and abort. The error must surface the file by
+    // name with a concrete `venfork preserve add` hint, so the user
+    // remembers what they removed.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        // preserve intentionally absent — the entry was just removed.
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream/main..origin/main', {
+      exitCode: 0,
+      stdout: 'orphancommit11111\n',
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream/main..public/main', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    mockResponses.set('git log -1 --format=%s orphancommit11111', {
+      exitCode: 0,
+      stdout: 'mirror: add agent caller workflow\n',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git diff-tree -r --no-commit-id --name-only -m --first-parent orphancommit11111',
+      { exitCode: 0, stdout: 'agent.yml\n', stderr: '' }
+    );
+
+    let aborted = false;
+    try {
+      await syncCommand('main');
+    } catch {
+      aborted = true;
+    }
+
+    // Sync must abort (process.exit(1) is mocked to throw).
+    expect(aborted).toBe(true);
+    // The upstream→origin force-push must NOT have happened.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git push origin upstream/main:refs/heads/main --force-with-lease'
+        )
+      )
+    ).toBe(false);
+    // The error message must surface the orphaned file with a concrete
+    // `venfork preserve add` hint — the case-by-name guidance the user
+    // needs to recognize "oh, that's the entry I just removed."
+    const messages = noteCalls.map((n) => n.message).join('\n---\n');
+    expect(messages).toContain('venfork preserve add agent.yml');
+    expect(messages).toContain('agent.yml');
+  });
+
+  test('legacy "+1 commit" subjects from older venfork versions still classify as managed (no spurious divergence)', async () => {
+    // Older venfork emitted `chore: add/update scheduled sync workflow
+    // (venfork)` for the +1 commit. Mirrors created with that version
+    // still have those subjects in their history. After upgrading, the
+    // divergence check must continue to recognize them — otherwise the
+    // first sync after upgrade aborts with a false-positive on every
+    // mirror in the wild.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream/main..origin/main', {
+      exitCode: 0,
+      stdout: 'legacycommit11111\n',
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream/main..public/main', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    // Subject = the OLD message string. Must be recognized as managed.
+    mockResponses.set('git log -1 --format=%s legacycommit11111', {
+      exitCode: 0,
+      stdout: 'chore: add/update scheduled sync workflow (venfork)\n',
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // Sync must NOT have aborted on the legacy-message commit — the
+    // upstream→origin force-push should still happen.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git push origin upstream/main:refs/heads/main --force-with-lease'
+        )
+      )
+    ).toBe(true);
+  });
+
+  test('divergence check tolerates a commit whose changed files are all preserved', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['.github/workflows/caller.yml'],
+      }),
+      stderr: '',
+    });
+    // origin has 1 commit ahead of upstream — the user's preserve commit.
+    mockResponses.set('git rev-list upstream/main..origin/main', {
+      exitCode: 0,
+      stdout: 'feedfacecafebabe\n',
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream/main..public/main', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    // That commit's changed files: only the preserved path.
+    mockResponses.set(
+      'git diff-tree -r --no-commit-id --name-only -m --first-parent feedfacecafebabe',
+      {
+        exitCode: 0,
+        stdout: '.github/workflows/caller.yml\n',
+        stderr: '',
+      }
+    );
+    // Subject doesn't match the workflow message — would normally count as divergent.
+    mockResponses.set('git log -1 --format=%s feedfacecafebabe', {
+      exitCode: 0,
+      stdout: 'mirror: add caller workflow\n',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify origin/main', {
+      exitCode: 0,
+      stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/caller.yml',
+      { exitCode: 0, stdout: 'name: caller\n', stderr: '' }
+    );
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // Sync should NOT have aborted — the upstream-to-origin push happens.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git push origin upstream/main:refs/heads/main --force-with-lease'
+        )
+      )
+    ).toBe(true);
   });
 });
 

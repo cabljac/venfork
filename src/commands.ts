@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import * as p from '@clack/prompts';
@@ -7,6 +7,7 @@ import { $ } from 'execa';
 import {
   createConfigBranch,
   fetchVenforkConfig,
+  normalizePreservePath,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
   type VenforkConfig,
@@ -68,8 +69,23 @@ async function confirmOrAutoYes(opts: {
 }
 
 const SYNC_WORKFLOW_PATH = getSyncWorkflowPath();
-const WORKFLOW_COMMIT_MESSAGE =
-  'chore: add/update scheduled sync workflow (venfork)';
+/**
+ * Subject line emitted on every venfork-managed "+1 commit" — both the
+ * scheduled-workflow case and the preserve-only case. Generalized from the
+ * original "scheduled sync workflow" wording because the same commit can now
+ * carry preserve content with no workflow involvement; an honest subject
+ * keeps `git log` readable and lets `isManagedCommit` rely on a single
+ * canonical match without misclassifying preserve-only commits.
+ */
+const MANAGED_COMMIT_MESSAGE = 'chore: venfork-managed mirror commit';
+/**
+ * Subjects emitted by older venfork versions for the same "+1 commit" role.
+ * Recognized by `isManagedCommit` so existing mirrors don't suddenly classify
+ * historical managed commits as user-authored divergence after upgrading.
+ */
+const LEGACY_MANAGED_COMMIT_MESSAGES: readonly string[] = [
+  'chore: add/update scheduled sync workflow (venfork)',
+];
 const WORKFLOWS_DIR = '.github/workflows';
 const VENFORK_BOT_NAME = 'venfork-bot';
 const VENFORK_BOT_EMAIL = 'venfork-bot@users.noreply.github.com';
@@ -112,10 +128,12 @@ async function commitTouchesWorkflowPath(
   if (filesResult.exitCode !== 0) {
     return false;
   }
+  // Same line-handling rule as `changedFilesInCommit`: only strip a
+  // trailing CR (CRLF on Windows checkouts), not arbitrary whitespace.
   const changedFiles = filesResult.stdout
     .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => line !== '');
   if (!changedFiles.length) {
     return false;
   }
@@ -132,18 +150,24 @@ async function commitTouchesWorkflowPath(
 }
 
 /**
- * Internal workflow commit marker used by the mirror "+1 commit" model.
+ * Detects the venfork-managed "+1 commit" so sync's divergence check and
+ * stage's cherry-pick filter can skip it without losing user work.
  *
- * We identify this commit by its deterministic message and also accept commits
- * that touch the managed `venfork-sync.yml` plus only sibling files under
- * `.github/workflows/` — so historical rollouts that bundled extra workflow
- * files alongside the managed one are still classified as managed, while
- * user-authored commits to *other* workflow files (e.g. ci.yml) are preserved.
+ * Three signals all classify a commit as managed:
+ *  1. Subject matches the current `MANAGED_COMMIT_MESSAGE`.
+ *  2. Subject matches one of `LEGACY_MANAGED_COMMIT_MESSAGES` — covers
+ *     mirrors created before the message was generalized.
+ *  3. Path heuristic: commit touches the managed `venfork-sync.yml` and
+ *     reaches no further than `.github/workflows/`. This rescues historical
+ *     rollouts that bundled extra workflow files alongside the managed one,
+ *     while keeping user-authored commits to *other* workflow files (e.g.
+ *     ci.yml) classified as user content.
  */
-async function isWorkflowCommit(ref: string, cwd?: string): Promise<boolean> {
+async function isManagedCommit(ref: string, cwd?: string): Promise<boolean> {
   const subject = await commitSubject(ref, cwd);
-  if (subject === WORKFLOW_COMMIT_MESSAGE) {
-    return true;
+  if (subject !== null) {
+    if (subject === MANAGED_COMMIT_MESSAGE) return true;
+    if (LEGACY_MANAGED_COMMIT_MESSAGES.includes(subject)) return true;
   }
   return commitTouchesWorkflowPath(ref, cwd);
 }
@@ -235,7 +259,7 @@ async function listWorkflowFiles(cwd: string): Promise<string[]> {
   const result = await $({
     cwd,
     reject: false,
-  })`git ls-tree -r --name-only HEAD ${WORKFLOWS_DIR}`;
+  })`git ls-tree -r --name-only HEAD -- ${WORKFLOWS_DIR}`;
   if (result.exitCode !== 0 || !result.stdout.trim()) {
     return [];
   }
@@ -255,14 +279,34 @@ async function remoteBranchExists(
   return result.exitCode === 0;
 }
 
-async function applyScheduledWorkflowCommit(
-  defaultBranch: string,
-  cron: string,
-  enabledWorkflows: string[],
-  disabledWorkflows: string[],
-  mode: 'standard' | 'no-public',
-  cwd?: string
-): Promise<void> {
+/**
+ * Re-stamp `origin/<defaultBranch>` as `upstream/<defaultBranch>` plus one
+ * deterministic "+1 commit" containing the managed sync workflow (when
+ * scheduled) and any preserved mirror-only files. Force-pushes the result.
+ *
+ * `previousMirrorTip` is the commit-ish to read preserve sources from
+ * (typically captured from `git rev-parse origin/<defaultBranch>` *before*
+ * sync's force-push runs). Pass an empty string when no previous tip exists
+ * (first sync); preserve must be empty in that case.
+ */
+async function applyMirrorPlusOneCommit(args: {
+  defaultBranch: string;
+  schedule: { cron: string; mode: 'standard' | 'no-public' } | null;
+  enabledWorkflows: string[];
+  disabledWorkflows: string[];
+  preserve: string[];
+  previousMirrorTip: string;
+  cwd?: string;
+}): Promise<void> {
+  const {
+    defaultBranch,
+    schedule,
+    enabledWorkflows,
+    disabledWorkflows,
+    preserve,
+    previousMirrorTip,
+    cwd,
+  } = args;
   const repoDir = cwd ?? process.cwd();
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-sync-'));
   const allowlist = normalizeWorkflowList(enabledWorkflows);
@@ -274,40 +318,93 @@ async function applyScheduledWorkflowCommit(
     await $({
       cwd: repoDir,
     })`git worktree add --detach ${tempDir} upstream/${defaultBranch}`;
-    await mkdir(path.join(tempDir, '.github', 'workflows'), {
-      recursive: true,
-    });
-    await writeFile(
-      path.join(tempDir, SYNC_WORKFLOW_PATH),
-      generateSyncWorkflow(cron, mode)
-    );
-    await $({ cwd: tempDir })`git add ${SYNC_WORKFLOW_PATH}`;
 
-    // Filter upstream workflow files as part of the managed "+1" commit.
-    // Precedence: enabledWorkflows allowlist > disabledWorkflows blocklist.
-    if (allowlist.length > 0 || blocklist.length > 0) {
-      const workflowFiles = await listWorkflowFiles(tempDir);
-      for (const workflowFile of workflowFiles) {
-        if (workflowFile === SYNC_WORKFLOW_PATH) {
+    if (schedule) {
+      await mkdir(path.join(tempDir, '.github', 'workflows'), {
+        recursive: true,
+      });
+      await writeFile(
+        path.join(tempDir, SYNC_WORKFLOW_PATH),
+        generateSyncWorkflow(schedule.cron, schedule.mode)
+      );
+      await $({ cwd: tempDir })`git add -- ${SYNC_WORKFLOW_PATH}`;
+
+      // Filter upstream workflow files as part of the managed "+1" commit.
+      // Precedence: enabledWorkflows allowlist > disabledWorkflows blocklist.
+      if (allowlist.length > 0 || blocklist.length > 0) {
+        const workflowFiles = await listWorkflowFiles(tempDir);
+        for (const workflowFile of workflowFiles) {
+          if (workflowFile === SYNC_WORKFLOW_PATH) {
+            continue;
+          }
+          const base = path.basename(workflowFile);
+          const shouldKeep =
+            allowlist.length > 0
+              ? allowlist.includes(base)
+              : !blocklist.includes(base);
+          if (!shouldKeep) {
+            await $({
+              cwd: tempDir,
+              reject: false,
+            })`git rm --quiet --ignore-unmatch -- ${workflowFile}`;
+          }
+        }
+      }
+    }
+
+    if (preserve.length > 0) {
+      if (!previousMirrorTip) {
+        throw new Error(
+          `Cannot preserve files: no previous origin/${defaultBranch} tip to read from.\n` +
+            'Run `venfork sync` once to populate the mirror, then commit your preserved files and re-run sync.'
+        );
+      }
+      for (const preservePath of preserve) {
+        const upstreamHasIt = await pathExists(
+          path.join(tempDir, preservePath)
+        );
+        if (upstreamHasIt) {
+          p.log.warn(
+            `preserved file '${preservePath}' now exists upstream — using upstream version`
+          );
           continue;
         }
-        const base = path.basename(workflowFile);
-        const shouldKeep =
-          allowlist.length > 0
-            ? allowlist.includes(base)
-            : !blocklist.includes(base);
-        if (!shouldKeep) {
-          await $({
-            cwd: tempDir,
-            reject: false,
-          })`git rm --quiet --ignore-unmatch ${workflowFile}`;
+        const showResult = await $({
+          cwd: repoDir,
+          reject: false,
+          encoding: 'buffer',
+          stripFinalNewline: false,
+        })`git show ${previousMirrorTip}:${preservePath}`;
+        if (showResult.exitCode !== 0) {
+          throw new Error(
+            `Preserved file '${preservePath}' not found on origin/${defaultBranch}.\n` +
+              'Either commit it to the mirror first, or remove the entry with:\n' +
+              `  venfork preserve remove ${preservePath}`
+          );
         }
+        // Preserve the executable bit by reading the tree entry's mode.
+        // `git show <ref>:<path>` only emits content; mode lives on the tree.
+        // Symlinks (120000) and submodules (160000) are out of scope — those
+        // would need plumbing-level handling. Plain files and `+x` files cover
+        // the realistic mirror-only cases (caller workflows, release scripts).
+        const lsTreeResult = await $({
+          cwd: repoDir,
+          reject: false,
+        })`git ls-tree ${previousMirrorTip} -- ${preservePath}`;
+        const treeMode = lsTreeResult.stdout.match(/^(\d+) /)?.[1];
+        const targetPath = path.join(tempDir, preservePath);
+        await mkdir(path.dirname(targetPath), { recursive: true });
+        await writeFile(targetPath, showResult.stdout);
+        if (treeMode === '100755') {
+          await chmod(targetPath, 0o755);
+        }
+        await $({ cwd: tempDir })`git add -- ${preservePath}`;
       }
     }
 
     await $({
       cwd: tempDir,
-    })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit --allow-empty -m ${WORKFLOW_COMMIT_MESSAGE}`;
+    })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit --allow-empty -m ${MANAGED_COMMIT_MESSAGE}`;
 
     await $({
       cwd: tempDir,
@@ -319,6 +416,57 @@ async function applyScheduledWorkflowCommit(
     })`git worktree remove --force ${tempDir}`;
     await rm(tempDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Lists the file paths changed by a single commit. Returns an empty array on
+ * git error or for empty commits. Shared by `isPreservedCommit` and the
+ * divergence-check file collection — both want the same name-only output.
+ *
+ * Uses `diff-tree -m --first-parent` instead of `git show` so merge commits
+ * are diffed against their *first parent* (everything the merge brought in
+ * from the side branch), not the default combined-diff (`--cc`) which only
+ * surfaces conflict-resolution files. Without this, a clean merge that
+ * touches a preserved file would show zero changed files — which would
+ * make `isPreservedCommit` return false and abort sync on a benign merge.
+ */
+async function changedFilesInCommit(
+  ref: string,
+  cwd?: string
+): Promise<string[]> {
+  const cwdOpt = cwd ? { cwd } : {};
+  const result = await $({
+    ...cwdOpt,
+    reject: false,
+  })`git diff-tree -r --no-commit-id --name-only -m --first-parent ${ref}`;
+  if (result.exitCode !== 0) return [];
+  // Strip only a trailing CR (CRLF on Windows checkouts), not arbitrary
+  // whitespace — git path entries can in principle contain leading/trailing
+  // spaces, and `trim()` would silently mangle them. Empty lines after the
+  // CR strip are dropped.
+  return result.stdout
+    .split('\n')
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => line !== '');
+}
+
+/**
+ * Returns true when every file in `changedFiles` is in the preserve allowlist.
+ * Used by sync's divergence check to allow user-authored mirror-only commits
+ * (e.g. a caller workflow) ahead of upstream — as long as every changed file
+ * is something the user has explicitly opted into preserving.
+ *
+ * Takes pre-computed `changedFiles` AND a pre-built `allowed` Set so the
+ * caller can amortize both the `git diff-tree` invocation and the Set
+ * construction across multiple commits. Pure / synchronous: no I/O.
+ */
+function isPreservedCommit(
+  changedFiles: string[],
+  allowed: Set<string>
+): boolean {
+  if (allowed.size === 0) return false;
+  if (changedFiles.length === 0) return false;
+  return changedFiles.every((file) => allowed.has(file));
 }
 
 async function updateWorkflowOnOriginDefault(
@@ -338,13 +486,13 @@ async function updateWorkflowOnOriginDefault(
       await $({
         cwd: tempDir,
         reject: false,
-      })`git rm --quiet --ignore-unmatch ${SYNC_WORKFLOW_PATH}`;
+      })`git rm --quiet --ignore-unmatch -- ${SYNC_WORKFLOW_PATH}`;
     } else {
       await mkdir(path.join(tempDir, '.github', 'workflows'), {
         recursive: true,
       });
       await writeFile(path.join(tempDir, SYNC_WORKFLOW_PATH), workflowContent);
-      await $({ cwd: tempDir })`git add ${SYNC_WORKFLOW_PATH}`;
+      await $({ cwd: tempDir })`git add -- ${SYNC_WORKFLOW_PATH}`;
     }
 
     const stagedDiff = await $({
@@ -357,7 +505,7 @@ async function updateWorkflowOnOriginDefault(
 
     await $({
       cwd: tempDir,
-    })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${WORKFLOW_COMMIT_MESSAGE}`;
+    })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${MANAGED_COMMIT_MESSAGE}`;
     await $({
       cwd: tempDir,
     })`git push origin HEAD:${defaultBranch} --force-with-lease`;
@@ -456,7 +604,7 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
     // to pull `origin/<default>` back in after a sync rewrite. `--no-merges`
     // still walks *both* sides of any merge, so non-merge content from either
     // side is cherry-picked as normal (workflow commits introduced via the
-    // merged-in side are then filtered by `isWorkflowCommit` below).
+    // merged-in side are then filtered by `isManagedCommit` below).
     // `--topo-order` makes the parent-before-child guarantee explicit (with
     // `--reverse`: ancestors first, descendants last). The default order is
     // pseudo-chronological and can violate topology when commit timestamps
@@ -472,7 +620,7 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
 
     const commitsToPick: string[] = [];
     for (const commit of branchCommits) {
-      if (!(await isWorkflowCommit(commit, repoDir))) {
+      if (!(await isManagedCommit(commit, repoDir))) {
         commitsToPick.push(commit);
       }
     }
@@ -1312,11 +1460,24 @@ export async function syncCommand(
     const scheduleConfig = config?.schedule;
     const enabledWorkflows = config?.enabledWorkflows ?? [];
     const disabledWorkflows = config?.disabledWorkflows ?? [];
+    const preserveList = config?.preserve ?? [];
 
     // Step 3: Check for divergence
     s.start('Checking for divergent commits');
 
-    const checkDivergence = async (remote: string): Promise<number> => {
+    // `allowPreserved` is asymmetric on purpose: mirror-only files live on
+    // origin (the private mirror) and never get pushed to public. So a
+    // preserved-only commit on origin is expected and benign, but the same
+    // shape on public would mean someone pushed to public outside venfork —
+    // which is a real divergence we want to abort on.
+    // Build the allowlist Set once outside the per-remote loop — both
+    // origin and public divergence checks reuse it across however many
+    // divergent commits each remote has.
+    const preserveAllowed = new Set(preserveList);
+    const checkDivergence = async (
+      remote: string,
+      allowPreserved: boolean
+    ): Promise<{ count: number; files: string[] }> => {
       try {
         const result = await $({
           ...cwdOpt,
@@ -1326,55 +1487,114 @@ export async function syncCommand(
           .map((line) => line.trim())
           .filter(Boolean);
 
-        let userFacingDivergence = 0;
+        let count = 0;
+        const files = new Set<string>();
         for (const commit of divergentCommits) {
-          if (!(await isWorkflowCommit(commit, options?.cwd))) {
-            userFacingDivergence += 1;
+          if (await isManagedCommit(commit, options?.cwd)) continue;
+          // Compute the changed files once — both the preserve check and the
+          // divergence-error file aggregation want the same list, and
+          // `git diff-tree` isn't free.
+          const commitFiles = await changedFilesInCommit(commit, options?.cwd);
+          if (
+            allowPreserved &&
+            isPreservedCommit(commitFiles, preserveAllowed)
+          ) {
+            continue;
+          }
+          count += 1;
+          for (const file of commitFiles) {
+            files.add(file);
           }
         }
-        return userFacingDivergence;
+        return { count, files: Array.from(files).sort() };
       } catch {
         // Remote branch might not exist yet (first sync)
-        return 0;
+        return { count: 0, files: [] };
       }
     };
 
-    const originDivergence = await checkDivergence('origin');
-    const publicDivergence = noPublic ? 0 : await checkDivergence('public');
+    const originDivergence = await checkDivergence('origin', true);
+    const publicDivergence = noPublic
+      ? { count: 0, files: [] as string[] }
+      : await checkDivergence('public', false);
 
     s.stop('Checked for divergence');
 
     // Step 4: Warn if divergent commits exist
-    if (originDivergence > 0 || publicDivergence > 0) {
+    if (originDivergence.count > 0 || publicDivergence.count > 0) {
       const warnings: string[] = [];
-      if (originDivergence > 0) {
+      if (originDivergence.count > 0) {
         warnings.push(
-          `  • origin/${defaultBranch} has ${originDivergence} commit(s) not in upstream`
+          `  • origin/${defaultBranch} has ${originDivergence.count} commit(s) not in upstream`
         );
       }
-      if (publicDivergence > 0) {
+      if (publicDivergence.count > 0) {
         warnings.push(
-          `  • public/${defaultBranch} has ${publicDivergence} commit(s) not in upstream`
+          `  • public/${defaultBranch} has ${publicDivergence.count} commit(s) not in upstream`
         );
       }
+
+      // When origin diverges, surface the changed files and a concrete
+      // `venfork preserve add ...` hint. Most likely cause is a mirror-only
+      // file the user committed directly (or one whose preserve entry was
+      // just removed) — both cases resolve with `preserve add`. Public
+      // divergence does NOT get this hint: preserve doesn't apply to public,
+      // so suggesting it would mislead.
+      const sections: string[] = [warnings.join('\n')];
+      if (originDivergence.files.length > 0) {
+        sections.push(
+          `Files changed by divergent commits on origin/${defaultBranch}:\n${originDivergence.files
+            .map((f) => `  • ${f}`)
+            .join('\n')}`
+        );
+        // Only suggest preserve for paths the validator would actually
+        // accept — otherwise the copy/paste command line would fail.
+        // If every divergent path is invalid for preserve, suppress the hint
+        // entirely (rebase/force-sync below still apply).
+        const validForPreserve: string[] = [];
+        const invalidForPreserve: string[] = [];
+        for (const file of originDivergence.files) {
+          if (normalizePreservePath(file) !== null) {
+            validForPreserve.push(file);
+          } else {
+            invalidForPreserve.push(file);
+          }
+        }
+        if (validForPreserve.length > 0) {
+          sections.push(
+            `If these are mirror-only files you want to keep across sync, add them to preserve:\n  venfork preserve add ${validForPreserve.join(' ')}`
+          );
+          if (invalidForPreserve.length > 0) {
+            sections.push(
+              `(skipped from the hint — paths can't be expressed in the preserve allowlist: ${invalidForPreserve.join(', ')})`
+            );
+          }
+        }
+      }
+      sections.push(
+        `Otherwise:\n- Rebase or cherry-pick to a feature branch before running sync\n- Force-sync (DESTRUCTIVE — permanently discards the commits): git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} -f`
+      );
 
       p.log.warn('Divergent commits detected:');
-      p.note(
-        `${warnings.join('\n')}
-
-This suggests commits were made directly to the default branch.
-Force syncing will LOSE these commits.
-
-To preserve them: manually rebase or cherry-pick before running sync.
-To force sync anyway: git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} -f`,
-        '⚠️  Warning'
-      );
+      p.note(sections.join('\n\n'), '⚠️  Warning');
 
       if (!quiet) {
         p.outro('❌ Sync aborted to prevent data loss');
       }
       process.exit(1);
     }
+
+    // Capture the previous mirror tip BEFORE the force-push so
+    // `applyMirrorPlusOneCommit` can read preserved files from it. After the
+    // push, `origin/<defaultBranch>` (locally and remotely) points at the
+    // upstream tree and the previous mirror state is no longer reachable
+    // through that ref.
+    const prevTipResult = await $({
+      ...cwdOpt,
+      reject: false,
+    })`git rev-parse --verify origin/${defaultBranch}`;
+    const previousMirrorTip =
+      prevTipResult.exitCode === 0 ? prevTipResult.stdout.trim() : '';
 
     // Step 5: Push upstream default branch to origin (and public, in standard mode)
     s.start(
@@ -1394,20 +1614,30 @@ To force sync anyway: git push origin upstream/${defaultBranch}:refs/heads/${def
 
     s.stop(noPublic ? 'Synced to origin' : 'Synced to all remotes');
 
-    // Step 6: Enforce mirror "+1 commit" model for scheduled sync workflow.
-    // Scheduling config lives on `venfork-config`; when enabled we re-stamp
-    // one deterministic workflow commit on top of upstream.
-    if (scheduleConfig?.enabled && scheduleConfig.cron) {
-      s.start('Re-applying scheduled sync workflow commit');
-      await applyScheduledWorkflowCommit(
+    // Step 6: Enforce mirror "+1 commit" model. Runs when schedule is enabled
+    // (writes the managed sync workflow + filters upstream workflows) OR when
+    // preserve is non-empty (carries mirror-only files forward across sync).
+    const scheduleActive = Boolean(
+      scheduleConfig?.enabled && scheduleConfig.cron
+    );
+    if (scheduleActive || preserveList.length > 0) {
+      s.start('Re-applying mirror "+1 commit"');
+      await applyMirrorPlusOneCommit({
         defaultBranch,
-        scheduleConfig.cron,
+        schedule:
+          scheduleActive && scheduleConfig
+            ? {
+                cron: scheduleConfig.cron,
+                mode: noPublic ? 'no-public' : 'standard',
+              }
+            : null,
         enabledWorkflows,
         disabledWorkflows,
-        noPublic ? 'no-public' : 'standard',
-        options?.cwd
-      );
-      s.stop('Scheduled workflow commit normalized');
+        preserve: preserveList,
+        previousMirrorTip,
+        cwd: options?.cwd,
+      });
+      s.stop('Mirror "+1 commit" applied');
     }
 
     if (!quiet) {
@@ -1625,6 +1855,95 @@ export async function workflowsCommand(
   } catch (error) {
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Workflows command failed');
+    process.exit(1);
+  }
+}
+
+/**
+ * Preserve command: manage the `preserve` allowlist of mirror-only file paths
+ * carried forward by `venfork sync`. Allowlist-only / opt-in: there's no
+ * "deny preserve" concept (entries can still be added, removed, or cleared
+ * — only the deny-direction has no semantics).
+ */
+export async function preserveCommand(
+  action: 'list' | 'add' | 'remove' | 'clear',
+  paths: string[]
+): Promise<void> {
+  p.intro('🧷 Venfork Preserve');
+  const repoDir = process.cwd();
+
+  try {
+    if (action === 'list') {
+      const config = await readVenforkConfigFromRepo(repoDir);
+      if (!config) {
+        throw new Error('venfork-config branch not found or invalid');
+      }
+      const entries = config.preserve ?? [];
+      if (entries.length === 0) {
+        p.note(
+          'No files preserved. Sync will drop any mirror-only files on every run.',
+          'Preserve Status'
+        );
+      } else {
+        p.note(
+          entries.map((entry) => `- ${entry}`).join('\n'),
+          'Preserved files'
+        );
+      }
+      p.outro('✨ Preserve list shown');
+      return;
+    }
+
+    if (action === 'clear') {
+      await updateVenforkConfig(repoDir, { preserve: null });
+      p.outro(
+        '✨ Preserve list cleared. Run `venfork sync` to apply on the private mirror default branch.'
+      );
+      return;
+    }
+
+    const validated: string[] = [];
+    for (const candidate of paths) {
+      const cleaned = normalizePreservePath(candidate);
+      if (!cleaned) {
+        throw new Error(
+          `Invalid preserve path '${candidate}': must be a clean relative path (no leading '/' or '-', no '..' / '.' / empty segments, no backslashes, NUL bytes, Windows drive prefixes, or whitespace).`
+        );
+      }
+      validated.push(cleaned);
+    }
+
+    const current = (await readVenforkConfigFromRepo(repoDir))?.preserve ?? [];
+
+    if (action === 'add') {
+      const merged = Array.from(new Set([...current, ...validated]));
+      await updateVenforkConfig(repoDir, { preserve: merged });
+      p.note(
+        validated.map((entry) => `- ${entry}`).join('\n'),
+        'Added to preserve list'
+      );
+      p.outro(
+        '✨ Preserve list updated. Commit the file(s) to the mirror default branch (if not already), then run `venfork sync`.'
+      );
+      return;
+    }
+
+    // action === 'remove'
+    const toRemove = new Set(validated);
+    const filtered = current.filter((entry) => !toRemove.has(entry));
+    await updateVenforkConfig(repoDir, {
+      preserve: filtered.length > 0 ? filtered : null,
+    });
+    p.note(
+      validated.map((entry) => `- ${entry}`).join('\n'),
+      'Removed from preserve list'
+    );
+    p.outro(
+      '✨ Preserve list updated. Run `venfork sync` to apply on the private mirror default branch.'
+    );
+  } catch (error) {
+    p.log.error(error instanceof Error ? error.message : String(error));
+    p.outro('❌ Preserve command failed');
     process.exit(1);
   }
 }
@@ -3058,7 +3377,12 @@ venfork issue <stage|pull> <number-or-url> [--title <text>]
     record linkage. No comment sync — the linkage is one-shot.
 
 venfork workflows <status|allow|block|clear> [workflow-file ...]
-  Configure workflow allowlist/blocklist policy in venfork-config`,
+  Configure workflow allowlist/blocklist policy in venfork-config
+
+venfork preserve <list|add|remove|clear> [path ...]
+  Carry mirror-only files (e.g. caller workflows) forward across \`venfork sync\`
+  Each entry is a repo-relative path read from the previous origin tip on every sync
+  Upstream wins on collision; missing source aborts sync until the file is committed`,
     'Available Commands'
   );
 
