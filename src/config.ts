@@ -364,6 +364,12 @@ function normalizePulledIssue(value: unknown): PulledIssue | null {
  * option (e.g. `git add --all`). Every internal call site already passes
  * paths after `--`, but rejecting up-front means an attacker-controlled or
  * accidentally-malformed entry can't reach those call sites at all.
+ *
+ * IMPORTANT: if you change the rejection rules below, also update:
+ *   - the JSDoc on `VenforkConfig.preserve` (above)
+ *   - the user-facing error message in `preserveCommand` (src/commands.ts)
+ * All three must stay in sync — users see the JSDoc when editing config by
+ * hand, and the error message when running `venfork preserve add`.
  */
 export function normalizePreservePath(value: unknown): string | null {
   if (typeof value !== 'string') return null;

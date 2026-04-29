@@ -128,10 +128,12 @@ async function commitTouchesWorkflowPath(
   if (filesResult.exitCode !== 0) {
     return false;
   }
+  // Same line-handling rule as `changedFilesInCommit`: only strip a
+  // trailing CR (CRLF on Windows checkouts), not arbitrary whitespace.
   const changedFiles = filesResult.stdout
     .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => line !== '');
   if (!changedFiles.length) {
     return false;
   }
@@ -438,10 +440,14 @@ async function changedFilesInCommit(
     reject: false,
   })`git diff-tree -r --no-commit-id --name-only -m --first-parent ${ref}`;
   if (result.exitCode !== 0) return [];
+  // Strip only a trailing CR (CRLF on Windows checkouts), not arbitrary
+  // whitespace — git path entries can in principle contain leading/trailing
+  // spaces, and `trim()` would silently mangle them. Empty lines after the
+  // CR strip are dropped.
   return result.stdout
     .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => line !== '');
 }
 
 /**
@@ -450,17 +456,16 @@ async function changedFilesInCommit(
  * (e.g. a caller workflow) ahead of upstream — as long as every changed file
  * is something the user has explicitly opted into preserving.
  *
- * Takes pre-computed `changedFiles` rather than fetching them itself so the
- * caller can amortize the `git diff-tree` invocation across this predicate
- * AND the divergence-error file collection. Pure / synchronous: no I/O.
+ * Takes pre-computed `changedFiles` AND a pre-built `allowed` Set so the
+ * caller can amortize both the `git diff-tree` invocation and the Set
+ * construction across multiple commits. Pure / synchronous: no I/O.
  */
 function isPreservedCommit(
   changedFiles: string[],
-  preserveList: string[]
+  allowed: Set<string>
 ): boolean {
-  if (preserveList.length === 0) return false;
+  if (allowed.size === 0) return false;
   if (changedFiles.length === 0) return false;
-  const allowed = new Set(preserveList);
   return changedFiles.every((file) => allowed.has(file));
 }
 
@@ -1465,6 +1470,10 @@ export async function syncCommand(
     // preserved-only commit on origin is expected and benign, but the same
     // shape on public would mean someone pushed to public outside venfork —
     // which is a real divergence we want to abort on.
+    // Build the allowlist Set once outside the per-remote loop — both
+    // origin and public divergence checks reuse it across however many
+    // divergent commits each remote has.
+    const preserveAllowed = new Set(preserveList);
     const checkDivergence = async (
       remote: string,
       allowPreserved: boolean
@@ -1486,7 +1495,10 @@ export async function syncCommand(
           // divergence-error file aggregation want the same list, and
           // `git diff-tree` isn't free.
           const commitFiles = await changedFilesInCommit(commit, options?.cwd);
-          if (allowPreserved && isPreservedCommit(commitFiles, preserveList)) {
+          if (
+            allowPreserved &&
+            isPreservedCommit(commitFiles, preserveAllowed)
+          ) {
             continue;
           }
           count += 1;
@@ -1895,7 +1907,7 @@ export async function preserveCommand(
       const cleaned = normalizePreservePath(candidate);
       if (!cleaned) {
         throw new Error(
-          `Invalid preserve path '${candidate}': must be a clean relative path (no leading '/', no '..' / '.' / empty segments, no backslashes, NUL bytes, Windows drive prefixes, or whitespace).`
+          `Invalid preserve path '${candidate}': must be a clean relative path (no leading '/' or '-', no '..' / '.' / empty segments, no backslashes, NUL bytes, Windows drive prefixes, or whitespace).`
         );
       }
       validated.push(cleaned);
