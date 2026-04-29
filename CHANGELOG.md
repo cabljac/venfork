@@ -1,5 +1,12 @@
 # venfork
 
+## [0.7.0](https://github.com/cabljac/venfork/compare/v0.6.0...v0.7.0) (2026-04-29)
+
+
+### Features
+
+* add --no-public mode (skip the public-fork hop) ([#34](https://github.com/cabljac/venfork/issues/34)) ([bd92a73](https://github.com/cabljac/venfork/commit/bd92a7331f3f1e219ba36ca1766f263eaf3cae43))
+
 ## [0.6.0](https://github.com/cabljac/venfork/compare/v0.5.0...v0.6.0) (2026-04-28)
 
 
