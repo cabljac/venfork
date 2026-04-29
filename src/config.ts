@@ -63,7 +63,15 @@ export interface PulledIssue {
  */
 export interface VenforkConfig {
   version: string;
-  publicForkUrl: string;
+  /**
+   * Repo layout. `'standard'` (default when absent) is the three-remote
+   * setup with a public fork hop. `'no-public'` collapses the layout to
+   * `origin` (private mirror) + `upstream` only — used when the upstream
+   * repo lives in the user's own org so the fork hop is unnecessary.
+   */
+  mode?: 'standard' | 'no-public';
+  /** Required in `'standard'` mode; omitted in `'no-public'` mode. */
+  publicForkUrl?: string;
   upstreamUrl: string;
   schedule?: {
     cron: string;
@@ -118,17 +126,30 @@ export type VenforkConfigPatch = Omit<
 
 /**
  * Creates and pushes a venfork config branch to the origin remote.
+ *
+ * Pass `publicForkUrl: null` (with `mode: 'no-public'`) when the layout
+ * skips the public fork hop.
  */
 export async function createConfigBranch(
   repoDir: string,
-  publicForkUrl: string,
-  upstreamUrl: string
+  publicForkUrl: string | null,
+  upstreamUrl: string,
+  mode: 'standard' | 'no-public' = 'standard'
 ): Promise<void> {
   const config: VenforkConfig = {
     version: '1',
-    publicForkUrl,
     upstreamUrl,
   };
+  if (mode === 'no-public') {
+    config.mode = 'no-public';
+  } else {
+    if (!publicForkUrl) {
+      throw new Error(
+        'createConfigBranch: publicForkUrl is required for standard mode'
+      );
+    }
+    config.publicForkUrl = publicForkUrl;
+  }
 
   await writeConfigBranch(repoDir, config, 'Initialize venfork configuration');
 }
@@ -325,13 +346,31 @@ function normalizeBranchMap<T>(
 }
 
 function normalizeConfig(config: VenforkConfig): VenforkConfig | null {
-  if (!config.version || !config.publicForkUrl || !config.upstreamUrl) {
+  if (!config.version || !config.upstreamUrl) {
+    return null;
+  }
+
+  const mode: 'standard' | 'no-public' =
+    config.mode === 'no-public' ? 'no-public' : 'standard';
+
+  if (mode === 'standard' && !config.publicForkUrl) {
+    return null;
+  }
+  if (mode === 'no-public' && config.publicForkUrl) {
+    // mode/publicForkUrl must agree — reject the ambiguous combo so a
+    // hand-edit can't leave the config in a contradictory state.
     return null;
   }
 
   const normalized: VenforkConfig = {
     ...config,
   };
+  if (mode === 'no-public') {
+    normalized.mode = 'no-public';
+    delete normalized.publicForkUrl;
+  } else {
+    delete normalized.mode;
+  }
 
   if (normalized.schedule) {
     const cron = normalized.schedule.cron?.trim();

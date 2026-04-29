@@ -39,4 +39,28 @@ describe('workflow helpers', () => {
     const workflow = generateSyncWorkflow("0 */6 * * *'\n# injected");
     expect(workflow).toContain("cron: '0 */6 * * *'' # injected'");
   });
+
+  test('standard mode emits public-remote configuration', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *', 'standard');
+    expect(workflow).toContain('PUBLIC_URL=');
+    expect(workflow).toContain('git remote add public');
+    expect(workflow).toContain('Missing upstream/public URL in venfork-config');
+  });
+
+  test('no-public mode omits public-remote configuration', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *', 'no-public');
+    expect(workflow).not.toContain('PUBLIC_URL=');
+    expect(workflow).not.toContain('git remote add public');
+    expect(workflow).not.toContain('git remote remove public');
+    expect(workflow).toContain('Missing upstream URL in venfork-config');
+    // Upstream + DISABLE-push guard remain in no-public mode.
+    expect(workflow).toContain('git remote add upstream');
+    expect(workflow).toContain('git remote set-url --push upstream DISABLE');
+  });
+
+  test('default mode is standard (back-compat with single-arg callers)', () => {
+    const explicit = generateSyncWorkflow('0 */6 * * *', 'standard');
+    const implicit = generateSyncWorkflow('0 */6 * * *');
+    expect(implicit).toBe(explicit);
+  });
 });
