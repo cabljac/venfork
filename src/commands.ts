@@ -1009,6 +1009,12 @@ export async function setupCommand(
     await ensureVenforkRemotes(repoDir, publicForkUrl, config.upstreamUrl);
     s.stop('Git remotes configured');
 
+    // Set gh default repository to the private mirror so `gh pr create` etc.
+    // resolve to origin without prompting.
+    s.start('Setting gh default repository');
+    await $({ cwd: repoDir })`gh repo set-default ${privateMirrorGhPath}`;
+    s.stop('Default repository set');
+
     // Step 8: Venfork config branch
     s.start('Creating venfork configuration');
     await createConfigBranch(
@@ -1294,13 +1300,19 @@ export async function cloneCommand(
 
     s.stop('Git remotes configured');
 
-    // Step 5: Show configuration
+    // Step 5: Set gh default repository to the mirror so `gh pr create` etc.
+    // resolve to origin without prompting.
+    s.start('Setting gh default repository');
+    await $({ cwd: vendorRepoName })`gh repo set-default ${vendorGhPath}`;
+    s.stop('Default repository set');
+
+    // Step 6: Show configuration
     const remotesOutput = await $({ cwd: vendorRepoName })`git remote -v`;
     const remotesText = remotesOutput.stdout;
 
     p.note(remotesText.trim(), 'Git Remote Configuration');
 
-    // Step 6: Success output
+    // Step 7: Success output
     p.outro(
       `✨ Clone complete!\n\nNext steps:
   cd ${vendorRepoName}
