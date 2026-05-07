@@ -510,6 +510,42 @@ When two venfork commands race the config update, the losing one's push is rejec
 
 That means concurrent runs are normally invisible to the user — both updates land. Only after sustained contention (3 lease failures in a row) does venfork surface the error and ask you to re-run the command. Don't `--force` the config branch by hand to "fix" a transient lease failure; that's exactly the data-loss path the lease prevents.
 
+#### Consumers reading `venfork-config` directly
+
+Because every config-mutating command replaces (rather than appends to) the `venfork-config` branch tip, **a plain refspec fetch is rejected as non-fast-forward**:
+
+```bash
+# This FAILS after any venfork config update:
+git fetch origin venfork-config:venfork-config
+# ! [rejected] venfork-config -> venfork-config (non-fast-forward)
+```
+
+Tools that maintain a long-lived local clone and read the config branch must use a **forced refspec**:
+
+```bash
+# Force-update the local ref — safe because the branch is intentionally replaced:
+git fetch origin +venfork-config:venfork-config
+# or equivalently:
+git fetch --force origin venfork-config:venfork-config
+```
+
+**Preferred approach — use the venfork library helpers:** The `readVenforkConfigFromRepo` and `fetchVenforkConfig` functions exported from the `venfork` package handle this internally (they read via `FETCH_HEAD` / a fresh clone without touching any local ref), so you never hit the non-fast-forward edge case:
+
+```js
+import { readVenforkConfigFromRepo } from 'venfork';
+
+// Always returns the current remote config — no local-ref management needed.
+const config = await readVenforkConfigFromRepo('/path/to/mirror-clone');
+```
+
+Or, if you don't have a local clone:
+
+```js
+import { fetchVenforkConfig } from 'venfork';
+
+const config = await fetchVenforkConfig('github-org/private-mirror');
+```
+
 ## Complete Workflow
 
 ### Initial Setup
