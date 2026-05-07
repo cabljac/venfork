@@ -379,6 +379,22 @@ describe('setupCommand - execution tests', () => {
     // rm should have been called (from finally block)
     expect(rmCalls.length).toBeGreaterThan(0);
   });
+
+  test('runs gh repo set-default for the private mirror after configuring remotes', async () => {
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh repo set-default') &&
+          cmd.includes('testuser/test-vendor')
+      )
+    ).toBe(true);
+  });
 });
 
 describe('setupCommand - idempotent recovery', () => {
@@ -2419,6 +2435,22 @@ describe('cloneCommand', () => {
     const remoteCalls = execaCalls.filter((cmd) => cmd.includes('git remote'));
     // Should attempt some remote operations
     expect(remoteCalls.length).toBeGreaterThan(0);
+  });
+
+  test('runs gh repo set-default for the mirror after configuring remotes', async () => {
+    try {
+      await cloneCommand('git@github.com:acme/project-private.git');
+    } catch {
+      // Expected
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh repo set-default') &&
+          cmd.includes('acme/project-private')
+      )
+    ).toBe(true);
   });
 });
 
