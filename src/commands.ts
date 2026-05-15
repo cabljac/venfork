@@ -104,6 +104,82 @@ async function runNetOp(
   p.log.success(stopMsg);
 }
 
+/** `-c` flags that make a large seed push survive: gh credentials over
+ *  HTTPS, a big post buffer + HTTP/1.1 (avoids chunked-encoding issues on
+ *  big POSTs), and a stalled-transfer abort. */
+const SEED_PUSH_CONFIG = [
+  '-c',
+  'credential.https://github.com.helper=!gh auth git-credential',
+  '-c',
+  'http.postBuffer=524288000',
+  '-c',
+  'http.version=HTTP/1.1',
+  '-c',
+  'http.lowSpeedLimit=1000',
+  '-c',
+  'http.lowSpeedTime=60',
+];
+
+/**
+ * Seed a fresh private mirror from a local upstream clone.
+ *
+ * A single `git push` of a large repo's full history 408s — GitHub enforces
+ * a request-duration limit and the monolithic pack POST exceeds it. So push
+ * the default branch in commit batches (each POST stays small), then push the
+ * real tip. History/SHAs are identical to upstream, which `sync`/`stage`/PRs
+ * require. Each push is retried a few times to ride out transient 408s.
+ *
+ * Batch size is `VENFORK_SEED_CHUNK` commits (default 1000); small repos take
+ * a single push (loop body is skipped).
+ *
+ * @param tempDir Local upstream clone.
+ * @param httpsUrl HTTPS URL of the private mirror.
+ * @param branch Default branch to seed.
+ */
+async function seedMirrorInChunks(
+  tempDir: string,
+  httpsUrl: string,
+  branch: string
+): Promise<void> {
+  const chunk = Number(process.env.VENFORK_SEED_CHUNK ?? 1000);
+
+  const revList = await $({
+    cwd: tempDir,
+  })`git rev-list --reverse ${branch}`;
+  const commits = revList.stdout.split('\n').filter(Boolean);
+  const total = commits.length;
+
+  const pushRef = async (src: string, label: string): Promise<void> => {
+    const attempts = 4;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        await runNetOp(
+          `Pushing ${label} to private mirror repository` +
+            (attempt > 1 ? ` (attempt ${attempt})` : ''),
+          `Pushed ${label}`,
+          () =>
+            netExec(
+              tempDir
+            )`git ${SEED_PUSH_CONFIG} push --force --no-thin --progress ${httpsUrl} ${src}:refs/heads/${branch}`
+        );
+        return;
+      } catch (err) {
+        if (attempt === attempts) throw err;
+        p.log.warn(
+          `Push of ${label} failed; retrying in 8s ` +
+            `(${attempt}/${attempts - 1})`
+        );
+        await new Promise((resolve) => setTimeout(resolve, 8000));
+      }
+    }
+  };
+
+  for (let i = chunk; i < total; i += chunk) {
+    await pushRef(commits[i - 1], `commits 1–${i}/${total}`);
+  }
+  await pushRef(branch, `${branch} (final)`);
+}
+
 /**
  * `p.confirm` wrapper that can return `true` immediately when
  * `VENFORK_NONINTERACTIVE=1` is set in the environment, but only for
@@ -1027,15 +1103,7 @@ export async function setupCommand(
       }
       s.stop(`Default branch: ${defaultBranch}`);
 
-      const ghCredentialHelper = '!gh auth git-credential';
-      await runNetOp(
-        `Pushing ${defaultBranch} to private mirror repository`,
-        'Pushed to private mirror repository',
-        () =>
-          netExec(
-            tempDir
-          )`git -c credential.https://github.com.helper=${ghCredentialHelper} -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 push --progress ${privateHttpsUrl} ${defaultBranch}:${defaultBranch}`
-      );
+      await seedMirrorInChunks(tempDir, privateHttpsUrl, defaultBranch);
     }
 
     // Step 6: Local clone of the private mirror

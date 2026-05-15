@@ -418,9 +418,46 @@ describe('setupCommand - execution tests', () => {
     expect(seedPush).toBeDefined();
     expect(seedPush).toContain('credential.https://github.com.helper');
     expect(seedPush).toContain('--progress');
-    expect(seedPush).toContain('main:main');
+    expect(seedPush).toContain('main:refs/heads/main');
     // The hang fix: the seeding push must not use the raw SSH URL.
     expect(seedPush).not.toContain('git@github.com:');
+  });
+
+  test('seeds large history in commit-batched pushes, then the real tip', async () => {
+    process.env.VENFORK_SEED_CHUNK = '2';
+    mockResponses.set('git rev-list --reverse main', {
+      exitCode: 0,
+      stdout: 'aaa\nbbb\nccc\nddd\neee',
+      stderr: '',
+    });
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    } finally {
+      delete process.env.VENFORK_SEED_CHUNK;
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes(' push ') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git') &&
+        cmd.includes(':refs/heads/main')
+    );
+
+    // 5 commits, chunk 2 -> push at commit 2 (bbb), commit 4 (ddd),
+    // then the real branch tip.
+    expect(seedPushes.length).toBe(3);
+    expect(seedPushes.some((c) => c.includes('bbb:refs/heads/main'))).toBe(
+      true
+    );
+    expect(seedPushes.some((c) => c.includes('ddd:refs/heads/main'))).toBe(
+      true
+    );
+    expect(seedPushes.some((c) => c.includes('main:refs/heads/main'))).toBe(
+      true
+    );
+    expect(seedPushes.every((c) => c.includes('--force'))).toBe(true);
   });
 
   test('passes --progress to upstream and private mirror clones', async () => {
