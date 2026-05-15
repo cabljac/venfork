@@ -460,6 +460,32 @@ describe('setupCommand - execution tests', () => {
     expect(seedPushes.every((c) => c.includes('--force'))).toBe(true);
   });
 
+  test('invalid VENFORK_SEED_CHUNK falls back to default (no infinite loop)', async () => {
+    process.env.VENFORK_SEED_CHUNK = '0';
+    mockResponses.set('git rev-list --reverse main', {
+      exitCode: 0,
+      stdout: 'aaa\nbbb\nccc\nddd\neee',
+      stderr: '',
+    });
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    } finally {
+      delete process.env.VENFORK_SEED_CHUNK;
+    }
+
+    // chunk=0 -> guarded to 1000 -> 5 commits skip the loop -> single tip push.
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes(' push ') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git') &&
+        cmd.includes(':refs/heads/main')
+    );
+    expect(seedPushes.length).toBe(1);
+    expect(seedPushes[0]).toContain('main:refs/heads/main');
+  });
+
   test('passes --progress to upstream and private mirror clones', async () => {
     try {
       await setupCommand('git@github.com:test/repo.git', 'test-vendor');

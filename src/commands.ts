@@ -141,7 +141,9 @@ async function seedMirrorInChunks(
   httpsUrl: string,
   branch: string
 ): Promise<void> {
-  const chunk = Number(process.env.VENFORK_SEED_CHUNK ?? 1000);
+  const rawChunk = Number(process.env.VENFORK_SEED_CHUNK ?? 1000);
+  // Guard against 0/negative (infinite loop) and NaN (chunking disabled).
+  const chunk = Number.isInteger(rawChunk) && rawChunk > 0 ? rawChunk : 1000;
 
   const revList = await $({
     cwd: tempDir,
@@ -164,7 +166,9 @@ async function seedMirrorInChunks(
         );
         return;
       } catch (err) {
-        if (attempt === attempts) throw err;
+        // A hard timeout (runNetOp -> GitError) should fail fast; only
+        // transient push failures (e.g. HTTP 408) are worth retrying.
+        if (err instanceof GitError || attempt === attempts) throw err;
         p.log.warn(
           `Push of ${label} failed; retrying in 8s ` +
             `(${attempt}/${attempts - 1})`
