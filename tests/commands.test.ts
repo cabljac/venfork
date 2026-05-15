@@ -486,6 +486,59 @@ describe('setupCommand - execution tests', () => {
     expect(seedPushes[0]).toContain('main:refs/heads/main');
   });
 
+  test('does not retry permanent seed-push failures (fails fast)', async () => {
+    mockResponses.set('push --force --no-thin', () =>
+      Promise.reject(
+        Object.assign(new Error('Command failed'), {
+          stderr:
+            'remote: Permission to testuser/test-vendor.git denied.\n' +
+            'fatal: unable to access: The requested URL returned error: HTTP 403',
+          exitCode: 128,
+        })
+      )
+    );
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('push --force --no-thin') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+    expect(seedPushes.length).toBe(1); // no retries for a permanent error
+  });
+
+  test('retries transient seed-push failures up to the attempt limit', async () => {
+    process.env.VENFORK_SEED_RETRY_MS = '0';
+    mockResponses.set('push --force --no-thin', () =>
+      Promise.reject(
+        Object.assign(new Error('Command failed'), {
+          stderr:
+            'error: RPC failed; HTTP 408 curl 22\n' +
+            'fatal: the remote end hung up unexpectedly',
+          exitCode: 128,
+        })
+      )
+    );
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    } finally {
+      delete process.env.VENFORK_SEED_RETRY_MS;
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('push --force --no-thin') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+    expect(seedPushes.length).toBe(4); // 1 + 3 retries
+  });
+
   test('passes --progress to upstream and private mirror clones', async () => {
     try {
       await setupCommand('git@github.com:test/repo.git', 'test-vendor');

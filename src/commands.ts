@@ -121,6 +121,67 @@ const SEED_PUSH_CONFIG = [
 ];
 
 /**
+ * Whether a failed seed push is worth retrying. Retry only recognized
+ * server-side/transport failures during a large transfer (timeouts,
+ * gateways, dropped connections). Auth/permission/not-found/protected-branch
+ * and any unrecognized failure fail fast — retrying those just delays a
+ * permanent setup error.
+ */
+function isTransientPushError(err: unknown): boolean {
+  if (err instanceof GitError) return false; // hard timeout
+  const e = err as {
+    stderr?: unknown;
+    stdout?: unknown;
+    shortMessage?: unknown;
+    message?: unknown;
+  };
+  const text = [e.stderr, e.stdout, e.shortMessage, e.message]
+    .map((v) => (typeof v === 'string' ? v : ''))
+    .join('\n')
+    .toLowerCase();
+  if (!text) return false;
+
+  const permanent = [
+    'http 401',
+    'http 403',
+    'http 404',
+    'authentication failed',
+    'permission denied',
+    'access denied',
+    'repository not found',
+    'could not read from remote repository',
+    'protected branch',
+    'pre-receive hook declined',
+    'remote rejected',
+    'remote: error: gh',
+  ];
+  if (permanent.some((p) => text.includes(p))) return false;
+
+  const transient = [
+    'http 408',
+    'error: 408',
+    'http 500',
+    'http 502',
+    'http 503',
+    'http 504',
+    'bad gateway',
+    'gateway time',
+    'service unavailable',
+    'the remote end hung up',
+    'unexpected disconnect',
+    'rpc failed',
+    'early eof',
+    'connection reset',
+    'connection timed out',
+    'operation timed out',
+    'failed to connect',
+    'recv failure',
+    'transfer closed',
+  ];
+  return transient.some((p) => text.includes(p));
+}
+
+/**
  * Seed a fresh private mirror from a local upstream clone.
  *
  * A single `git push` of a large repo's full history 408s — GitHub enforces
@@ -142,7 +203,8 @@ async function seedMirrorInChunks(
   branch: string
 ): Promise<void> {
   const rawChunk = Number(process.env.VENFORK_SEED_CHUNK ?? 1000);
-  // Guard against 0/negative (infinite loop) and NaN (chunking disabled).
+  // Fall back to the default chunk size for invalid values: 0/negative
+  // (would infinite-loop) or NaN (non-numeric env).
   const chunk = Number.isInteger(rawChunk) && rawChunk > 0 ? rawChunk : 1000;
 
   const revList = await $({
@@ -150,6 +212,8 @@ async function seedMirrorInChunks(
   })`git rev-list --reverse ${branch}`;
   const commits = revList.stdout.split('\n').filter(Boolean);
   const total = commits.length;
+
+  const backoffMs = Number(process.env.VENFORK_SEED_RETRY_MS ?? 8000);
 
   const pushRef = async (src: string, label: string): Promise<void> => {
     const attempts = 4;
@@ -166,14 +230,14 @@ async function seedMirrorInChunks(
         );
         return;
       } catch (err) {
-        // A hard timeout (runNetOp -> GitError) should fail fast; only
-        // transient push failures (e.g. HTTP 408) are worth retrying.
-        if (err instanceof GitError || attempt === attempts) throw err;
+        // Fail fast on the last attempt, hard timeouts, and permanent
+        // errors (bad creds, missing access, protected branch, …); only
+        // recognized transient failures (e.g. HTTP 408) are retried.
+        if (attempt === attempts || !isTransientPushError(err)) throw err;
         p.log.warn(
-          `Push of ${label} failed; retrying in 8s ` +
-            `(${attempt}/${attempts - 1})`
+          `Push of ${label} failed; retrying ` + `(${attempt}/${attempts - 1})`
         );
-        await new Promise((resolve) => setTimeout(resolve, 8000));
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
       }
     }
   };
