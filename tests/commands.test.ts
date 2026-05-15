@@ -185,7 +185,13 @@ mock.module('@clack/prompts', () => ({
   }),
   outro: mock(() => {}),
   cancel: mock(() => {}),
-  log: { error: mock(() => {}), warn: mock(() => {}), info: mock(() => {}) },
+  log: {
+    error: mock(() => {}),
+    warn: mock(() => {}),
+    info: mock(() => {}),
+    success: mock(() => {}),
+    step: mock(() => {}),
+  },
   group: mock(() => Promise.resolve({})),
   text: mock(() => Promise.resolve('')),
   confirm: mock(() => Promise.resolve(confirmResponse)), // Use dynamic confirmResponse
@@ -394,6 +400,40 @@ describe('setupCommand - execution tests', () => {
           cmd.includes('testuser/test-vendor')
       )
     ).toBe(true);
+  });
+
+  test('seeds the private mirror over gh-authenticated HTTPS, not SSH', async () => {
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    const seedPush = execaCalls.find(
+      (cmd) =>
+        cmd.includes(' push ') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+
+    expect(seedPush).toBeDefined();
+    expect(seedPush).toContain('credential.https://github.com.helper');
+    expect(seedPush).toContain('--progress');
+    expect(seedPush).toContain('main:main');
+    // The hang fix: the seeding push must not use the raw SSH URL.
+    expect(seedPush).not.toContain('git@github.com:');
+  });
+
+  test('passes --progress to upstream and private mirror clones', async () => {
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    const cloneCalls = execaCalls.filter((c) => c.includes('gh repo clone'));
+
+    expect(cloneCalls.length).toBeGreaterThanOrEqual(2);
+    expect(cloneCalls.every((c) => c.includes('-- --progress'))).toBe(true);
   });
 });
 

@@ -15,6 +15,7 @@ import {
 import {
   AuthenticationError,
   BranchNotFoundError,
+  GitError,
   NotInRepositoryError,
   RemoteNotFoundError,
 } from './errors.js';
@@ -44,6 +45,63 @@ async function pathExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Hard cap for a single network git/gh op. Override with VENFORK_GIT_TIMEOUT
+ *  (ms) for very large upstream repos. Defaults to 10 minutes. */
+const GIT_NET_TIMEOUT_MS = Number(process.env.VENFORK_GIT_TIMEOUT ?? 600_000);
+
+/** Env applied to every network git/gh op so a misconfigured credential or
+ *  SSH path fails fast instead of blocking on an invisible prompt. */
+const NET_ENV = {
+  GIT_TERMINAL_PROMPT: '0',
+  GCM_INTERACTIVE: 'never',
+  GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=15',
+};
+
+/**
+ * An execa `$` bound for a heavy network git/gh op: no stdin (any
+ * credential/host-key prompt fails fast instead of hanging on an invisible
+ * prompt), a hard timeout, and live progress on stderr.
+ *
+ * @param cwd Working directory for the command, or undefined for the default.
+ */
+function netExec(cwd?: string) {
+  return $({
+    ...(cwd ? { cwd } : {}),
+    env: NET_ENV,
+    timeout: GIT_NET_TIMEOUT_MS,
+    stdio: ['ignore', 'inherit', 'inherit'],
+  });
+}
+
+/**
+ * Run a long-running network operation (built with {@link netExec}) with a
+ * start/stop message and a clear, fast failure when it times out.
+ *
+ * @param startMsg Message shown before the op starts.
+ * @param stopMsg Message shown when the op completes.
+ * @param op Performs the command, returning the execa promise.
+ */
+async function runNetOp(
+  startMsg: string,
+  stopMsg: string,
+  op: () => Promise<unknown>
+): Promise<void> {
+  p.log.info(`${startMsg}…`);
+  try {
+    await op();
+  } catch (err) {
+    if ((err as { timedOut?: boolean })?.timedOut) {
+      throw new GitError(
+        `${startMsg} timed out after ${GIT_NET_TIMEOUT_MS / 1000}s. ` +
+          'Check network and GitHub auth, or raise VENFORK_GIT_TIMEOUT.',
+        startMsg
+      );
+    }
+    throw err;
+  }
+  p.log.success(stopMsg);
 }
 
 /**
@@ -861,6 +919,10 @@ export async function setupCommand(
       ? `${organization}/${config.privateMirrorName}`
       : `${owner}/${config.privateMirrorName}`;
     const privateCloneUrl = `git@github.com:${owner}/${config.privateMirrorName}.git`;
+    // Transient URL used only to seed the new mirror. HTTPS + gh's git
+    // credential helper keeps this consistent with the gh-based clones and
+    // avoids depending on the user's SSH setup (the cause of setup hangs).
+    const privateHttpsUrl = `https://github.com/${owner}/${config.privateMirrorName}.git`;
     const publicForkUrl = noPublic
       ? undefined
       : `git@github.com:${owner}/${publicForkName}.git`;
@@ -941,9 +1003,12 @@ export async function setupCommand(
 
     // Steps 3–5: Seed a brand-new private mirror from upstream
     if (needsInitialPopulate) {
-      s.start('Cloning upstream repository');
-      await $`gh repo clone ${upstreamRepoPath} ${tempDir}`;
-      s.stop('Upstream cloned');
+      await runNetOp(
+        'Cloning upstream repository',
+        'Upstream cloned',
+        () =>
+          netExec()`gh repo clone ${upstreamRepoPath} ${tempDir} -- --progress`
+      );
 
       s.start('Detecting default branch');
       const result = await $({
@@ -962,11 +1027,15 @@ export async function setupCommand(
       }
       s.stop(`Default branch: ${defaultBranch}`);
 
-      s.start(`Pushing ${defaultBranch} to private mirror repository`);
-      await $({
-        cwd: tempDir,
-      })`git push ${privateCloneUrl} ${defaultBranch}:${defaultBranch}`;
-      s.stop('Pushed to private mirror repository');
+      const ghCredentialHelper = '!gh auth git-credential';
+      await runNetOp(
+        `Pushing ${defaultBranch} to private mirror repository`,
+        'Pushed to private mirror repository',
+        () =>
+          netExec(
+            tempDir
+          )`git -c credential.https://github.com.helper=${ghCredentialHelper} -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 push --progress ${privateHttpsUrl} ${defaultBranch}:${defaultBranch}`
+      );
     }
 
     // Step 6: Local clone of the private mirror
@@ -1000,8 +1069,13 @@ export async function setupCommand(
       }
       s.stop('Using existing local clone');
     } else {
-      await $`gh repo clone ${privateMirrorGhPath} ${repoDir}`;
-      s.stop('Private mirror repository cloned');
+      s.stop('Preparing local private mirror clone');
+      await runNetOp(
+        'Cloning private mirror repository',
+        'Private mirror repository cloned',
+        () =>
+          netExec()`gh repo clone ${privateMirrorGhPath} ${repoDir} -- --progress`
+      );
     }
 
     // Step 7: Configure remotes
