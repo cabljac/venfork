@@ -1,5 +1,17 @@
 # venfork
 
+## [0.9.0](https://github.com/cabljac/venfork/compare/v0.8.0...v0.9.0) (2026-05-15)
+
+
+### Features
+
+* run `gh repo set-default` on the mirror after clone and setup ([#39](https://github.com/cabljac/venfork/issues/39)) ([3bcbea5](https://github.com/cabljac/venfork/commit/3bcbea54ee5724d544edbfb3b96b892f8942daba))
+
+
+### Bug Fixes
+
+* seed private mirror over gh-authenticated HTTPS to stop setup hang ([241878e](https://github.com/cabljac/venfork/commit/241878e24d5d90fae2140c88eb092517ae524d56))
+
 ## [0.8.0](https://github.com/cabljac/venfork/compare/v0.7.0...v0.8.0) (2026-04-29)
 
 
