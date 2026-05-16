@@ -213,7 +213,10 @@ async function seedMirrorInChunks(
   const commits = revList.stdout.split('\n').filter(Boolean);
   const total = commits.length;
 
-  const backoffMs = Number(process.env.VENFORK_SEED_RETRY_MS ?? 8000);
+  const rawBackoff = Number(process.env.VENFORK_SEED_RETRY_MS ?? 8000);
+  // Fall back to the default for invalid values (negative or NaN).
+  const backoffMs =
+    Number.isFinite(rawBackoff) && rawBackoff >= 0 ? rawBackoff : 8000;
 
   const pushRef = async (src: string, label: string): Promise<void> => {
     const attempts = 4;
