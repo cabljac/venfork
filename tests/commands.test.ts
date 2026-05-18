@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { PassThrough } from 'node:stream';
 
 /**
  * Command tests with execution-based mocking
@@ -17,7 +18,7 @@ interface WriteFileCall {
 type SignalHandler = () => void | Promise<void>;
 type MockResponse =
   | { exitCode: number; stdout: string; stderr: string }
-  | ((command: string) => Promise<unknown>);
+  | ((command: string) => unknown);
 
 // Track calls to our mocks
 const execaCalls: string[] = [];
@@ -148,6 +149,22 @@ function getMockExecaResponse(command: string) {
 
   // Default response for all other commands
   return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+}
+
+function streamRejectedPush(stderr: string): Promise<unknown> & {
+  stdout: PassThrough;
+  stderr: PassThrough;
+} {
+  const stdout = new PassThrough();
+  const stderrStream = new PassThrough();
+  const promise = new Promise<unknown>((_resolve, reject) => {
+    queueMicrotask(() => {
+      stderrStream.write(stderr);
+      stderrStream.end();
+      reject(Object.assign(new Error('Command failed'), { exitCode: 128 }));
+    });
+  });
+  return Object.assign(promise, { stdout, stderr: stderrStream });
 }
 
 // Mock fs.rm and fs.access BEFORE any imports
@@ -425,7 +442,7 @@ describe('setupCommand - execution tests', () => {
 
   test('seeds large history in commit-batched pushes, then the real tip', async () => {
     process.env.VENFORK_SEED_CHUNK = '2';
-    mockResponses.set('git rev-list --reverse main', {
+    mockResponses.set('git rev-list --first-parent --reverse main', {
       exitCode: 0,
       stdout: 'aaa\nbbb\nccc\nddd\neee',
       stderr: '',
@@ -458,11 +475,16 @@ describe('setupCommand - execution tests', () => {
       true
     );
     expect(seedPushes.every((c) => c.includes('--force'))).toBe(true);
+    expect(
+      execaCalls.some((c) =>
+        c.includes('git rev-list --first-parent --reverse main')
+      )
+    ).toBe(true);
   });
 
   test('invalid VENFORK_SEED_CHUNK falls back to default (no infinite loop)', async () => {
     process.env.VENFORK_SEED_CHUNK = '0';
-    mockResponses.set('git rev-list --reverse main', {
+    mockResponses.set('git rev-list --first-parent --reverse main', {
       exitCode: 0,
       stdout: 'aaa\nbbb\nccc\nddd\neee',
       stderr: '',
@@ -537,6 +559,30 @@ describe('setupCommand - execution tests', () => {
         cmd.includes('https://github.com/testuser/test-vendor.git')
     );
     expect(seedPushes.length).toBe(4); // 1 + 3 retries
+  });
+
+  test('retries transient seed-push failures from streamed stderr when error has no buffered output', async () => {
+    process.env.VENFORK_SEED_RETRY_MS = '0';
+    mockResponses.set('push --force --no-thin', () =>
+      streamRejectedPush(
+        'error: RPC failed; HTTP 408 curl 22\n' +
+          'fatal: the remote end hung up unexpectedly'
+      )
+    );
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    } finally {
+      delete process.env.VENFORK_SEED_RETRY_MS;
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('push --force --no-thin') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+    expect(seedPushes.length).toBe(4); // 1 + 3 retries from streamed stderr tail
   });
 
   test('does not retry generic rpc-failed wrappers without transient status', async () => {

@@ -261,9 +261,11 @@ async function seedMirrorInChunks(
   // (would infinite-loop) or NaN (non-numeric env).
   const chunk = Number.isInteger(rawChunk) && rawChunk > 0 ? rawChunk : 1000;
 
+  // Select chunk tips along the branch's first-parent ancestry so each pushed
+  // tip is guaranteed to descend from the previous one.
   const revList = await $({
     cwd: tempDir,
-  })`git rev-list --reverse ${branch}`;
+  })`git rev-list --first-parent --reverse ${branch}`;
   const commits = revList.stdout.split('\n').filter(Boolean);
   const total = commits.length;
 
