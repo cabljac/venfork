@@ -1,5 +1,12 @@
 # venfork
 
+## [0.10.0](https://github.com/cabljac/venfork/compare/v0.9.0...v0.10.0) (2026-05-18)
+
+
+### Features
+
+* seed mirror with commit-batched pushes for large upstreams ([#45](https://github.com/cabljac/venfork/issues/45)) ([236d9be](https://github.com/cabljac/venfork/commit/236d9bede76b75891d7ccc9ae8d9971adfc0133c))
+
 ## [0.9.0](https://github.com/cabljac/venfork/compare/v0.8.0...v0.9.0) (2026-05-15)
 
 
