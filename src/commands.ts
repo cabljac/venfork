@@ -66,12 +66,16 @@ const NET_ENV = {
  *
  * @param cwd Working directory for the command, or undefined for the default.
  */
-function netExec(cwd?: string) {
+function netExec(cwd?: string, opts?: { captureOutput?: boolean }) {
+  const captureOutput = opts?.captureOutput === true;
   return $({
     ...(cwd ? { cwd } : {}),
     env: NET_ENV,
     timeout: GIT_NET_TIMEOUT_MS,
-    stdio: ['ignore', 'inherit', 'inherit'],
+    stdio: captureOutput
+      ? ['ignore', 'pipe', 'pipe']
+      : ['ignore', 'inherit', 'inherit'],
+    ...(captureOutput ? { buffer: false } : {}),
   });
 }
 
@@ -102,6 +106,207 @@ async function runNetOp(
     throw err;
   }
   p.log.success(stopMsg);
+}
+
+/** `-c` flags that make a large seed push survive: gh credentials over
+ *  HTTPS, a big post buffer + HTTP/1.1 (avoids chunked-encoding issues on
+ *  big POSTs), and a stalled-transfer abort. */
+const SEED_PUSH_CONFIG = [
+  '-c',
+  'credential.https://github.com.helper=!gh auth git-credential',
+  '-c',
+  'http.postBuffer=524288000',
+  '-c',
+  'http.version=HTTP/1.1',
+  '-c',
+  'http.lowSpeedLimit=1000',
+  '-c',
+  'http.lowSpeedTime=60',
+];
+
+/**
+ * Whether a failed seed push is worth retrying. Retry only recognized
+ * server-side/transport failures during a large transfer (timeouts,
+ * gateways, dropped connections). Auth/permission/not-found/protected-branch
+ * and any unrecognized failure fail fast — retrying those just delays a
+ * permanent setup error.
+ */
+function isTransientPushError(err: unknown): boolean {
+  if (err instanceof GitError) return false; // hard timeout
+  const e = err as {
+    stderr?: unknown;
+    stdout?: unknown;
+    shortMessage?: unknown;
+    message?: unknown;
+  };
+  const text = [e.stderr, e.stdout, e.shortMessage, e.message]
+    .map((v) => (typeof v === 'string' ? v : ''))
+    .join('\n')
+    .toLowerCase();
+  if (!text) return false;
+
+  const permanent = [
+    'http 401',
+    'http 403',
+    'http 404',
+    'authentication failed',
+    'permission denied',
+    'access denied',
+    'repository not found',
+    'could not read from remote repository',
+    'protected branch',
+    'pre-receive hook declined',
+    'remote rejected',
+    'remote: error: gh',
+  ];
+  if (permanent.some((p) => text.includes(p))) return false;
+
+  const transient = [
+    'http 408',
+    'error: 408',
+    'http 500',
+    'http 502',
+    'http 503',
+    'http 504',
+    'bad gateway',
+    'gateway time',
+    'service unavailable',
+    'the remote end hung up',
+    'unexpected disconnect',
+    'early eof',
+    'connection reset',
+    'connection timed out',
+    'operation timed out',
+    'failed to connect',
+    'recv failure',
+    'transfer closed',
+  ];
+  return transient.some((p) => text.includes(p));
+}
+
+const PUSH_OUTPUT_TAIL_CHARS = 16_384;
+
+function appendTail(text: string, chunk: string): string {
+  const next = text + chunk;
+  return next.length > PUSH_OUTPUT_TAIL_CHARS
+    ? next.slice(-PUSH_OUTPUT_TAIL_CHARS)
+    : next;
+}
+
+async function pushSeedRef(
+  tempDir: string,
+  httpsUrl: string,
+  src: string,
+  branch: string
+): Promise<void> {
+  const push = netExec(tempDir, {
+    captureOutput: true,
+  })`git ${SEED_PUSH_CONFIG} push --force --no-thin --progress ${httpsUrl} ${src}:refs/heads/${branch}`;
+  let stdoutTail = '';
+  let stderrTail = '';
+  push.stdout?.on('data', (chunk: string | Buffer) => {
+    const text = typeof chunk === 'string' ? chunk : chunk.toString();
+    process.stdout.write(text);
+    stdoutTail = appendTail(stdoutTail, text);
+  });
+  push.stderr?.on('data', (chunk: string | Buffer) => {
+    const text = typeof chunk === 'string' ? chunk : chunk.toString();
+    process.stderr.write(text);
+    stderrTail = appendTail(stderrTail, text);
+  });
+
+  try {
+    await push;
+  } catch (err) {
+    const e = err as { stdout?: unknown; stderr?: unknown };
+    if (
+      (typeof e.stdout !== 'string' || e.stdout.length === 0) &&
+      stdoutTail.length > 0
+    ) {
+      e.stdout = stdoutTail;
+    }
+    if (
+      (typeof e.stderr !== 'string' || e.stderr.length === 0) &&
+      stderrTail.length > 0
+    ) {
+      e.stderr = stderrTail;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Seed a fresh private mirror from a local upstream clone.
+ *
+ * A single `git push` of a large repo's full history 408s — GitHub enforces
+ * a request-duration limit and the monolithic pack POST exceeds it. So push
+ * the default branch in commit batches (each POST stays small), then push the
+ * real tip. History/SHAs are identical to upstream, which `sync`/`stage`/PRs
+ * require. Each push is retried a few times to ride out transient 408s.
+ *
+ * Batch size is `VENFORK_SEED_CHUNK` commits (default 1000); small repos take
+ * a single push (loop body is skipped).
+ *
+ * @param tempDir Local upstream clone.
+ * @param httpsUrl HTTPS URL of the private mirror.
+ * @param branch Default branch to seed.
+ */
+async function seedMirrorInChunks(
+  tempDir: string,
+  httpsUrl: string,
+  branch: string
+): Promise<void> {
+  const rawChunk = Number(process.env.VENFORK_SEED_CHUNK ?? 1000);
+  // Fall back to the default chunk size for invalid values: 0/negative
+  // (would infinite-loop) or NaN (non-numeric env).
+  const chunk = Number.isInteger(rawChunk) && rawChunk > 0 ? rawChunk : 1000;
+
+  // Select chunk tips along the branch's first-parent ancestry so each pushed
+  // tip is guaranteed to descend from the previous one.
+  const revList = await $({
+    cwd: tempDir,
+  })`git rev-list --first-parent --reverse ${branch}`;
+  const commits = revList.stdout.split('\n').filter(Boolean);
+  const total = commits.length;
+
+  // Treat unset or empty/whitespace-only env as "use default" so an empty
+  // string doesn't coerce to 0 (Number('') === 0) and silently disable
+  // backoff. An explicit '0' stays valid (0ms backoff).
+  const rawRetryMs = process.env.VENFORK_SEED_RETRY_MS;
+  const rawBackoff =
+    rawRetryMs != null && rawRetryMs.trim() !== '' ? Number(rawRetryMs) : 8000;
+  // Fall back to the default for invalid values (negative or NaN).
+  const backoffMs =
+    Number.isFinite(rawBackoff) && rawBackoff >= 0 ? rawBackoff : 8000;
+
+  const pushRef = async (src: string, label: string): Promise<void> => {
+    const attempts = 4;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        await runNetOp(
+          `Pushing ${label} to private mirror repository` +
+            (attempt > 1 ? ` (attempt ${attempt})` : ''),
+          `Pushed ${label}`,
+          () => pushSeedRef(tempDir, httpsUrl, src, branch)
+        );
+        return;
+      } catch (err) {
+        // Fail fast on the last attempt, hard timeouts, and permanent
+        // errors (bad creds, missing access, protected branch, …); only
+        // recognized transient failures (e.g. HTTP 408) are retried.
+        if (attempt === attempts || !isTransientPushError(err)) throw err;
+        p.log.warn(
+          `Push of ${label} failed; retrying ` + `(${attempt}/${attempts - 1})`
+        );
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      }
+    }
+  };
+
+  for (let i = chunk; i < total; i += chunk) {
+    await pushRef(commits[i - 1], `commits 1–${i}/${total}`);
+  }
+  await pushRef(branch, `${branch} (final)`);
 }
 
 /**
@@ -1027,15 +1232,7 @@ export async function setupCommand(
       }
       s.stop(`Default branch: ${defaultBranch}`);
 
-      const ghCredentialHelper = '!gh auth git-credential';
-      await runNetOp(
-        `Pushing ${defaultBranch} to private mirror repository`,
-        'Pushed to private mirror repository',
-        () =>
-          netExec(
-            tempDir
-          )`git -c credential.https://github.com.helper=${ghCredentialHelper} -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 push --progress ${privateHttpsUrl} ${defaultBranch}:${defaultBranch}`
-      );
+      await seedMirrorInChunks(tempDir, privateHttpsUrl, defaultBranch);
     }
 
     // Step 6: Local clone of the private mirror

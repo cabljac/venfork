@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { PassThrough } from 'node:stream';
 
 /**
  * Command tests with execution-based mocking
@@ -148,6 +149,27 @@ function getMockExecaResponse(command: string) {
 
   // Default response for all other commands
   return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+}
+
+/**
+ * Simulate execa with `buffer: false`: push fails with no buffered
+ * stdout/stderr on the error object, while stderr is only available via the
+ * live stream attached to the returned promise.
+ */
+function streamRejectedPush(stderr: string): Promise<unknown> & {
+  stdout: PassThrough;
+  stderr: PassThrough;
+} {
+  const stdout = new PassThrough();
+  const stderrStream = new PassThrough();
+  stdout.end();
+  const promise = (async (): Promise<unknown> => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    stderrStream.write(stderr);
+    stderrStream.end();
+    throw Object.assign(new Error('Command failed'), { exitCode: 128 });
+  })();
+  return Object.assign(promise, { stdout, stderr: stderrStream });
 }
 
 // Mock fs.rm and fs.access BEFORE any imports
@@ -418,9 +440,177 @@ describe('setupCommand - execution tests', () => {
     expect(seedPush).toBeDefined();
     expect(seedPush).toContain('credential.https://github.com.helper');
     expect(seedPush).toContain('--progress');
-    expect(seedPush).toContain('main:main');
+    expect(seedPush).toContain('main:refs/heads/main');
     // The hang fix: the seeding push must not use the raw SSH URL.
     expect(seedPush).not.toContain('git@github.com:');
+  });
+
+  test('seeds large history in commit-batched pushes, then the real tip', async () => {
+    process.env.VENFORK_SEED_CHUNK = '2';
+    mockResponses.set('git rev-list --first-parent --reverse main', {
+      exitCode: 0,
+      stdout: 'aaa\nbbb\nccc\nddd\neee',
+      stderr: '',
+    });
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    } finally {
+      delete process.env.VENFORK_SEED_CHUNK;
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes(' push ') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git') &&
+        cmd.includes(':refs/heads/main')
+    );
+
+    // 5 commits, chunk 2 -> push at commit 2 (bbb), commit 4 (ddd),
+    // then the real branch tip.
+    expect(seedPushes.length).toBe(3);
+    expect(seedPushes.some((c) => c.includes('bbb:refs/heads/main'))).toBe(
+      true
+    );
+    expect(seedPushes.some((c) => c.includes('ddd:refs/heads/main'))).toBe(
+      true
+    );
+    expect(seedPushes.some((c) => c.includes('main:refs/heads/main'))).toBe(
+      true
+    );
+    expect(seedPushes.every((c) => c.includes('--force'))).toBe(true);
+    expect(
+      execaCalls.some((c) =>
+        c.includes('git rev-list --first-parent --reverse main')
+      )
+    ).toBe(true);
+  });
+
+  test('invalid VENFORK_SEED_CHUNK falls back to default (no infinite loop)', async () => {
+    process.env.VENFORK_SEED_CHUNK = '0';
+    mockResponses.set('git rev-list --first-parent --reverse main', {
+      exitCode: 0,
+      stdout: 'aaa\nbbb\nccc\nddd\neee',
+      stderr: '',
+    });
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    } finally {
+      delete process.env.VENFORK_SEED_CHUNK;
+    }
+
+    // chunk=0 -> guarded to 1000 -> 5 commits skip the loop -> single tip push.
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes(' push ') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git') &&
+        cmd.includes(':refs/heads/main')
+    );
+    expect(seedPushes.length).toBe(1);
+    expect(seedPushes[0]).toContain('main:refs/heads/main');
+  });
+
+  test('does not retry permanent seed-push failures (fails fast)', async () => {
+    mockResponses.set('push --force --no-thin', () =>
+      Promise.reject(
+        Object.assign(new Error('Command failed'), {
+          stderr:
+            'remote: Permission to testuser/test-vendor.git denied.\n' +
+            'fatal: unable to access: The requested URL returned error: HTTP 403',
+          exitCode: 128,
+        })
+      )
+    );
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('push --force --no-thin') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+    expect(seedPushes.length).toBe(1); // no retries for a permanent error
+  });
+
+  test('retries transient seed-push failures up to the attempt limit', async () => {
+    process.env.VENFORK_SEED_RETRY_MS = '0';
+    mockResponses.set('push --force --no-thin', () =>
+      Promise.reject(
+        Object.assign(new Error('Command failed'), {
+          stderr:
+            'error: RPC failed; HTTP 408 curl 22\n' +
+            'fatal: the remote end hung up unexpectedly',
+          exitCode: 128,
+        })
+      )
+    );
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    } finally {
+      delete process.env.VENFORK_SEED_RETRY_MS;
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('push --force --no-thin') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+    expect(seedPushes.length).toBe(4); // 1 + 3 retries from transient stderr
+  });
+
+  test('retries transient seed-push failures from streamed stderr when error has no buffered output', async () => {
+    process.env.VENFORK_SEED_RETRY_MS = '0';
+    mockResponses.set('push --force --no-thin', () =>
+      streamRejectedPush(
+        'error: RPC failed; HTTP 408 curl 22\n' +
+          'fatal: the remote end hung up unexpectedly'
+      )
+    );
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    } finally {
+      delete process.env.VENFORK_SEED_RETRY_MS;
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('push --force --no-thin') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+    expect(seedPushes.length).toBe(4); // 1 + 3 retries from streamed stderr tail
+  });
+
+  test('does not retry generic rpc-failed wrappers without transient status', async () => {
+    mockResponses.set('push --force --no-thin', () =>
+      Promise.reject(
+        Object.assign(new Error('Command failed'), {
+          stderr: 'error: RPC failed; HTTP 413 curl 22',
+          exitCode: 128,
+        })
+      )
+    );
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('push --force --no-thin') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+    expect(seedPushes.length).toBe(1); // no retries for unrecognized wrappers
   });
 
   test('passes --progress to upstream and private mirror clones', async () => {
