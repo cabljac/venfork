@@ -18,7 +18,7 @@ interface WriteFileCall {
 type SignalHandler = () => void | Promise<void>;
 type MockResponse =
   | { exitCode: number; stdout: string; stderr: string }
-  | ((command: string) => unknown);
+  | ((command: string) => Promise<unknown>);
 
 // Track calls to our mocks
 const execaCalls: string[] = [];
@@ -151,6 +151,11 @@ function getMockExecaResponse(command: string) {
   return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
 }
 
+/**
+ * Simulate execa with `buffer: false`: push fails with no buffered
+ * stdout/stderr on the error object, while stderr is only available via the
+ * live stream attached to the returned promise.
+ */
 function streamRejectedPush(stderr: string): Promise<unknown> & {
   stdout: PassThrough;
   stderr: PassThrough;
