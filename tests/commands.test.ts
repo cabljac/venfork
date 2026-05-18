@@ -162,13 +162,12 @@ function streamRejectedPush(stderr: string): Promise<unknown> & {
 } {
   const stdout = new PassThrough();
   const stderrStream = new PassThrough();
-  const promise = new Promise<unknown>((_resolve, reject) => {
-    queueMicrotask(() => {
-      stderrStream.write(stderr);
-      stderrStream.end();
-      reject(Object.assign(new Error('Command failed'), { exitCode: 128 }));
-    });
-  });
+  const promise = (async (): Promise<unknown> => {
+    await Promise.resolve();
+    stderrStream.write(stderr);
+    stderrStream.end();
+    throw Object.assign(new Error('Command failed'), { exitCode: 128 });
+  })();
   return Object.assign(promise, { stdout, stderr: stderrStream });
 }
 
@@ -563,7 +562,7 @@ describe('setupCommand - execution tests', () => {
         cmd.includes('push --force --no-thin') &&
         cmd.includes('https://github.com/testuser/test-vendor.git')
     );
-    expect(seedPushes.length).toBe(4); // 1 + 3 retries
+    expect(seedPushes.length).toBe(4); // 1 + 3 retries from transient stderr
   });
 
   test('retries transient seed-push failures from streamed stderr when error has no buffered output', async () => {
