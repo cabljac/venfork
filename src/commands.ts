@@ -184,12 +184,12 @@ function isTransientPushError(err: unknown): boolean {
   return transient.some((p) => text.includes(p));
 }
 
-const PUSH_ERROR_TAIL_CHARS = 16_384;
+const PUSH_OUTPUT_TAIL_CHARS = 16_384;
 
 function appendTail(text: string, chunk: string): string {
   const next = text + chunk;
-  return next.length > PUSH_ERROR_TAIL_CHARS
-    ? next.slice(-PUSH_ERROR_TAIL_CHARS)
+  return next.length > PUSH_OUTPUT_TAIL_CHARS
+    ? next.slice(-PUSH_OUTPUT_TAIL_CHARS)
     : next;
 }
 
