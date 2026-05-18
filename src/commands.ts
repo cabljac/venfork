@@ -269,7 +269,12 @@ async function seedMirrorInChunks(
   const commits = revList.stdout.split('\n').filter(Boolean);
   const total = commits.length;
 
-  const rawBackoff = Number(process.env.VENFORK_SEED_RETRY_MS ?? 8000);
+  // Treat unset or empty/whitespace-only env as "use default" so an empty
+  // string doesn't coerce to 0 (Number('') === 0) and silently disable
+  // backoff. An explicit '0' stays valid (0ms backoff).
+  const rawRetryMs = process.env.VENFORK_SEED_RETRY_MS;
+  const rawBackoff =
+    rawRetryMs != null && rawRetryMs.trim() !== '' ? Number(rawRetryMs) : 8000;
   // Fall back to the default for invalid values (negative or NaN).
   const backoffMs =
     Number.isFinite(rawBackoff) && rawBackoff >= 0 ? rawBackoff : 8000;
