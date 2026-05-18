@@ -162,8 +162,9 @@ function streamRejectedPush(stderr: string): Promise<unknown> & {
 } {
   const stdout = new PassThrough();
   const stderrStream = new PassThrough();
+  stdout.end();
   const promise = (async (): Promise<unknown> => {
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     stderrStream.write(stderr);
     stderrStream.end();
     throw Object.assign(new Error('Command failed'), { exitCode: 128 });
