@@ -539,6 +539,29 @@ describe('setupCommand - execution tests', () => {
     expect(seedPushes.length).toBe(4); // 1 + 3 retries
   });
 
+  test('does not retry generic rpc-failed wrappers without transient status', async () => {
+    mockResponses.set('push --force --no-thin', () =>
+      Promise.reject(
+        Object.assign(new Error('Command failed'), {
+          stderr: 'error: RPC failed; HTTP 413 curl 22',
+          exitCode: 128,
+        })
+      )
+    );
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('push --force --no-thin') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+    expect(seedPushes.length).toBe(1); // no retries for unrecognized wrappers
+  });
+
   test('passes --progress to upstream and private mirror clones', async () => {
     try {
       await setupCommand('git@github.com:test/repo.git', 'test-vendor');

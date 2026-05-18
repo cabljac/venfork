@@ -66,12 +66,16 @@ const NET_ENV = {
  *
  * @param cwd Working directory for the command, or undefined for the default.
  */
-function netExec(cwd?: string) {
+function netExec(cwd?: string, opts?: { captureOutput?: boolean }) {
+  const captureOutput = opts?.captureOutput === true;
   return $({
     ...(cwd ? { cwd } : {}),
     env: NET_ENV,
     timeout: GIT_NET_TIMEOUT_MS,
-    stdio: ['ignore', 'inherit', 'inherit'],
+    stdio: captureOutput
+      ? ['ignore', 'pipe', 'pipe']
+      : ['ignore', 'inherit', 'inherit'],
+    ...(captureOutput ? { buffer: false } : {}),
   });
 }
 
@@ -169,7 +173,6 @@ function isTransientPushError(err: unknown): boolean {
     'service unavailable',
     'the remote end hung up',
     'unexpected disconnect',
-    'rpc failed',
     'early eof',
     'connection reset',
     'connection timed out',
@@ -179,6 +182,57 @@ function isTransientPushError(err: unknown): boolean {
     'transfer closed',
   ];
   return transient.some((p) => text.includes(p));
+}
+
+const PUSH_ERROR_TAIL_CHARS = 16_384;
+
+function appendTail(text: string, chunk: string): string {
+  const next = text + chunk;
+  return next.length > PUSH_ERROR_TAIL_CHARS
+    ? next.slice(-PUSH_ERROR_TAIL_CHARS)
+    : next;
+}
+
+async function pushSeedRef(
+  tempDir: string,
+  httpsUrl: string,
+  src: string,
+  branch: string
+): Promise<void> {
+  const push = netExec(tempDir, {
+    captureOutput: true,
+  })`git ${SEED_PUSH_CONFIG} push --force --no-thin --progress ${httpsUrl} ${src}:refs/heads/${branch}`;
+  let stdoutTail = '';
+  let stderrTail = '';
+  push.stdout?.on('data', (chunk: string | Buffer) => {
+    const text = typeof chunk === 'string' ? chunk : chunk.toString();
+    process.stdout.write(text);
+    stdoutTail = appendTail(stdoutTail, text);
+  });
+  push.stderr?.on('data', (chunk: string | Buffer) => {
+    const text = typeof chunk === 'string' ? chunk : chunk.toString();
+    process.stderr.write(text);
+    stderrTail = appendTail(stderrTail, text);
+  });
+
+  try {
+    await push;
+  } catch (err) {
+    const e = err as { stdout?: unknown; stderr?: unknown };
+    if (
+      (typeof e.stdout !== 'string' || e.stdout.length === 0) &&
+      stdoutTail.length > 0
+    ) {
+      e.stdout = stdoutTail;
+    }
+    if (
+      (typeof e.stderr !== 'string' || e.stderr.length === 0) &&
+      stderrTail.length > 0
+    ) {
+      e.stderr = stderrTail;
+    }
+    throw err;
+  }
 }
 
 /**
@@ -226,10 +280,7 @@ async function seedMirrorInChunks(
           `Pushing ${label} to private mirror repository` +
             (attempt > 1 ? ` (attempt ${attempt})` : ''),
           `Pushed ${label}`,
-          () =>
-            netExec(
-              tempDir
-            )`git ${SEED_PUSH_CONFIG} push --force --no-thin --progress ${httpsUrl} ${src}:refs/heads/${branch}`
+          () => pushSeedRef(tempDir, httpsUrl, src, branch)
         );
         return;
       } catch (err) {
