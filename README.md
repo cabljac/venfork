@@ -313,7 +313,7 @@ venfork stage feature-auth --pr --base develop
 
 **What `--pr` adds:**
 1. Looks up the most recent PR on the private mirror with `--head <branch>` (open first, then most recent of any state).
-2. Renders the upstream PR body by stripping any `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks and appending a footer linking back to the internal review.
+2. Renders the upstream PR body by stripping any `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks. The private mirror stays invisible to upstream — no back-link to the internal review and no hint that one exists. The internal PR URL is recorded only in your mirror config (step 5).
 3. Shows you the translated body **before** confirming, so you can catch redaction mistakes before they go public.
 4. Runs `gh pr create --repo <upstream> --base <default> --head <fork-owner>:<branch>` and surfaces the resulting PR URL.
 5. Records the linkage in `venfork-config.shippedBranches[<branch>]` for later tracking.
