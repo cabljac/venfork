@@ -371,7 +371,10 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     expect(upstreamPr.body).not.toContain('Internal note');
     expect(upstreamPr.body).not.toContain('venfork:internal');
     expect(upstreamPr.body).toContain('Public summary');
-    expect(upstreamPr.body).toContain('Upstreamed from internal review');
+    // The private mirror must stay invisible to upstream: no back-link to the
+    // internal review PR and no hint that one exists.
+    expect(upstreamPr.body).not.toContain('Upstreamed from internal');
+    expect(upstreamPr.body).not.toContain(names.mirrorBare);
     expect(upstreamPr.isDraft).toBe(true);
   }, 300_000);
 

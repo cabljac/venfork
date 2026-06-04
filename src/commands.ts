@@ -2560,24 +2560,16 @@ async function findInternalPr(
 }
 
 /**
- * Strips `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks via
- * a depth-tracking pass (see `stripInternalBlocks`) and appends a footer
- * linking back to the internal review PR or issue. Only the team can follow
- * that link; the upstream maintainer sees only that there *was* an internal
- * review.
+ * Renders an internal PR/issue body for upstream by stripping
+ * `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks via a
+ * depth-tracking pass (see `stripInternalBlocks`).
+ *
+ * The private mirror must stay invisible to upstream: no back-link to the
+ * internal PR/issue and no hint that one exists. The upstream maintainer sees
+ * only the public-facing body.
  */
-function translateInternalBody(
-  body: string,
-  internalUrl: string | undefined,
-  kind: 'pr' | 'issue' = 'pr'
-): string {
-  const stripped = stripInternalBlocks(body).trim();
-  const footer = internalUrl
-    ? kind === 'issue'
-      ? `\n\n> Upstreamed from internal issue (${internalUrl}).`
-      : `\n\n> Upstreamed from internal review (${internalUrl}).`
-    : '';
-  return `${stripped}${footer}`.trim();
+function translateInternalBody(body: string): string {
+  return stripInternalBlocks(body).trim();
 }
 
 /**
@@ -2585,6 +2577,9 @@ function translateInternalBody(
  * internal review PR was found. Lists the non-merge commits in
  * `upstream/<defaultBranch>..<branch>` so the upstream maintainer sees what
  * the change actually is, rather than a "please add a description" placeholder.
+ *
+ * The body must not reveal the private mirror — upstream only ever sees the
+ * commit summary, never that the work was staged from a mirror.
  *
  * Fetches `upstream/<defaultBranch>` first so the log works even when schedule
  * is disabled and the ref may not exist locally yet.
@@ -2601,14 +2596,14 @@ async function buildSyntheticBody(
     reject: false,
   })`git log --oneline --no-merges upstream/${defaultBranch}..${branch}`;
   if (log.exitCode !== 0 || !log.stdout.trim()) {
-    return 'Staged from a private mirror. No internal review PR was open at stage time.';
+    return 'No description provided.';
   }
   const lines = log.stdout
     .trim()
     .split('\n')
     .map((line) => `- ${line}`)
     .join('\n');
-  return `Staged from a private mirror. Commits in this branch:\n\n${lines}\n\n_(No internal review PR was found at stage time.)_`;
+  return `Commits in this branch:\n\n${lines}`;
 }
 
 /**
@@ -2624,7 +2619,7 @@ async function buildUpstreamPrPayload(
   if (internal) {
     return {
       title: override.title ?? internal.title,
-      body: override.body ?? translateInternalBody(internal.body, internal.url),
+      body: override.body ?? translateInternalBody(internal.body),
     };
   }
   return {
@@ -3304,11 +3299,7 @@ export async function issueCommand(
       const internal = await readIssue(mirrorRepoPath, internalNumber, repoDir);
       s.stop(`Read: ${internal.title}`);
 
-      const translatedBody = translateInternalBody(
-        internal.body,
-        internal.url,
-        'issue'
-      );
+      const translatedBody = translateInternalBody(internal.body);
       const upstreamTitle = options.title ?? internal.title;
 
       p.note(
