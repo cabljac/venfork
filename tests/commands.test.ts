@@ -3431,6 +3431,13 @@ describe('issueCommand', () => {
         body: 'Body text.',
         state: 'OPEN',
         author: { login: 'reporter' },
+        comments: [
+          {
+            author: { login: 'commenter' },
+            body: 'Me too',
+            createdAt: '2026-01-02',
+          },
+        ],
       }),
       stderr: '',
     });

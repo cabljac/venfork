@@ -3178,7 +3178,8 @@ export async function pullRequestCommand(
 
 interface IssueComment {
   author?: { login: string };
-  body: string;
+  /** Optional: gh may omit a body for reaction-only or deleted comments. */
+  body?: string;
   /** ISO timestamp from gh. */
   createdAt?: string;
 }
