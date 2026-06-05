@@ -488,6 +488,10 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
       body: 'Reported by an external user.',
     });
 
+    // Add a comment upstream so the pull has comments to carry over.
+    const upstreamComment = `Follow-up detail ${RUN_ID}`;
+    await $`gh issue comment ${upstreamReport.number} --repo ${UPSTREAM_OWNER}/${names.upstream} --body ${upstreamComment}`;
+
     await runVenfork(['issue', 'pull', String(upstreamReport.number)], {
       cwd: localMirrorPath,
       env: { VENFORK_NONINTERACTIVE: '1' },
@@ -511,6 +515,9 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     }
     expect(mirrorIssue).toBeDefined();
     expect(mirrorIssue?.body).toContain(upstreamReport.url);
+    // The upstream comment was carried into the mirror copy.
+    expect(mirrorIssue?.body).toContain('Upstream comment');
+    expect(mirrorIssue?.body).toContain(upstreamComment);
 
     // Suppress unused-var warnings for helpers we leave in place for
     // future debugging hooks.

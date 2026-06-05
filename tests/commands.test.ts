@@ -225,6 +225,7 @@ import {
   cloneCommand,
   issueCommand,
   pullRequestCommand,
+  renderPulledComments,
   scheduleCommand,
   setupCommand,
   showHelp,
@@ -3456,6 +3457,29 @@ describe('issueCommand', () => {
         cmd.includes('gh issue create --repo owner/mirror')
       )
     ).toBe(true);
+  });
+
+  test('renderPulledComments: empty/undefined yields no section', () => {
+    expect(renderPulledComments(undefined)).toBe('');
+    expect(renderPulledComments([])).toBe('');
+  });
+
+  test('renderPulledComments: renders author, timestamp, and body', () => {
+    const out = renderPulledComments([
+      { author: { login: 'alice' }, body: 'first', createdAt: '2026-01-02' },
+      { author: { login: 'bob' }, body: 'second' },
+    ]);
+    expect(out).toContain('### Upstream comments (2)');
+    expect(out).toContain('**@alice** — 2026-01-02:');
+    expect(out).toContain('first');
+    expect(out).toContain('**@bob**:');
+    expect(out).toContain('second');
+  });
+
+  test('renderPulledComments: singular label and missing author fallback', () => {
+    const out = renderPulledComments([{ body: 'orphan' }]);
+    expect(out).toContain('### Upstream comment (1)');
+    expect(out).toContain('**(unknown)**:');
   });
 
   test('rejects unknown action', async () => {

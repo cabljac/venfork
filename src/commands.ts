@@ -2573,6 +2573,26 @@ function translateInternalBody(body: string): string {
 }
 
 /**
+ * Renders upstream issue comments into a Markdown section for the mirror copy
+ * created by `venfork issue pull`. Returns an empty string when there are no
+ * comments so the body stays clean.
+ *
+ * @internal Exported for unit testing.
+ */
+export function renderPulledComments(
+  comments: IssueComment[] | undefined
+): string {
+  if (!comments || comments.length === 0) return '';
+  const blocks = comments.map((c) => {
+    const who = c.author?.login ? `@${c.author.login}` : '(unknown)';
+    const when = c.createdAt ? ` — ${c.createdAt}` : '';
+    return `**${who}**${when}:\n\n${c.body?.trim() || '(empty)'}`;
+  });
+  const label = comments.length === 1 ? 'comment' : 'comments';
+  return `\n\n---\n\n### Upstream ${label} (${comments.length})\n\n${blocks.join('\n\n---\n\n')}`;
+}
+
+/**
  * Generates a synthetic upstream PR body from the branch's commit log when no
  * internal review PR was found. Lists the non-merge commits in
  * `upstream/<defaultBranch>..<branch>` so the upstream maintainer sees what
@@ -3156,6 +3176,13 @@ export async function pullRequestCommand(
   }
 }
 
+interface IssueComment {
+  author?: { login: string };
+  body: string;
+  /** ISO timestamp from gh. */
+  createdAt?: string;
+}
+
 interface IssueMeta {
   number: number;
   url: string;
@@ -3163,6 +3190,7 @@ interface IssueMeta {
   body: string;
   state: string;
   author?: { login: string };
+  comments?: IssueComment[];
 }
 
 async function readIssue(
@@ -3173,7 +3201,7 @@ async function readIssue(
   const result = await $({
     cwd,
     reject: false,
-  })`gh issue view ${number} --repo ${repoPath} --json number,url,title,body,state,author`;
+  })`gh issue view ${number} --repo ${repoPath} --json number,url,title,body,state,author,comments`;
   if (result.exitCode !== 0) {
     throw new Error(
       `Failed to read issue #${number} from ${repoPath}: ${result.stderr.trim() || `exit ${result.exitCode}`}`
@@ -3361,11 +3389,14 @@ export async function issueCommand(
 
     s.start(`Reading upstream issue #${upstreamNumber}`);
     const upstream = await readIssue(upstreamRepoPath, upstreamNumber, repoDir);
-    s.stop(`Read: ${upstream.title} (${upstream.state})`);
+    const commentCount = upstream.comments?.length ?? 0;
+    s.stop(
+      `Read: ${upstream.title} (${upstream.state}, ${commentCount} comment${commentCount === 1 ? '' : 's'})`
+    );
 
     const internalTitle =
       options.title ?? `[upstream #${upstream.number}] ${upstream.title}`;
-    const internalBody = `${upstream.body || '(no body provided)'}\n\n> Pulled from upstream issue: ${upstream.url}\n> Author: ${upstream.author?.login ?? '(unknown)'}\n> State: ${upstream.state}`;
+    const internalBody = `${upstream.body || '(no body provided)'}${renderPulledComments(upstream.comments)}\n\n> Pulled from upstream issue: ${upstream.url}\n> Author: ${upstream.author?.login ?? '(unknown)'}\n> State: ${upstream.state}`;
 
     p.note(
       [

@@ -385,7 +385,7 @@ Move *issue* context between the private mirror and upstream — the same shape 
 
 **Sub-commands:**
 - `stage <internal-#>` — read an internal triage issue from the mirror, redact `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks (same convention as `stage --pr`), and open the upstream counterpart via `gh issue create`.
-- `pull <upstream-#>` — read an upstream issue, create a parallel internal issue on the mirror titled `[upstream #N] <original title>` so the team can triage it without leaving the private space.
+- `pull <upstream-#>` — read an upstream issue **and its comments**, create a parallel internal issue on the mirror titled `[upstream #N] <original title>` so the team can triage it without leaving the private space. The upstream comment thread is snapshotted into the mirror issue body under an "Upstream comments" section.
 
 **Flags:**
 - `--title <text>` - Override the destination issue's title.
@@ -405,7 +405,7 @@ Both sub-commands write a linkage to `venfork-config`:
 - `shippedIssues[<internal-#>]` for `stage`
 - `pulledIssues[<internal-#>]` for `pull`
 
-This is **only the linkage** — comments and state changes do *not* sync. If the upstream issue is closed, the internal one stays open until you close it manually (and vice versa). Treat the records as a "where did this go?" audit log rather than a live mirror.
+This is **only the linkage** — there is no *live* sync. `pull` snapshots the upstream body and comments into the mirror issue at pull time, but later comments and state changes do not propagate. If the upstream issue is closed, the internal one stays open until you close it manually (and vice versa). Treat the records as a "where did this go?" audit log rather than a live mirror.
 
 ### `venfork schedule <status|set <cron>|disable>`
 
