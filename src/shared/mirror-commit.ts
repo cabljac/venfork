@@ -2,6 +2,8 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
+import type { VenforkConfig } from '../config.js';
+import { GitError } from '../errors.js';
 import { generateSyncWorkflow } from '../workflow.js';
 import {
   SYNC_WORKFLOW_PATH,
@@ -14,6 +16,7 @@ import {
   MANAGED_COMMIT_MESSAGE,
   MANAGED_COMMIT_TRAILER,
 } from './managed-commit.js';
+import { netExec, netFailureReason } from './net.js';
 import { withDetachedWorktree } from './worktree.js';
 
 /** Basenames of `entries`, trimmed, de-duplicated and sorted. */
@@ -168,7 +171,7 @@ export async function buildMirrorTip(args: {
           GIT_COMMITTER_EMAIL: VENFORK_BOT_EMAIL,
           GIT_COMMITTER_DATE: upstreamDate,
         },
-      })`git commit-tree --no-gpg-sign ${tree} -p ${upstreamTip} -m ${MANAGED_COMMIT_MESSAGE} -m ${MANAGED_COMMIT_TRAILER}`;
+      })`git -c i18n.commitEncoding=UTF-8 commit-tree --no-gpg-sign ${tree} -p ${upstreamTip} -m ${MANAGED_COMMIT_MESSAGE} -m ${MANAGED_COMMIT_TRAILER}`;
       return commit.stdout.trim();
     }
   );
@@ -177,7 +180,8 @@ export async function buildMirrorTip(args: {
 /**
  * Points `<remote>/<branch>` at `target` with an explicit lease on
  * `expected` (empty means the branch must not exist yet). Skips the push and
- * returns false when the remote already points at `target`.
+ * returns false when the remote already points at `target`. Throws a
+ * `GitError` that says to re-run sync when the lease is stale.
  */
 export async function pushBranchWithLease(args: {
   remote: string;
@@ -190,10 +194,75 @@ export async function pushBranchWithLease(args: {
   if (target === expected) {
     return false;
   }
-  await $({
-    ...(cwd ? { cwd } : {}),
+  const result = await netExec(cwd, {
+    bufferOutput: true,
   })`git push ${remote} ${target}:refs/heads/${branch} --force-with-lease=refs/heads/${branch}:${expected}`;
+  if (result.exitCode !== 0) {
+    const reason = netFailureReason(result);
+    throw new GitError(
+      /stale info/i.test(reason)
+        ? `${remote}/${branch} moved since this sync fetched it. Re-run \`venfork sync\` to pick up the new commits.`
+        : `push to ${remote}/${branch} failed: ${reason}`,
+      `git push ${remote} ${branch}`
+    );
+  }
   return true;
+}
+
+/** Full SHA of `ref` as a commit, or an empty string when it does not resolve. */
+export async function resolveCommit(
+  ref: string,
+  cwd?: string
+): Promise<string> {
+  const result = await $({
+    ...(cwd ? { cwd } : {}),
+    reject: false,
+  })`git rev-parse --verify ${`${ref}^{commit}`}`;
+  return result.exitCode === 0 ? result.stdout.trim() : '';
+}
+
+/**
+ * Moves `origin/<defaultBranch>` to the tip the config asks for: the
+ * upstream tip plus the managed commit when a schedule or preserve list is
+ * active, else the plain upstream tip. One leased push at most.
+ */
+export async function updateOriginTip(args: {
+  config: VenforkConfig | null;
+  defaultBranch: string;
+  upstreamTip: string;
+  previousMirrorTip: string;
+  cwd?: string;
+}): Promise<{ tip: string; pushed: boolean }> {
+  const { config, defaultBranch, upstreamTip, previousMirrorTip, cwd } = args;
+  const schedule = config?.schedule;
+  const scheduleActive = Boolean(schedule?.enabled && schedule.cron);
+  const preserve = config?.preserve ?? [];
+  if (!scheduleActive && preserve.length === 0) {
+    const pushed = await pushBranchWithLease({
+      remote: 'origin',
+      branch: defaultBranch,
+      target: upstreamTip,
+      expected: previousMirrorTip,
+      cwd,
+    });
+    return { tip: upstreamTip, pushed };
+  }
+  return applyMirrorPlusOneCommit({
+    defaultBranch,
+    upstreamTip,
+    schedule:
+      scheduleActive && schedule
+        ? {
+            cron: schedule.cron,
+            mode: config?.mode === 'no-public' ? 'no-public' : 'standard',
+          }
+        : null,
+    enabledWorkflows: config?.enabledWorkflows ?? [],
+    disabledWorkflows: config?.disabledWorkflows ?? [],
+    preserve,
+    previousMirrorTip,
+    cwd,
+  });
 }
 
 /**
@@ -213,57 +282,6 @@ export async function applyMirrorPlusOneCommit(
     cwd: args.cwd,
   });
   return { tip, pushed };
-}
-
-/**
- * Writes (or removes, when `workflowContent` is null) the managed sync
- * workflow on `origin/<defaultBranch>` as a managed commit. Returns false when
- * nothing changed.
- */
-export async function updateWorkflowOnOriginDefault(
-  defaultBranch: string,
-  workflowContent: string | null,
-  cwd?: string
-): Promise<boolean> {
-  const repoDir = cwd ?? process.cwd();
-  return withDetachedWorktree(
-    repoDir,
-    `origin/${defaultBranch}`,
-    'venfork-workflow-',
-    async (tempDir) => {
-      if (workflowContent === null) {
-        await $({
-          cwd: tempDir,
-          reject: false,
-        })`git rm --quiet --ignore-unmatch -- ${SYNC_WORKFLOW_PATH}`;
-      } else {
-        await mkdir(path.join(tempDir, '.github', 'workflows'), {
-          recursive: true,
-        });
-        await writeFile(
-          path.join(tempDir, SYNC_WORKFLOW_PATH),
-          workflowContent
-        );
-        await $({ cwd: tempDir })`git add -- ${SYNC_WORKFLOW_PATH}`;
-      }
-
-      const stagedDiff = await $({
-        cwd: tempDir,
-        reject: false,
-      })`git diff --cached --quiet`;
-      if (stagedDiff.exitCode === 0) {
-        return false;
-      }
-
-      await $({
-        cwd: tempDir,
-      })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${MANAGED_COMMIT_MESSAGE} -m ${MANAGED_COMMIT_TRAILER}`;
-      await $({
-        cwd: tempDir,
-      })`git push origin HEAD:${defaultBranch} --force-with-lease`;
-      return true;
-    }
-  );
 }
 
 /**

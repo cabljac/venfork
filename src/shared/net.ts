@@ -9,18 +9,60 @@ import { GIT_NET_TIMEOUT_MS, NET_ENV } from './constants.js';
  * prompt), a hard timeout, and live progress on stderr.
  *
  * @param cwd Working directory for the command, or undefined for the default.
+ * @param opts.captureOutput Pipe stdout/stderr unbuffered so the caller can
+ *   stream them (seed pushes).
+ * @param opts.bufferOutput Pipe and buffer stdout/stderr and never reject, so
+ *   the caller can read `exitCode`, `stdout`, `stderr` and `timedOut`.
  */
-export function netExec(cwd?: string, opts?: { captureOutput?: boolean }) {
+export function netExec(
+  cwd?: string,
+  opts?: { captureOutput?: boolean; bufferOutput?: boolean }
+) {
   const captureOutput = opts?.captureOutput === true;
+  const bufferOutput = opts?.bufferOutput === true;
   return $({
     ...(cwd ? { cwd } : {}),
     env: NET_ENV,
     timeout: GIT_NET_TIMEOUT_MS,
-    stdio: captureOutput
-      ? ['ignore', 'pipe', 'pipe']
-      : ['ignore', 'inherit', 'inherit'],
+    stdio:
+      captureOutput || bufferOutput
+        ? ['ignore', 'pipe', 'pipe']
+        : ['ignore', 'inherit', 'inherit'],
     ...(captureOutput ? { buffer: false } : {}),
+    ...(bufferOutput ? { reject: false } : {}),
   });
+}
+
+/**
+ * One-line reason a {@link netExec} `bufferOutput` call failed: the timeout,
+ * else stderr, else the exit code.
+ */
+export function netFailureReason(result: {
+  timedOut?: boolean;
+  stderr?: unknown;
+  exitCode?: number;
+}): string {
+  if (result.timedOut) {
+    return `timed out after ${GIT_NET_TIMEOUT_MS / 1000}s`;
+  }
+  const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : '';
+  return stderr || `exit ${result.exitCode ?? 'unknown'}`;
+}
+
+/**
+ * Runs `git fetch <remote>` through {@link netExec}; throws a `GitError`
+ * with git's reason when it fails or times out.
+ */
+export async function netFetch(remote: string, cwd?: string): Promise<void> {
+  const result = await netExec(cwd, {
+    bufferOutput: true,
+  })`git fetch ${remote}`;
+  if (result.exitCode !== 0) {
+    throw new GitError(
+      `git fetch ${remote} failed: ${netFailureReason(result)}`,
+      `git fetch ${remote}`
+    );
+  }
 }
 
 /**

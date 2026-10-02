@@ -237,7 +237,7 @@ venfork sync develop   # Sync develop branch with upstream/develop
 
 **What it does:**
 1. Fetches latest changes from all remotes (upstream, origin, public)
-2. Checks for divergent commits (warns if found to prevent data loss)
+2. Checks for divergent commits and aborts if any are found, to prevent data loss
 3. Builds the new origin tip: upstream's default branch, plus (when scheduled sync or preserve is enabled) one deterministic managed commit with `.github/workflows/venfork-sync.yml` and preserved files
 4. Pushes origin and public once each with an explicit lease, skipping any remote that is already up to date
 5. If workflow policy is configured, that managed commit filters `.github/workflows` using:
@@ -422,8 +422,7 @@ venfork schedule disable
 
 **What it does:**
 1. Stores schedule state (`enabled`, `cron`) in `.venfork/config.json` on `venfork-config`
-2. `set` writes/updates `.github/workflows/venfork-sync.yml` on the private mirror default branch
-3. `disable` removes the managed workflow file from that branch
+2. `set` and `disable` re-stamp the private mirror default branch the same way `venfork sync` does: upstream plus at most one managed commit, with `.github/workflows/venfork-sync.yml` added (`set`) or removed (`disable`). Like sync, they refuse when origin has commits that upstream does not have.
 
 **Authenticating cross-repo pushes**
 

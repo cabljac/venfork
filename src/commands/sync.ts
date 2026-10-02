@@ -10,9 +10,11 @@ import { SyncDivergenceError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { checkDivergence } from '../shared/divergence.js';
 import {
-  applyMirrorPlusOneCommit,
   pushBranchWithLease,
+  resolveCommit,
+  updateOriginTip,
 } from '../shared/mirror-commit.js';
+import { netFetch } from '../shared/net.js';
 
 /**
  * Returns the upstream PR number for `branch` if it's a pulled-in PR. First
@@ -110,7 +112,6 @@ export async function syncCommand(
   targetBranch?: string,
   options?: { cwd?: string; quiet?: boolean }
 ): Promise<void> {
-  const cwdOpt = options?.cwd ? { cwd: options.cwd } : {};
   const quiet = options?.quiet ?? false;
 
   if (!quiet) {
@@ -144,20 +145,26 @@ export async function syncCommand(
 
     // Step 1: Fetch from upstream
     s.start('Fetching from upstream');
-    await $(cwdOpt)`git fetch upstream`;
-    await $(cwdOpt)`git fetch origin`;
+    await netFetch('upstream', options?.cwd);
+    await netFetch('origin', options?.cwd);
     if (!noPublic) {
-      await $(cwdOpt)`git fetch public`;
+      await netFetch('public', options?.cwd);
     }
     s.stop('Fetched from all remotes');
 
     // Step 2: Detect default branch if not specified
     const defaultBranch =
       targetBranch || (await getDefaultBranch('upstream', options?.cwd));
-    const scheduleConfig = config?.schedule;
-    const enabledWorkflows = config?.enabledWorkflows ?? [];
-    const disabledWorkflows = config?.disabledWorkflows ?? [];
     const preserveList = config?.preserve ?? [];
+    const upstreamTip = await resolveCommit(
+      `upstream/${defaultBranch}`,
+      options?.cwd
+    );
+    if (!upstreamTip) {
+      throw new Error(
+        `upstream/${defaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
+      );
+    }
 
     // Step 3: Check for divergence
     s.start('Checking for divergent commits');
@@ -255,55 +262,21 @@ export async function syncCommand(
       );
     }
 
-    const revParse = async (ref: string): Promise<string> => {
-      const result = await $({
-        ...cwdOpt,
-        reject: false,
-      })`git rev-parse --verify ${`${ref}^{commit}`}`;
-      return result.exitCode === 0 ? result.stdout.trim() : '';
-    };
-    const upstreamTip = await revParse(`upstream/${defaultBranch}`);
-    if (!upstreamTip) {
-      throw new Error(
-        `upstream/${defaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
-      );
-    }
     // Read before anything is pushed: preserved files come from this tip, and
     // it is the lease for the origin push.
-    const previousMirrorTip = await revParse(`origin/${defaultBranch}`);
-
-    const scheduleActive = Boolean(
-      scheduleConfig?.enabled && scheduleConfig.cron
+    const previousMirrorTip = await resolveCommit(
+      `origin/${defaultBranch}`,
+      options?.cwd
     );
+
     s.start(`Syncing ${defaultBranch} to origin`);
-    let originPushed: boolean;
-    if (scheduleActive || preserveList.length > 0) {
-      const result = await applyMirrorPlusOneCommit({
-        defaultBranch,
-        upstreamTip,
-        schedule:
-          scheduleActive && scheduleConfig
-            ? {
-                cron: scheduleConfig.cron,
-                mode: noPublic ? 'no-public' : 'standard',
-              }
-            : null,
-        enabledWorkflows,
-        disabledWorkflows,
-        preserve: preserveList,
-        previousMirrorTip,
-        cwd: options?.cwd,
-      });
-      originPushed = result.pushed;
-    } else {
-      originPushed = await pushBranchWithLease({
-        remote: 'origin',
-        branch: defaultBranch,
-        target: upstreamTip,
-        expected: previousMirrorTip,
-        cwd: options?.cwd,
-      });
-    }
+    const { pushed: originPushed } = await updateOriginTip({
+      config,
+      defaultBranch,
+      upstreamTip,
+      previousMirrorTip,
+      cwd: options?.cwd,
+    });
     s.stop(
       originPushed
         ? `Updated origin/${defaultBranch}`
@@ -316,7 +289,7 @@ export async function syncCommand(
         remote: 'public',
         branch: defaultBranch,
         target: upstreamTip,
-        expected: await revParse(`public/${defaultBranch}`),
+        expected: await resolveCommit(`public/${defaultBranch}`, options?.cwd),
         cwd: options?.cwd,
       });
       s.stop(

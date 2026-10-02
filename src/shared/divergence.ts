@@ -93,7 +93,7 @@ export async function checkDivergence(args: {
   const files = new Set<string>();
   for (const commit of divergentCommits) {
     if (await isManagedCommit(commit, cwd)) continue;
-    // Compute the changed files once — both the preserve check and the
+    // Compute the changed files once - both the preserve check and the
     // divergence-error file aggregation want the same list, and
     // `git diff-tree` isn't free.
     const commitFiles = await changedFilesInCommit(commit, cwd);

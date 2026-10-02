@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { PassThrough } from 'node:stream';
+import * as clack from '@clack/prompts';
 
 /**
  * Command tests with execution-based mocking
@@ -95,7 +96,7 @@ function getMockExecaResponse(command: string) {
   if (command.includes('git write-tree')) {
     return Promise.resolve({ exitCode: 0, stdout: 'mirror0tree', stderr: '' });
   }
-  if (command.includes('git commit-tree')) {
+  if (command.includes(' commit-tree ')) {
     return Promise.resolve({ exitCode: 0, stdout: 'managed0tip', stderr: '' });
   }
   const preserveSource = command.match(
@@ -834,7 +835,7 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git commit-tree --no-gpg-sign mirror0tree -p upstream0tip -m chore: venfork-managed mirror commit -m Venfork-Managed: 1'
+          'git -c i18n.commitEncoding=UTF-8 commit-tree --no-gpg-sign mirror0tree -p upstream0tip -m chore: venfork-managed mirror commit -m Venfork-Managed: 1'
         )
       )
     ).toBe(true);
@@ -995,7 +996,7 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some(
         (cmd) =>
-          cmd.includes('git commit-tree') &&
+          cmd.includes(' commit-tree ') &&
           cmd.includes('chore: venfork-managed mirror commit')
       )
     ).toBe(false);
@@ -2364,8 +2365,11 @@ describe('scheduleCommand', () => {
       // Expected in mocked environment
     }
 
+    // With no schedule or preserve left, origin goes back to the upstream tip.
     expect(
-      execaCalls.some((cmd) => cmd.includes('git rm --quiet --ignore-unmatch'))
+      execaCalls.some((cmd) =>
+        cmd.includes('git push origin upstream0tip:refs/heads/main')
+      )
     ).toBe(true);
   });
 });
@@ -2963,6 +2967,25 @@ describe('syncCommand - error paths', () => {
 
     expect(process.exit).toHaveBeenCalledWith(1);
     expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
+  });
+
+  test('reports a missing upstream branch before checking divergence', async () => {
+    mockResponses.set('git rev-parse --verify upstream/main', {
+      exitCode: 128,
+      stdout: '',
+      stderr: 'fatal: Needed a single revision',
+    });
+    mockResponses.set('git rev-list upstream/main..', () =>
+      Promise.reject(
+        new Error("fatal: bad revision 'upstream/main..origin/main'")
+      )
+    );
+
+    await expect(syncCommand('main')).rejects.toThrow('process.exit called');
+
+    expect(clack.log.error).toHaveBeenLastCalledWith(
+      'upstream/main not found after fetch. Check the upstream remote and the default branch name.'
+    );
   });
 
   test('handles fetch errors', async () => {

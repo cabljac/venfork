@@ -8,6 +8,7 @@ import { preserveCommand, syncCommand } from '../../src/commands.js';
 import { updateVenforkConfig } from '../../src/config.js';
 import { SyncDivergenceError } from '../../src/errors.js';
 import { getDefaultBranch } from '../../src/git.js';
+import { isManagedCommit } from '../../src/shared/managed-commit.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
@@ -152,6 +153,70 @@ describe('sync with the managed commit', () => {
     expect(await fx.subjects(fx.origin, 'main', 'main~1..main')).toEqual([
       MANAGED_SUBJECT,
     ]);
+    const migrated = await fx.sha(fx.origin, 'main');
+    const pushes = await fx.pushCount(fx.origin, 'refs/heads/main');
+
+    await sync();
+
+    expect(await fx.sha(fx.origin, 'main')).toBe(migrated);
+    expect(await fx.pushCount(fx.origin, 'refs/heads/main')).toBe(pushes);
+  });
+
+  test('sync replaces a current-subject managed commit that has no trailer, then stays stable', async () => {
+    await enableSchedule();
+    await fx.commitOnOrigin(
+      { [WORKFLOW]: 'name: old managed commit\n' },
+      MANAGED_SUBJECT
+    );
+
+    await sync();
+    const migrated = await fx.sha(fx.origin, 'main');
+    const pushes = await fx.pushCount(fx.origin, 'refs/heads/main');
+    await sync();
+
+    expect(await fx.sha(fx.origin, 'main~1')).toBe(
+      await fx.sha(fx.upstream, 'main')
+    );
+    expect(await fx.sha(fx.origin, 'main')).toBe(migrated);
+    expect(await fx.pushCount(fx.origin, 'refs/heads/main')).toBe(pushes);
+  });
+
+  test('a commit with the Venfork-Managed trailer counts as managed whatever its subject', async () => {
+    const sha = await fx.commitOnOrigin(
+      { [WORKFLOW]: 'name: x\n', 'src/extra.txt': 'extra\n' },
+      'chore: something else\n\nVenfork-Managed: 1'
+    );
+
+    expect(await isManagedCommit(sha, fx.origin)).toBe(true);
+    await sync();
+    expect(await fx.sha(fx.origin, 'main')).toBe(
+      await fx.sha(fx.upstream, 'main')
+    );
+  });
+
+  test('the managed commit SHA ignores i18n.commitEncoding', async () => {
+    await enableSchedule();
+    setClock(1_800_000_000);
+    process.env.GIT_CONFIG_COUNT = '1';
+    process.env.GIT_CONFIG_KEY_0 = 'i18n.commitEncoding';
+    process.env.GIT_CONFIG_VALUE_0 = 'ISO-8859-1';
+    await sync();
+    const latin1 = await fx.sha(fx.origin, 'main');
+    delete process.env.GIT_CONFIG_COUNT;
+    delete process.env.GIT_CONFIG_KEY_0;
+    delete process.env.GIT_CONFIG_VALUE_0;
+
+    await fx.git(
+      fx.work,
+      'push',
+      '--quiet',
+      '--force',
+      'origin',
+      'upstream/main:refs/heads/main'
+    );
+    await sync();
+
+    expect(await fx.sha(fx.origin, 'main')).toBe(latin1);
   });
 
   test('sync with stale lease aborts rather than overwriting', async () => {
@@ -167,6 +232,11 @@ describe('sync with the managed commit', () => {
     await expect(sync()).rejects.toThrow('process.exit(1)');
 
     expect(await fx.sha(fx.origin, 'main')).toBe(teammate);
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'origin/main moved since this sync fetched it. Re-run `venfork sync`'
+      )
+    );
   });
 
   test('sync does not touch public when public already equals upstream', async () => {
@@ -284,10 +354,12 @@ describe('sync with the managed commit', () => {
     await preserveCommand('add', ['config/x.yml']);
     await fx.commitOnOrigin({ 'config/x.yml': 'mirror\n' });
     await sync();
+    const originBefore = await fx.sha(fx.origin, 'main');
     await fx.commitOnUpstream({ config: 'upstream file named config\n' });
 
     await expect(sync()).rejects.toThrow('process.exit(1)');
 
+    expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining(
         "Preserved file 'config/x.yml' cannot be restored: upstream now has a file at 'config'"
