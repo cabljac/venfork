@@ -16,6 +16,9 @@ const MARKER_RE = /^\s*(\/)?\s*venfork\s*:\s*internal\b/i;
 /** Text shaped like a marker, whatever wraps it. */
 const MARKER_TEXT_RE = /venfork\s*:\s*internal/i;
 
+/** A comment body that reads like a broken marker (`venfork:intenral`, `venfork internal`). */
+const MARKER_SHAPED_COMMENT_RE = /venfork\s*:|venfork\W*internal/i;
+
 /** Text around the first canonical match of `pattern`, for error messages. */
 function snippetOf(text: string, pattern: RegExp): string | null {
   const folded = canonicalText(text);
@@ -44,7 +47,9 @@ interface RedactionMarker {
  * Fails closed with {@link RedactionError}:
  *  - an unmatched close marker,
  *  - a comment that mentions venfork but is not a marker (a misspelled
- *    marker such as `venfork:intenral`), or
+ *    marker such as `venfork:intenral`; with
+ *    `VENFORK_ALLOW_SELF_REFERENCE=1`, only a comment shaped like one,
+ *    with `venfork:` or `venfork` then `internal`), or
  *  - any `venfork` mention left anywhere after stripping (with
  *    `VENFORK_ALLOW_SELF_REFERENCE=1`, only text shaped like a marker,
  *    such as `[venfork:internal]`).
@@ -68,7 +73,11 @@ export function stripInternalBlocks(body: string): string {
         start,
         end: start + comment.length,
       });
-    } else if (/venfork/i.test(inner)) {
+    } else if (
+      (selfReferenceAllowed() ? MARKER_SHAPED_COMMENT_RE : /venfork/i).test(
+        inner
+      )
+    ) {
       throw new RedactionError(comment);
     }
   }

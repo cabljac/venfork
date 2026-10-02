@@ -180,4 +180,31 @@ describe('VENFORK_ALLOW_SELF_REFERENCE', () => {
 
     expect(() => stripInternalBlocks(body)).toThrow(RedactionError);
   });
+
+  test.each([
+    '<!-- venfork -->',
+    '<!-- uses venfork -->',
+    'see <!-- built with Venfork --> here',
+  ])('lets %p through, a comment that only mentions venfork', (body) => {
+    process.env.VENFORK_ALLOW_SELF_REFERENCE = '1';
+
+    expect(stripInternalBlocks(body)).toBe(body);
+  });
+
+  test.each([
+    '<!-- venfork:intenral -->',
+    '<!-- venfork: secret -->',
+    '<!-- venfork internal -->',
+    '<!-- venfork-internal -->',
+  ])('still refuses the marker-shaped comment %p', (body) => {
+    process.env.VENFORK_ALLOW_SELF_REFERENCE = '1';
+
+    expect(() => stripInternalBlocks(body)).toThrow(RedactionError);
+  });
+
+  test('a comment that only mentions venfork is refused by default', () => {
+    expect(() => stripInternalBlocks('<!-- uses venfork -->')).toThrow(
+      RedactionError
+    );
+  });
 });

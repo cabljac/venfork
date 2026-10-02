@@ -329,7 +329,7 @@ venfork stage feature-auth --pr --base develop
 
 Commit messages, author names and author emails are published as they are. Keep them free of anything that points at the private mirror; when stage refuses a commit, rewrite the branch (for example with `git rebase -i`) and stage again. A `#42` reference in a commit message is your own content and is published unchanged; the preview warns about it.
 
-To use venfork on a project whose upstream legitimately mentions venfork, set `VENFORK_ALLOW_SELF_REFERENCE=1`. It relaxes only the bare word `venfork`. URL, owner and repo name terms still apply, and text shaped like a marker (`venfork:internal` in any wrapper, such as `[venfork:internal]`) is still refused in PR titles and bodies.
+To use venfork on a project whose upstream legitimately mentions venfork, set `VENFORK_ALLOW_SELF_REFERENCE=1`. It relaxes only the bare word `venfork`. URL, owner and repo name terms still apply, and text shaped like a marker (`venfork:internal` in any wrapper, such as `[venfork:internal]`) is still refused in PR titles and bodies. An HTML comment that only mentions the tool (`<!-- uses venfork -->`) passes, but one that reads like a broken marker (`<!-- venfork:intenral -->`, `<!-- venfork internal -->`) is refused.
 
 **What `--pr` adds:**
 1. Looks up the most recent PR on the private mirror with `--head <branch>` (open first, then most recent of any state).
