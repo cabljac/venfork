@@ -36,7 +36,7 @@ When you run `venfork stage`, your work becomes visible on the public fork and r
 
 Before using Venfork, ensure you have:
 
-- **Node.js 18+** or **Bun** (for running the CLI)
+- **Node.js 18.19+ or 20.5+** or **Bun** (for running the CLI)
 - **GitHub CLI (`gh`)** installed and authenticated
   ```bash
   # Install gh (macOS)
@@ -776,7 +776,7 @@ npm run check
 
 ## Tech Stack
 
-- **Runtime:** Node.js 18+ (or Bun for faster development)
+- **Runtime:** Node.js 18.19+ or 20.5+ (or Bun for faster development)
 - **Language:** TypeScript (strict mode)
 - **Shell Execution:** execa
 - **CLI Framework:** @clack/prompts
