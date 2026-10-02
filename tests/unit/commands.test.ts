@@ -89,6 +89,16 @@ function getMockExecaResponse(command: string) {
   if (command.includes('git branch --show-current')) {
     return Promise.resolve({ exitCode: 0, stdout: 'main', stderr: '' });
   }
+  const preserveSource = command.match(
+    /^git --literal-pathspecs ls-tree (?!HEAD )\S+ -- (.+)$/
+  );
+  if (preserveSource) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: `100644 blob 0123abcd\t${preserveSource[1]}`,
+      stderr: '',
+    });
+  }
   if (command.includes('git rev-parse')) {
     return Promise.resolve({ exitCode: 0, stdout: '.git', stderr: '' });
   }
@@ -890,7 +900,7 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git checkout aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/caller.yml'
+          'git --literal-pathspecs checkout aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/caller.yml'
         )
       )
     ).toBe(true);
@@ -932,7 +942,7 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git checkout aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/ci.yml'
+          'git --literal-pathspecs checkout aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/ci.yml'
         )
       )
     ).toBe(false);
@@ -955,12 +965,8 @@ describe('syncCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git checkout aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/missing.yml',
-      {
-        exitCode: 1,
-        stdout: '',
-        stderr: "error: pathspec '.github/workflows/missing.yml' did not match",
-      }
+      'git --literal-pathspecs ls-tree aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/missing.yml',
+      { exitCode: 0, stdout: '', stderr: '' }
     );
 
     let caught = false;
@@ -1036,7 +1042,7 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git checkout v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2 -- agent.yml'
+          'git --literal-pathspecs checkout v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2 -- agent.yml'
         )
       )
     ).toBe(true);

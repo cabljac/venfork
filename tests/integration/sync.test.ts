@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import * as prompts from '@clack/prompts';
 import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
@@ -171,5 +172,38 @@ describe('sync with the managed commit', () => {
     await sync();
 
     expect(await fx.sha(fx.origin, 'main')).toBe(upstreamTip);
+  });
+
+  test('a preserved file whose parent becomes an upstream file fails and names both paths', async () => {
+    process.chdir(fx.work);
+    await preserveCommand('add', ['config/x.yml']);
+    await fx.commitOnOrigin({ 'config/x.yml': 'mirror\n' });
+    await sync();
+    await fx.commitOnUpstream({ config: 'upstream file named config\n' });
+
+    await expect(sync()).rejects.toThrow('process.exit(1)');
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Preserved file 'config/x.yml' cannot be restored: upstream now has a file at 'config'"
+      )
+    );
+  });
+
+  test('a preserve entry that is a directory on the mirror is rejected', async () => {
+    process.chdir(fx.work);
+    await preserveCommand('add', ['tools/a.sh', 'tools/b.sh']);
+    await fx.commitOnOrigin({ 'tools/a.sh': 'a\n', 'tools/b.sh': 'b\n' });
+    await sync();
+    await updateVenforkConfig(fx.work, { preserve: ['tools'] });
+    await fx.commitOnUpstream({ 'src/z.txt': 'z\n' });
+
+    await expect(sync()).rejects.toThrow('process.exit(1)');
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Preserved path 'tools' is a directory on origin/main; preserve supports single files only"
+      )
+    );
   });
 });

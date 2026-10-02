@@ -128,17 +128,12 @@ export async function applyMirrorPlusOneCommit(args: {
             );
             continue;
           }
-          const checkoutResult = await $({
-            cwd: tempDir,
-            reject: false,
-          })`git checkout ${previousMirrorTip} -- ${preservePath}`;
-          if (checkoutResult.exitCode !== 0) {
-            throw new Error(
-              `Preserved file '${preservePath}' not found on origin/${defaultBranch}.\n` +
-                'Either commit it to the mirror first, or remove the entry with:\n' +
-                `  venfork preserve remove ${preservePath}`
-            );
-          }
+          await addPreservedFile({
+            worktreeDir: tempDir,
+            sourceTip: previousMirrorTip,
+            preservePath,
+            defaultBranch,
+          });
         }
       }
 
@@ -202,4 +197,72 @@ export async function updateWorkflowOnOriginDefault(
       return true;
     }
   );
+}
+
+/**
+ * Stages `preservePath` from `sourceTip` into the worktree at `worktreeDir`.
+ * The path is matched literally and must be a single file (regular,
+ * executable or symlink) on `sourceTip`. Throws, without touching the
+ * worktree, when the path is missing, is a directory or submodule, or when
+ * one of its parent directories is a file in the worktree.
+ */
+export async function addPreservedFile(args: {
+  worktreeDir: string;
+  sourceTip: string;
+  preservePath: string;
+  defaultBranch: string;
+}): Promise<void> {
+  const { worktreeDir, sourceTip, preservePath, defaultBranch } = args;
+  const lsTree = async (ref: string, entry: string): Promise<string> =>
+    (
+      await $({
+        cwd: worktreeDir,
+        reject: false,
+      })`git --literal-pathspecs ls-tree ${ref} -- ${entry}`
+    ).stdout.trim();
+
+  const segments = preservePath.split('/');
+  for (let i = 1; i < segments.length; i++) {
+    const ancestor = segments.slice(0, i).join('/');
+    const entry = await lsTree('HEAD', ancestor);
+    if (/^\d+ blob /.test(entry)) {
+      throw new Error(
+        `Preserved file '${preservePath}' cannot be restored: upstream now has a file at '${ancestor}'.\n` +
+          `Move the preserved file elsewhere, or remove the entry with:\n  venfork preserve remove ${preservePath}`
+      );
+    }
+  }
+
+  const entries = (await lsTree(sourceTip, preservePath))
+    .split('\n')
+    .filter(Boolean);
+  const match = entries[0]?.match(/^(\d+) (\w+) [0-9a-f]+\t(.*)$/);
+  if (!match || entries.length !== 1 || match[3] !== preservePath) {
+    throw new Error(
+      `Preserved file '${preservePath}' not found on origin/${defaultBranch}.\n` +
+        'Either commit it to the mirror first, or remove the entry with:\n' +
+        `  venfork preserve remove ${preservePath}`
+    );
+  }
+  const [, mode, type] = match;
+  if (type === 'tree') {
+    throw new Error(
+      `Preserved path '${preservePath}' is a directory on origin/${defaultBranch}; preserve supports single files only. List each file instead.`
+    );
+  }
+  if (type !== 'blob' || !['100644', '100755', '120000'].includes(mode)) {
+    throw new Error(
+      `Preserved path '${preservePath}' is not a regular file, executable or symlink on origin/${defaultBranch} (mode ${mode}); preserve supports single files only.`
+    );
+  }
+
+  const checkout = await $({
+    cwd: worktreeDir,
+    reject: false,
+  })`git --literal-pathspecs checkout ${sourceTip} -- ${preservePath}`;
+  if (checkout.exitCode !== 0) {
+    throw new Error(
+      `Could not restore preserved file '${preservePath}' from origin/${defaultBranch}: ${checkout.stderr.trim() || `exit ${checkout.exitCode}`}`
+    );
+  }
 }
