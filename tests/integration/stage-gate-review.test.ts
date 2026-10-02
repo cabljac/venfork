@@ -87,6 +87,47 @@ async function growReflog(ref: string, count: number): Promise<void> {
   await git('update-ref', ref, tip);
 }
 
+/**
+ * Moves `ref` through `count` new commits that each give every file in
+ * `files` new content, then back to its tip, so only the reflog holds them.
+ */
+async function growReflogWithVersions(
+  ref: string,
+  files: readonly string[],
+  count: number
+): Promise<void> {
+  const tip = await git('rev-parse', ref);
+  let script = '';
+  for (let i = 0; i < count; i++) {
+    const message = `v${i}`;
+    script += `commit refs/tmp/versions\nmark :${i + 1}\ncommitter t <t@t> ${1700000000 + i} +0000\ndata ${message.length}\n${message}\n`;
+    script += `from ${i === 0 ? tip : `:${i}`}\n`;
+    for (const file of files) {
+      const body = `${file} version ${i}\n`;
+      script += `M 100644 inline ${file}\ndata ${body.length}\n${body}`;
+    }
+    script += '\n';
+  }
+  const marks = `${fx.root}/versions.marks`;
+  await $({
+    cwd: fx.work,
+    input: script,
+  })`git fast-import --quiet --export-marks=${marks}`;
+  const shas = (await Bun.file(marks).text())
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => line.split(' ')[1] ?? '');
+  await git('update-ref', '-d', 'refs/tmp/versions');
+  const reflog = `${fx.work}/.git/logs/${ref}`;
+  let entries = '';
+  let previous = tip;
+  for (const sha of [...shas, tip]) {
+    entries += `${previous} ${sha} t <t@t> 1700000000 +0000\tfetch\n`;
+    previous = sha;
+  }
+  await Bun.write(reflog, (await Bun.file(reflog).text()) + entries);
+}
+
 describe('collectMirrorBlobs scales with history', () => {
   test('reads 10 preserved files across 300 reflog entries in under 5 s', async () => {
     const files: Record<string, string> = {};
@@ -95,7 +136,11 @@ describe('collectMirrorBlobs scales with history', () => {
     await seedPreserve(fx, Object.keys(files));
     await sync();
     await git('fetch', '--quiet', 'origin');
-    await growReflog('refs/remotes/origin/main', 300);
+    await growReflogWithVersions(
+      'refs/remotes/origin/main',
+      Object.keys(files),
+      300
+    );
 
     const started = Date.now();
     const { blobs } = await collectMirrorBlobs(
@@ -107,9 +152,9 @@ describe('collectMirrorBlobs scales with history', () => {
     const elapsed = Date.now() - started;
 
     expect(elapsed).toBeLessThan(5000);
-    expect(
-      [...blobs.values()].filter((p) => p.startsWith('keep/')).sort()
-    ).toEqual(Object.keys(files).sort());
+    const kept = [...blobs.values()].filter((p) => p.startsWith('keep/'));
+    expect(kept.length).toBe(10 * 301);
+    expect([...new Set(kept)].sort()).toEqual(Object.keys(files).sort());
   });
 
   test('warns when the history cap is hit', async () => {
@@ -151,6 +196,20 @@ describe('upstream history is not mirror content', () => {
     await fx.commitOnUpstream({ 'config/app.yml': 'port: 8080\n' });
     await sync();
     await seedPreserve(fx, ['config/app.yml']);
+    await featureFrom('upstream/main');
+    await commitFile('examples/app.yml', 'port: 80\n', 'docs: example');
+
+    await expectShipped();
+  });
+
+  test('an upstream version an old managed commit preserved ships at another path', async () => {
+    await fx.commitOnUpstream({ 'config/app.yml': 'port: 80\n' });
+    await fx.commitOnOrigin({ 'keep/x.txt': 'k\n' });
+    await seedPreserve(fx, ['config/app.yml', 'keep/x.txt']);
+    await sync();
+    await git('fetch', '--quiet', 'origin');
+    await fx.commitOnUpstream({ 'config/app.yml': 'port: 8080\n' });
+    await sync();
     await featureFrom('upstream/main');
     await commitFile('examples/app.yml', 'port: 80\n', 'docs: example');
 
