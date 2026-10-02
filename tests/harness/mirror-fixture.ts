@@ -110,8 +110,8 @@ export async function createMirrorFixture(
     globalConfig,
     [
       '[user]',
-      '\tname = Venfork Test',
-      '\temail = test@venfork.invalid',
+      '\tname = Fixture Dev',
+      '\temail = dev@fixture.invalid',
       '[init]',
       `\tdefaultBranch = ${defaultBranch}`,
       '[commit]',

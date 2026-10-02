@@ -78,7 +78,9 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
     'stage',
     `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing]
   Push branch to public fork for PR to upstream
-  When the branch contains a venfork-managed commit, strips it before public push
+  Rebuilds the branch as linear history on upstream (merges and venfork-managed
+    commits dropped, new SHAs) and refuses commits that carry mirror-only files or
+    mention the mirror or venfork in their author, committer or message
   With --pr, also opens the upstream PR using the internal-review PR's body
     (with <!-- venfork:internal -->...<!-- /venfork:internal --> blocks redacted)
   Options:

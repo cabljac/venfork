@@ -191,7 +191,7 @@ async function pushSeedRef(
 ): Promise<void> {
   const push = netExec(tempDir, {
     captureOutput: true,
-  })`git ${SEED_PUSH_CONFIG} push --force --no-thin --progress ${httpsUrl} ${src}:refs/heads/${branch}`;
+  })`git ${SEED_PUSH_CONFIG} push --force --no-thin --no-follow-tags --progress ${httpsUrl} ${src}:refs/heads/${branch}`;
   let stdoutTail = '';
   let stderrTail = '';
   push.stdout?.on('data', (chunk: string | Buffer) => {

@@ -365,7 +365,7 @@ export async function pushBranchWithLease(args: {
   }
   const result = await netExec(cwd, {
     bufferOutput: true,
-  })`git push ${remote} ${target}:refs/heads/${branch} --force-with-lease=refs/heads/${branch}:${expected}`;
+  })`git push ${remote} ${target}:refs/heads/${branch} --force-with-lease=refs/heads/${branch}:${expected} --no-follow-tags`;
   if (result.exitCode !== 0) {
     const reason = netFailureReason(result);
     throw new GitError(

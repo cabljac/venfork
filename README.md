@@ -313,15 +313,22 @@ venfork stage feature-auth --pr --base develop
 ```
 
 **What it does (without `--pr`):**
-1. Verifies branch exists
-2. Shows staging details and confirmation
-3. If the branch contains a venfork-managed commit, rebuilds its history on top of upstream without that commit (otherwise pushes the branch as-is)
-4. Pushes the result to the public fork
-5. Provides a compare URL so you can open the PR yourself
+1. Refuses branches that are not upstream work: upstream's default branch, anything that is not a local branch (tags, remote-tracking refs), `venfork-config`, and a branch with no history in common with upstream.
+2. Fetches upstream and origin, then rebuilds the branch as a linear history on `upstream/<default>`: every non-merge commit is cherry-picked in order and venfork-managed commits are dropped. Merge commits never ship (a merge with a manual conflict resolution is refused, since dropping it would lose work). The rebuilt commits get new SHAs even when the branch was already based on upstream.
+3. Checks every rebuilt commit before anything is pushed and refuses the branch when a commit:
+   - adds or changes `.github/workflows/venfork-sync.yml`, anything under `.venfork/`, or a preserved path (unless the result is exactly upstream's file at that path). Deleting a preserved file is allowed.
+   - adds a file whose content is identical to a preserved file on the mirror, at any path (catches renames and copies).
+   - was authored or committed by the venfork bot.
+   - has an author, committer or message that contains origin's URL, origin's `owner/name`, or the word `venfork` (this includes `<!-- venfork:internal -->` markers).
+4. Shows the target, the branch, and every commit subject that will be published, then asks for confirmation.
+5. Pushes the rebuilt head with `--force-with-lease` and `--no-follow-tags`, so no local tag goes with it.
+6. Provides a compare URL so you can open the PR yourself.
+
+Commit messages, author names and author emails are published as they are. Keep them free of anything that points at the private mirror; when stage refuses a commit, rewrite the branch (for example with `git rebase -i`) and stage again. A `#42` reference in a commit message is your own content and is published unchanged.
 
 **What `--pr` adds:**
 1. Looks up the most recent PR on the private mirror with `--head <branch>` (open first, then most recent of any state).
-2. Renders the upstream PR body by stripping any `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks. The private mirror stays invisible to upstream — no back-link to the internal review and no hint that one exists. The internal PR URL is recorded only in your mirror config (step 5).
+2. Renders the upstream PR body by stripping any `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks. With no internal PR, the body lists the published commit subjects, with any trailing `(#N)` reference removed. The title and body are then refused if they still contain `venfork`, origin's URL or origin's `owner/name`. The private mirror stays invisible to upstream: no back-link to the internal review and no hint that one exists. The internal PR URL is recorded only in your mirror config (step 5).
 3. Shows you the translated body **before** confirming, so you can catch redaction mistakes before they go public.
 4. Runs `gh pr create --repo <upstream> --base <default> --head <fork-owner>:<branch>` and surfaces the resulting PR URL.
 5. Records the linkage in `venfork-config.shippedBranches[<branch>]` for later tracking.
@@ -342,7 +349,7 @@ The implementation follows the spec at https://example.com/oauth.
 
 `venfork stage --pr` strips all content enclosed by these markers before posting upstream. The upstream PR shows only the public summary; the internal context stays inside the redacted block on the private mirror, where only your team can see it.
 
-If you forget to add markers, the entire internal body is sent upstream — review the preview prompt before confirming.
+A comment that mentions venfork but is not a well-formed marker (for example a typo such as `venfork:intenral`), an unmatched close marker, or any `venfork` left in the text after stripping stops the stage before anything is pushed. An unmatched open marker drops everything after it. If you forget to add markers around other internal context, it is sent upstream, so review the preview prompt before confirming.
 
 ### `venfork pull-request <pr-number-or-url> [--branch-name <override>] [--no-push]`
 
@@ -763,11 +770,7 @@ This usually means setup never finished for this clone, or the clone is not the 
 
 ### Branch Already Exists on Public Fork
 
-If you've staged a branch before and need to update it:
-
-```bash
-git push public feature-branch --force
-```
+If you've staged a branch before and need to update it, run `venfork stage <branch>` again. Stage rebuilds the branch and replaces the public copy with `--force-with-lease`. Do not push the branch to the public fork with plain `git push`: that skips the checks above.
 
 ## Development
 

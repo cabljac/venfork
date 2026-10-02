@@ -334,11 +334,10 @@ function mockManagedCommitOnBranch(
   branch = 'feature-branch',
   sha = 'managed0'
 ): void {
-  mockResponses.set(`git rev-list upstream/main..${branch}`, {
-    exitCode: 0,
-    stdout: sha,
-    stderr: '',
-  });
+  mockResponses.set(
+    `git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/${branch}`,
+    { exitCode: 0, stdout: sha, stderr: '' }
+  );
   mockResponses.set(`git log -1 --format=%s ${sha}`, {
     exitCode: 0,
     stdout: 'chore: venfork-managed mirror commit',
@@ -829,6 +828,16 @@ describe('syncCommand', () => {
         cmd.includes('git push public upstream0tip:refs/heads/main')
       )
     ).toBe(true);
+  });
+
+  test('never follows tags when pushing the mirror and the public fork', async () => {
+    await syncCommand('main');
+
+    const pushCalls = execaCalls.filter((cmd) => cmd.includes('git push'));
+    expect(pushCalls.length).toBeGreaterThan(0);
+    expect(pushCalls.every((cmd) => cmd.endsWith(' --no-follow-tags'))).toBe(
+      true
+    );
   });
 
   test('uses default branch when not specified', async () => {
@@ -1359,7 +1368,7 @@ describe('stageCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch'
+          'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch'
         )
       )
     ).toBe(true);
@@ -1381,13 +1390,8 @@ describe('stageCommand', () => {
       }),
       stderr: '',
     });
-    mockResponses.set('git rev-list upstream/main..feature-branch', {
-      exitCode: 0,
-      stdout: 'mgd111\nfeat222',
-      stderr: '',
-    });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
       { exitCode: 0, stdout: 'mgd111\nfeat222', stderr: '' }
     );
     mockResponses.set('git log -1 --format=%s mgd111', {
@@ -1432,7 +1436,7 @@ describe('stageCommand', () => {
     ).toBe(true);
   });
 
-  test('pushes the branch as-is when it carries no managed commit', async () => {
+  test('rebuilds a branch with no managed commit instead of pushing it raw', async () => {
     mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,
       stdout: JSON.stringify({
@@ -1444,38 +1448,38 @@ describe('stageCommand', () => {
       }),
       stderr: '',
     });
-    mockResponses.set('git rev-list upstream/main..feature-branch', {
-      exitCode: 0,
-      stdout: 'feat222',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
+      { exitCode: 0, stdout: 'feat222', stderr: '' }
+    );
     mockResponses.set('git log -1 --format=%s feat222', {
       exitCode: 0,
       stdout: 'feat: real feature work',
       stderr: '',
     });
-    mockResponses.set('git show -z --name-only --pretty=format: feat222', {
-      exitCode: 0,
-      stdout: 'src/index.ts',
-      stderr: '',
-    });
 
-    try {
-      await stageCommand('feature-branch');
-    } catch {
-      // Expected in mocked environment
-    }
+    await stageCommand('feature-branch');
 
+    expect(execaCalls.some((cmd) => cmd.includes(' worktree add '))).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(' cherry-pick --allow-empty feat222')
+      )
+    ).toBe(true);
     expect(
       execaCalls.some((cmd) => /git push public feature-branch(\s|$)/.test(cmd))
+    ).toBe(false);
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.startsWith('git push public ') &&
+          cmd.includes(':refs/heads/feature-branch --force-with-lease=') &&
+          cmd.endsWith(' --no-follow-tags')
+      )
     ).toBe(true);
-    expect(execaCalls.some((cmd) => cmd.includes(' worktree add '))).toBe(
-      false
-    );
-    expect(execaCalls.some((cmd) => cmd.includes(' cherry-pick '))).toBe(false);
   });
 
-  test('refuses to push when managed-commit detection cannot see upstream', async () => {
+  test('refuses to push when the branch commits cannot be listed', async () => {
     mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,
       stdout: JSON.stringify({
@@ -1486,17 +1490,14 @@ describe('stageCommand', () => {
       }),
       stderr: '',
     });
-    mockResponses.set('git rev-list upstream/main..feature-branch', {
-      exitCode: 128,
-      stdout: '',
-      stderr: 'fatal: bad revision',
-    });
+    mockResponses.set(
+      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
+      () => Promise.reject(new Error('fatal: bad revision'))
+    );
 
-    try {
-      await stageCommand('feature-branch');
-    } catch {
-      // Expected in mocked environment
-    }
+    await expect(stageCommand('feature-branch')).rejects.toThrow(
+      'process.exit(1)'
+    );
 
     expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
   });
@@ -1520,7 +1521,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
       {
         exitCode: 0,
         stdout: 'feat111\nwf222\nfeat333',
@@ -1598,7 +1599,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
       {
         exitCode: 0,
         stdout: 'userci1',
@@ -1640,11 +1641,14 @@ describe('stageCommand', () => {
       }),
       stderr: '',
     });
-    mockResponses.set('git rev-list --merges upstream/main..feature-branch', {
-      exitCode: 0,
-      stdout: 'evilmrg\n',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git rev-list --merges upstream/main..refs/heads/feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'evilmrg\n',
+        stderr: '',
+      }
+    );
     mockResponses.set('git diff-tree --cc --name-only --no-commit-id evilmrg', {
       exitCode: 0,
       // A manual resolution outside .github/workflows — real work that
@@ -1677,11 +1681,14 @@ describe('stageCommand', () => {
       }),
       stderr: '',
     });
-    mockResponses.set('git rev-list --merges upstream/main..feature-branch', {
-      exitCode: 0,
-      stdout: 'bad-merge-commit\n',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git rev-list --merges upstream/main..refs/heads/feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'bad-merge-commit\n',
+        stderr: '',
+      }
+    );
     mockResponses.set(
       'git diff-tree --cc --name-only --no-commit-id bad-merge-commit',
       {
@@ -1717,18 +1724,21 @@ describe('stageCommand', () => {
       }),
       stderr: '',
     });
-    mockResponses.set('git rev-list --merges upstream/main..feature-branch', {
-      exitCode: 0,
-      stdout: 'wfmrg42\n',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git rev-list --merges upstream/main..refs/heads/feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'wfmrg42\n',
+        stderr: '',
+      }
+    );
     mockResponses.set('git diff-tree --cc --name-only --no-commit-id wfmrg42', {
       exitCode: 0,
       stdout: '.github/workflows/venfork-sync.yml',
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
       {
         exitCode: 0,
         stdout: 'feat111',
@@ -1780,7 +1790,7 @@ describe('stageCommand', () => {
     // `--no-merges` makes git omit the merge commit from the list. We assert
     // venfork passes that flag and only cherry-picks the non-merge commits.
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
       {
         exitCode: 0,
         stdout: 'feat111\nfeat222',
@@ -1809,7 +1819,7 @@ describe('stageCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch'
+          'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch'
         )
       )
     ).toBe(true);
@@ -3232,33 +3242,15 @@ describe('stageCommand --pr payload', () => {
     return { bodies };
   }
 
-  test('the synthetic body lists commit subjects without SHAs or the managed commit', async () => {
+  test('the synthetic body lists the published subjects without (#N) references', async () => {
     const { bodies } = mockPrStage();
     mockResponses.set(
       'gh pr list --repo owner/repo-private --head feature-branch',
       { exitCode: 0, stdout: '[]', stderr: '' }
     );
-    mockResponses.set(
-      'git log --oneline --no-merges upstream/main..feature-branch',
-      {
-        exitCode: 0,
-        stdout:
-          'abc1234 feat: real work\ndef5678 chore: venfork-managed mirror commit',
-        stderr: '',
-      }
-    );
-    mockResponses.set(
-      'git log --no-merges --format=%H%x00%s upstream/main..feature-branch',
-      {
-        exitCode: 0,
-        stdout:
-          'aaaa1111aaaa\0feat: real work\nbbbb2222bbbb\0chore: venfork-managed mirror commit',
-        stderr: '',
-      }
-    );
-    mockResponses.set('git log -1 --format=%s bbbb2222bbbb', {
+    mockResponses.set('git log --reverse --format=%s upstream/main..', {
       exitCode: 0,
-      stdout: 'chore: venfork-managed mirror commit',
+      stdout: 'feat: real work (#42)\nfix: edge case',
       stderr: '',
     });
 
@@ -3268,11 +3260,37 @@ describe('stageCommand --pr payload', () => {
       // updateVenforkConfig may fail under mocks
     }
 
-    expect(bodies).toHaveLength(1);
-    expect(bodies[0]).toContain('- feat: real work');
-    expect(bodies[0]).not.toContain('venfork-managed');
-    expect(bodies[0]).not.toMatch(/\b[0-9a-f]{7,}\b/);
+    expect(bodies).toEqual([
+      'Commits in this branch:\n\n- feat: real work\n- fix: edge case',
+    ]);
   });
+
+  test.each([
+    ['plain-text venfork', 'Staged with venfork from the mirror.'],
+    ['the mirror owner/name', 'Follow-up to owner/repo-private#3.'],
+  ])(
+    'an internal PR body naming %s is refused before any push',
+    async (_label, body) => {
+      const { bodies } = mockPrStage();
+      mockResponses.set(
+        'gh pr list --repo owner/repo-private --head feature-branch',
+        {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { number: 7, url: 'u', title: 'feat: x', body },
+          ]),
+          stderr: '',
+        }
+      );
+
+      await expect(
+        stageCommand('feature-branch', { createPr: true })
+      ).rejects.toThrow('process.exit(1)');
+
+      expect(bodies).toEqual([]);
+      expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
+    }
+  );
 
   test('the confirm preview shows the whole body', async () => {
     mockPrStage();
@@ -3626,7 +3644,7 @@ describe('syncCommand - pulled PR branches', () => {
     }
 
     expect(execaCalls).toContain(
-      'git push origin newsha:refs/heads/upstream-pr/7 --force-with-lease=refs/heads/upstream-pr/7:mirrorsha'
+      'git push origin newsha:refs/heads/upstream-pr/7 --force-with-lease=refs/heads/upstream-pr/7:mirrorsha --no-follow-tags'
     );
   });
 
