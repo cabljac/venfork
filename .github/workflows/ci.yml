@@ -87,5 +87,8 @@ jobs:
       - name: Build
         run: bun run build
 
-      - name: Test CLI with Node.js ${{ matrix.node-version }}
+      - name: Test CLI help with Node.js ${{ matrix.node-version }}
         run: node dist/index.js --help
+
+      - name: Run doctor against a local fixture with Node.js ${{ matrix.node-version }}
+        run: bun run smoke:node

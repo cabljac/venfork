@@ -452,6 +452,8 @@ venfork schedule set "0 */6 * * *"
 venfork schedule disable
 ```
 
+The cron is five fields. Month and weekday names (`JAN`, `MON-FRI`) are accepted in any case in lists and ranges, and are written to the workflow as you typed them. Names are not valid as a step (`*/MON`) or as the lone base of a step (`MON/2`).
+
 **What it does:**
 1. Stores schedule state (`enabled`, `cron`) in `.venfork/config.json` on `venfork-config`
 2. `set` and `disable` re-stamp the private mirror default branch the same way `venfork sync` does: upstream plus at most one managed commit, with `.github/workflows/venfork-sync.yml` added (`set`) or removed (`disable`). Like sync, they refuse when origin has commits that upstream does not have.

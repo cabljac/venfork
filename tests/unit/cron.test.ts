@@ -36,6 +36,16 @@ describe('cronMaxIntervalMinutes', () => {
   });
 });
 
+describe('cronMaxIntervalMinutes with names', () => {
+  test('weekday names behave like their numbers', () => {
+    expect(cronMaxIntervalMinutes('30 9 * * MON-FRI', FROM)).toBe(3 * 24 * 60);
+  });
+
+  test('month names behave like their numbers', () => {
+    expect(cronMaxIntervalMinutes('0 0 1 JAN *', FROM)).toBe(365 * 24 * 60);
+  });
+});
+
 describe('cronMaxIntervalMinutes on unusual input', () => {
   test('yearly cron finds the one-year gap', () => {
     expect(cronMaxIntervalMinutes('0 0 1 1 *', FROM)).toBe(365 * 24 * 60);
@@ -56,7 +66,28 @@ describe('isValidCronExpression', () => {
   });
 
   test.each([
+    ['0 0 * * MON'],
+    ['0 0 * * mon-fri'],
+    ['0 0 1 JAN,JUN *'],
+    ['0 0 1 JAN-MAR *'],
+    ['0 0 * * SUN'],
+    ['0 0 * * mon,wed'],
+    ['0 0 * * MON-FRI/2'],
+  ])('accepts month and weekday names in %s', (cron) => {
+    expect(isValidCronExpression(cron)).toBe(true);
+  });
+
+  test.each([
     ['*/0 * * * *'],
+    ['0 0 * * FOO'],
+    ['0 0 * JAN-FOO *'],
+    ['MON * * * *'],
+    ['0 0 * MON *'],
+    ['0 0 * * JAN'],
+    ['0 0 * * */MON'],
+    ['0 0 * * MON/2'],
+    ['0 0 * JAN/2 *'],
+    ['0 0 * * 1-5/MON'],
     ['@hourly'],
     ['0 * * *'],
     ['60 * * * *'],

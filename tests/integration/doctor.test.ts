@@ -19,13 +19,16 @@ import {
 } from '../harness/mirror-fixture.js';
 
 let fx: MirrorFixture;
+let active: MirrorFixture | undefined;
 
 beforeEach(async () => {
   fx = await createMirrorFixture();
+  active = fx;
 });
 
 afterEach(async () => {
-  await fx.cleanup();
+  await active?.cleanup();
+  active = undefined;
 });
 
 function byId(checks: DoctorCheck[]): Record<string, DoctorCheck> {

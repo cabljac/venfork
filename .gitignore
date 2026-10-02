@@ -33,3 +33,4 @@ tmp/
 # junit reports from CI test-count gate
 unit.xml
 integration.xml
+.test-reports/
