@@ -64,7 +64,7 @@ Determinism rule: the managed commit's author and committer are the venfork bot 
 
 ### Internal-block redaction
 
-`venfork stage --pr` and `venfork issue stage` promote internal content to upstream. Before doing so, `stripInternalBlocks` removes `<!-- venfork:internal -->…<!-- /venfork:internal -->` regions from PR/issue bodies. The markers are overridable via `VENFORK_INTERNAL_OPEN_RE` / `VENFORK_INTERNAL_CLOSE_RE`. Anything that flows from mirror → public/upstream must go through this redaction.
+`venfork stage --pr` and `venfork issue stage` promote internal content to upstream. Before doing so, `stripInternalBlocks` removes `<!-- venfork:internal -->…<!-- /venfork:internal -->` regions from PR/issue bodies and titles. Markers match case-insensitively (`<!-- VENFORK: internal (note) -->` works); an unmatched close marker or any leftover HTML comment mentioning venfork throws `RedactionError` instead of publishing. Anything that flows from mirror → public/upstream must go through this redaction. Stage also refuses (`StageLeakError`) to push a head whose diff against `upstream/<default>` adds the managed workflow or a preserved path upstream does not have.
 
 ### Health checks
 
@@ -80,8 +80,8 @@ Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/n
 - `VENFORK_GIT_TIMEOUT` — ms cap per network op (default 600000).
 - `VENFORK_NONINTERACTIVE=1` — auto-confirm prompts that explicitly opt in (`allowNonInteractive`); does **not** blanket-yes every prompt.
 - `VENFORK_PUSH_TOKEN` — token used by the generated sync workflow for pushes.
-- `VENFORK_BOT_NAME` / `VENFORK_BOT_EMAIL` — author identity for managed/config commits.
-- `VENFORK_INTERNAL_OPEN_RE` / `VENFORK_INTERNAL_CLOSE_RE` — override internal-block markers.
+- `VENFORK_SEED_CHUNK` / `VENFORK_SEED_RETRY_MS` — commit batch size and retry delay for the initial mirror seed push.
+- `VENFORK_INSTALL_SPEC` — repository variable read by the generated workflow to override the pinned `npm install -g` spec.
 
 ## Conventions
 

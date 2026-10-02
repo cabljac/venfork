@@ -1,4 +1,5 @@
 import { $ } from 'execa';
+import { RedactionError } from '../errors.js';
 
 /** Internal review PR fields read from the private mirror via gh. */
 export interface InternalPrInfo {
@@ -8,8 +9,10 @@ export interface InternalPrInfo {
   body: string;
 }
 
-const VENFORK_INTERNAL_OPEN_RE = /<!--\s*venfork:internal\s*-->/g;
-const VENFORK_INTERNAL_CLOSE_RE = /<!--\s*\/venfork:internal\s*-->/g;
+const VENFORK_INTERNAL_OPEN_RE = /<!--\s*venfork\s*:\s*internal\b[^>]*-->/gi;
+const VENFORK_INTERNAL_CLOSE_RE =
+  /<!--\s*\/\s*venfork\s*:\s*internal\b[^>]*-->/gi;
+const LEFTOVER_VENFORK_COMMENT_RE = /<!--[^>]*venfork[^>]*-->/i;
 
 interface RedactionMarker {
   type: 'open' | 'close';
@@ -23,13 +26,16 @@ interface RedactionMarker {
  * nested pairs collapse correctly: every char between the outermost open and
  * its matching close is dropped (including any inner pairs).
  *
- * Edge cases:
- *  - Unmatched close marker: dropped, surrounding content preserved.
- *  - Unmatched open marker: content from that open to end-of-input is
- *    dropped (defensive — a missing close shouldn't leak intended-private
- *    content upstream).
- *  - Whitespace inside the markers is tolerated (`<!-- venfork:internal -->`
- *    and `<!--venfork:internal-->` both match).
+ * Markers match case-insensitively, with optional whitespace around the
+ * `/` and `:` and any note after the keyword
+ * (`<!-- VENFORK: internal (draft) -->`).
+ *
+ * Fails closed with {@link RedactionError}:
+ *  - an unmatched close marker, or
+ *  - any HTML comment mentioning venfork left after stripping (a
+ *    misspelled marker such as `venfork:intenral`).
+ *
+ * An unmatched open marker drops everything to end-of-input.
  *
  * @internal Exported for unit testing; not part of the public API.
  */
@@ -73,10 +79,7 @@ export function stripInternalBlocks(body: string): string {
       depth -= 1;
       cursor = marker.end;
     } else {
-      // Unmatched close marker. Keep the content before it; drop the
-      // marker itself.
-      result += body.slice(cursor, marker.start);
-      cursor = marker.end;
+      throw new RedactionError(body.slice(marker.start, marker.end));
     }
   }
   if (depth === 0) {
@@ -84,6 +87,10 @@ export function stripInternalBlocks(body: string): string {
   }
   // depth > 0 here means an unclosed open marker — content from the
   // unmatched open to end-of-input is intentionally dropped.
+  const leftover = result.match(LEFTOVER_VENFORK_COMMENT_RE);
+  if (leftover) {
+    throw new RedactionError(leftover[0]);
+  }
   return result;
 }
 
@@ -149,4 +156,13 @@ export async function findInternalPr(
  */
 export function translateInternalBody(body: string): string {
   return stripInternalBlocks(body).trim();
+}
+
+/**
+ * Renders an internal PR/issue title for upstream: internal blocks are
+ * stripped exactly as in bodies, so a title is published only after
+ * redaction.
+ */
+export function translateInternalTitle(title: string): string {
+  return stripInternalBlocks(title).trim();
 }

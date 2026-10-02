@@ -104,6 +104,7 @@ describe('parseRepoPath', () => {
     ['.git with trailing slash', 'https://github.com/acme/w.git/', 'acme/w'],
     ['ssh URL with port', 'ssh://git@github.com:22/acme/w', 'acme/w'],
     ['ssh URL without port', 'ssh://git@github.com/acme/w.git', 'acme/w'],
+    ['ssh over port 443', 'ssh://git@ssh.github.com:443/acme/w.git', 'acme/w'],
     [
       'https with credentials',
       'https://x-access-token:t@github.com/acme/w',

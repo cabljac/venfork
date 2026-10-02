@@ -65,7 +65,7 @@ export function parseRepoPath(url: string): string {
   }
 
   const match = trimmed.match(
-    /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?(?:www\.)?github\.com(?::\d+)?[:/](.+)$/i
+    /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?(?:www\.|ssh\.)?github\.com(?::\d+)?[:/](.+)$/i
   );
   if (!match) return '';
   const repoPath = match[1].replace(/\/+$/, '').replace(/\.git$/, '');

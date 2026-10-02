@@ -3,7 +3,10 @@ import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
 import { RemoteNotFoundError } from '../errors.js';
 import { confirmOrAutoYes } from '../shared/confirm.js';
-import { translateInternalBody } from '../shared/redaction.js';
+import {
+  translateInternalBody,
+  translateInternalTitle,
+} from '../shared/redaction.js';
 import { findMirrorRepoPath } from '../shared/repo.js';
 import { parseRepoPath } from '../utils.js';
 
@@ -176,7 +179,9 @@ export async function issueCommand(
       s.stop(`Read: ${internal.title}`);
 
       const translatedBody = translateInternalBody(internal.body);
-      const upstreamTitle = options.title ?? internal.title;
+      const upstreamTitle = translateInternalTitle(
+        options.title ?? internal.title
+      );
 
       p.note(
         [

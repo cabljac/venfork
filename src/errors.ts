@@ -116,3 +116,33 @@ export class ConfigError extends VenforkError {
     if (options?.cause !== undefined) this.cause = options.cause;
   }
 }
+
+/**
+ * Thrown when internal-block redaction cannot prove a body is safe to
+ * publish: an unmatched close marker, or a leftover HTML comment that
+ * mentions venfork (for example a misspelled marker).
+ */
+export class RedactionError extends VenforkError {
+  constructor(public readonly snippet: string) {
+    super(
+      `Refusing to publish: could not redact a venfork marker safely near '${snippet}'. Fix the <!-- venfork:internal --> ... <!-- /venfork:internal --> markers and retry.`
+    );
+    this.name = 'RedactionError';
+  }
+}
+
+/**
+ * Thrown when `venfork stage` would push mirror-only paths (the managed
+ * sync workflow or preserved files) to the public fork or upstream.
+ */
+export class StageLeakError extends VenforkError {
+  constructor(
+    public readonly branch: string,
+    public readonly paths: string[]
+  ) {
+    super(
+      `Refusing to stage '${branch}': it would publish mirror-only path(s) ${paths.join(', ')}. Drop those changes from the branch (they belong on the mirror default branch only) and retry.`
+    );
+    this.name = 'StageLeakError';
+  }
+}

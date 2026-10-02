@@ -5,20 +5,28 @@ import {
   BranchNotFoundError,
   GitError,
   RemoteNotFoundError,
+  StageLeakError,
 } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { confirmOrAutoYes } from '../shared/confirm.js';
-import { WORKFLOWS_DIR } from '../shared/constants.js';
+import { SYNC_WORKFLOW_PATH, WORKFLOWS_DIR } from '../shared/constants.js';
 import { changedFilesInCommit } from '../shared/divergence.js';
-import { isManagedCommit } from '../shared/managed-commit.js';
+import {
+  classifyManagedCommit,
+  isManagedCommit,
+  type ManagedCommitKind,
+} from '../shared/managed-commit.js';
 import {
   findInternalPr,
   type InternalPrInfo,
   translateInternalBody,
+  translateInternalTitle,
 } from '../shared/redaction.js';
 import { findMirrorRepoPath } from '../shared/repo.js';
 import { withDetachedWorktree } from '../shared/worktree.js';
 import { parseRepoPath } from '../utils.js';
+
+const CONFIG_BRANCH = 'venfork-config';
 
 async function branchHasManagedCommits(
   branch: string,
@@ -145,10 +153,18 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
         .filter(Boolean);
 
       const commitsToPick: string[] = [];
+      const dropped: Array<{ commit: string; kind: ManagedCommitKind }> = [];
       for (const commit of branchCommits) {
-        if (!(await isManagedCommit(commit, repoDir))) {
-          commitsToPick.push(commit);
-        }
+        const kind = await classifyManagedCommit(commit, repoDir);
+        if (kind === null) commitsToPick.push(commit);
+        else dropped.push({ commit, kind });
+      }
+      if (dropped.length > 0) {
+        p.log.warn(
+          `Dropping ${dropped.length} venfork-managed commit(s) from '${branch}':\n${dropped
+            .map(({ commit, kind }) => `  - ${commit.slice(0, 12)} (${kind})`)
+            .join('\n')}`
+        );
       }
 
       for (const commit of commitsToPick) {
@@ -218,6 +234,11 @@ export interface StagingPlan {
  * `RemoteNotFoundError` so callers can render a single failure path.
  */
 async function planStaging(branch: string, cwd: string): Promise<StagingPlan> {
+  if (branch.replace(/^(refs\/heads\/|origin\/)/, '') === CONFIG_BRANCH) {
+    throw new Error(
+      `Refusing to stage '${branch}': it holds venfork's private configuration, not upstream work.`
+    );
+  }
   const branchCheck = await $({
     cwd,
     reject: false,
@@ -261,6 +282,21 @@ async function planStaging(branch: string, cwd: string): Promise<StagingPlan> {
   const pushOwner = pushRepoPath.split('/')[0] ?? '';
 
   const upstreamDefaultBranch = await getDefaultBranch('upstream');
+  const mergeBase = await $({
+    cwd,
+    reject: false,
+  })`git merge-base ${`upstream/${upstreamDefaultBranch}`} ${branch}`;
+  if (mergeBase.exitCode === 1) {
+    throw new Error(
+      `Refusing to stage '${branch}': it has no history in common with upstream/${upstreamDefaultBranch}.`
+    );
+  }
+  if (mergeBase.exitCode !== 0) {
+    throw new GitError(
+      `Cannot find where '${branch}' meets upstream/${upstreamDefaultBranch}: ${mergeBase.stderr.trim()}`,
+      'git merge-base'
+    );
+  }
   const hasManagedCommits = await branchHasManagedCommits(
     branch,
     upstreamDefaultBranch,
@@ -277,9 +313,52 @@ async function planStaging(branch: string, cwd: string): Promise<StagingPlan> {
     upstreamRepoPath,
     upstreamDefaultBranch,
     hasManagedCommits,
-    preserve: config?.preserve ?? [],
+    preserve: [...(config?.preserve ?? []), ...(config?.invalidPreserve ?? [])],
     noPublic,
   };
+}
+
+/**
+ * Throws {@link StageLeakError} when `head` would add or change the managed
+ * sync workflow or a preserved path that upstream's tree does not have.
+ * Runs on every stage path before anything is pushed.
+ */
+async function assertNoMirrorOnlyPaths(
+  plan: StagingPlan,
+  head: string,
+  cwd: string
+): Promise<void> {
+  const base = `upstream/${plan.upstreamDefaultBranch}`;
+  const diff = await $({
+    cwd,
+    reject: false,
+  })`git diff --name-only -z --diff-filter=AMR ${base} ${head}`;
+  if (diff.exitCode !== 0) {
+    throw new GitError(
+      `Cannot compare '${plan.branch}' with ${base}: ${diff.stderr.trim()}`,
+      'git diff'
+    );
+  }
+  const leaks: string[] = [];
+  for (const file of diff.stdout.split('\0').filter(Boolean)) {
+    if (file === SYNC_WORKFLOW_PATH) {
+      leaks.push(file);
+      continue;
+    }
+    if (!plan.preserve.includes(file)) continue;
+    const upstreamEntry = await $({
+      cwd,
+      reject: false,
+    })`git --literal-pathspecs ls-tree -z ${base} -- ${file}`;
+    if (
+      !upstreamEntry.stdout.split('\0').some((e) => e.endsWith(`\t${file}`))
+    ) {
+      leaks.push(file);
+    }
+  }
+  if (leaks.length > 0) {
+    throw new StageLeakError(plan.branch, leaks);
+  }
 }
 
 /**
@@ -313,6 +392,7 @@ async function executeStagingPush(
       cwd
     );
     s.stop('Prepared sanitized branch');
+    await assertNoMirrorOnlyPaths(plan, stageHead, cwd);
 
     s.start(`Pushing sanitized branch to ${target}`);
     // Lease on the tip read via ls-remote: a URL push (no-public mode) has no
@@ -330,13 +410,12 @@ async function executeStagingPush(
     return stageHead;
   }
 
+  const head = (await $({ cwd })`git rev-parse ${plan.branch}`).stdout.trim();
+  await assertNoMirrorOnlyPaths(plan, head, cwd);
   s.start(`Pushing to ${target}`);
   await $({ cwd })`git push ${pushDest} ${plan.branch}`;
   s.stop('Push successful');
-  const headResult = await $({
-    cwd,
-  })`git rev-parse ${plan.branch}`;
-  return headResult.stdout.trim();
+  return head;
 }
 
 export interface StageOptions {
@@ -363,9 +442,10 @@ export interface StageOptions {
 
 /**
  * Generates a synthetic upstream PR body from the branch's commit log when no
- * internal review PR was found. Lists the non-merge commits in
- * `upstream/<defaultBranch>..<branch>` so the upstream maintainer sees what
- * the change actually is, rather than a "please add a description" placeholder.
+ * internal review PR was found. Lists the subjects of the non-merge,
+ * non-managed commits in `upstream/<defaultBranch>..<branch>` (exactly the
+ * commits stage publishes), with no SHAs, so nothing points back at the
+ * mirror.
  *
  * The body must not reveal the private mirror — upstream only ever sees the
  * commit summary, never that the work was staged from a mirror.
@@ -383,16 +463,21 @@ async function buildSyntheticBody(
   const log = await $({
     cwd,
     reject: false,
-  })`git log --oneline --no-merges upstream/${defaultBranch}..${branch}`;
-  if (log.exitCode !== 0 || !log.stdout.trim()) {
+  })`git log --no-merges --format=%H%x00%s upstream/${defaultBranch}..${branch}`;
+  if (log.exitCode !== 0) {
     return 'No description provided.';
   }
-  const lines = log.stdout
-    .trim()
-    .split('\n')
-    .map((line) => `- ${line}`)
-    .join('\n');
-  return `Commits in this branch:\n\n${lines}`;
+  const subjects: string[] = [];
+  for (const line of log.stdout.split('\n')) {
+    const [sha, subject] = line.split('\0');
+    if (!sha || subject === undefined) continue;
+    if (await isManagedCommit(sha, cwd)) continue;
+    subjects.push(`- ${subject}`);
+  }
+  if (subjects.length === 0) {
+    return 'No description provided.';
+  }
+  return `Commits in this branch:\n\n${subjects.join('\n')}`;
 }
 
 /**
@@ -407,12 +492,12 @@ async function buildUpstreamPrPayload(
 ): Promise<{ title: string; body: string }> {
   if (internal) {
     return {
-      title: override.title ?? internal.title,
+      title: translateInternalTitle(override.title ?? internal.title),
       body: override.body ?? translateInternalBody(internal.body),
     };
   }
   return {
-    title: override.title ?? branch,
+    title: translateInternalTitle(override.title ?? branch),
     body:
       override.body ??
       (await buildSyntheticBody(branch, context.defaultBranch, context.cwd)),
@@ -490,6 +575,18 @@ export async function stageCommand(
     s.start('Verifying branch exists');
     const plan = await planStaging(branch, repoDir);
     s.stop('Branch verified');
+    if (createPr) {
+      if (!plan.upstreamRepoPath) {
+        throw new Error(
+          `Cannot open an upstream PR: the upstream remote '${plan.upstreamUrl}' is not a GitHub repository.`
+        );
+      }
+      if (!plan.pushRepoPath) {
+        throw new Error(
+          `Cannot open an upstream PR: the ${plan.pushRemote} remote '${plan.pushUrl}' is not a GitHub repository.`
+        );
+      }
+    }
 
     // Look up the internal PR up-front when --pr is set so the user sees the
     // translated body in the confirm prompt before anything is published.
@@ -551,11 +648,7 @@ export async function stageCommand(
     p.note(detailLines.join('\n'), 'Staging Details');
 
     if (createPr) {
-      const previewBody =
-        translatedBody.length > 800
-          ? `${translatedBody.slice(0, 800)}\n…(truncated; full body sent on submit)`
-          : translatedBody;
-      p.note(previewBody || '(empty)', 'Upstream PR body preview');
+      p.note(translatedBody || '(empty)', 'Upstream PR body preview');
     }
 
     const shouldStage = await confirmOrAutoYes({
