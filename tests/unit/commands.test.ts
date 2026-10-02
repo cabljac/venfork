@@ -19,7 +19,7 @@ interface WriteFileCall {
 type SignalHandler = () => void | Promise<void>;
 type MockResponse =
   | { exitCode: number; stdout: string; stderr: string }
-  | ((command: string) => Promise<unknown>);
+  | ((command: string, options: { reject?: boolean }) => Promise<unknown>);
 
 // Track calls to our mocks
 const execaCalls: string[] = [];
@@ -61,7 +61,7 @@ mock.module('execa', () => ({
       return mock((strings: TemplateStringsArray, ...vals: any[]) => {
         command = String.raw({ raw: strings }, ...vals.map(argText));
         execaCalls.push(command);
-        return getMockExecaResponse(command);
+        return getMockExecaResponse(command, _options);
       });
     }
 
@@ -72,12 +72,15 @@ mock.module('execa', () => ({
   }),
 }));
 
-function getMockExecaResponse(command: string) {
+function getMockExecaResponse(
+  command: string,
+  options: { reject?: boolean } = {}
+) {
   // Check if there's a specific mock response set for this test
   for (const [pattern, response] of mockResponses.entries()) {
     if (command.includes(pattern)) {
       return typeof response === 'function'
-        ? response(command)
+        ? response(command, options)
         : Promise.resolve(response);
     }
   }
@@ -2833,6 +2836,20 @@ describe('cloneCommand - error paths', () => {
 });
 
 describe('syncCommand - error paths', () => {
+  test('a failing divergence range aborts sync without pushing', async () => {
+    const stderr = 'fatal: bad revision upstream/main..origin/main';
+    mockResponses.set(
+      'git rev-list upstream/main..origin/main',
+      (_cmd, opts) =>
+        opts.reject === false
+          ? Promise.resolve({ exitCode: 128, stdout: '', stderr })
+          : Promise.reject(new Error(stderr))
+    );
+
+    await expect(syncCommand('main')).rejects.toThrow('process.exit(1)');
+    expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
+  });
+
   test('aborts when origin has divergent commits', async () => {
     // Mock rev-list to show origin has divergent commits
     mockResponses.set('git rev-list upstream/main..origin/main', {

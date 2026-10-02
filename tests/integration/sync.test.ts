@@ -8,6 +8,7 @@ import { preserveCommand, syncCommand } from '../../src/commands.js';
 import { updateVenforkConfig } from '../../src/config.js';
 import { SyncDivergenceError } from '../../src/errors.js';
 import { getDefaultBranch } from '../../src/git.js';
+import { checkDivergence } from '../../src/shared/divergence.js';
 import { isManagedCommit } from '../../src/shared/managed-commit.js';
 import {
   createMirrorFixture,
@@ -377,5 +378,25 @@ describe('sync with the managed commit', () => {
         "Preserved path 'tools' is a directory on origin/main; preserve supports single files only"
       )
     );
+  });
+});
+
+describe('divergence check errors', () => {
+  test('an unresolvable upstream ref throws instead of reporting no divergence', async () => {
+    await fx.commitOnOrigin({ 'src/mirror.txt': 'mirror\n' });
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+    await fx.git(fx.work, 'update-ref', '-d', 'refs/remotes/upstream/main');
+    const originBefore = await fx.sha(fx.origin, 'main');
+
+    await expect(
+      checkDivergence({
+        remote: 'origin',
+        defaultBranch: 'main',
+        allowPreserved: true,
+        preserveAllowed: new Set(),
+        cwd: fx.work,
+      })
+    ).rejects.toThrow();
+    expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
   });
 });
