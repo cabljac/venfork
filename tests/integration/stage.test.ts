@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { chmod } from 'node:fs/promises';
 import * as prompts from '@clack/prompts';
 import { quietPrompts } from '../harness/prompts.js';
 
@@ -42,6 +43,25 @@ async function cutFeatureBranch(base: string): Promise<string> {
 }
 
 describe('stage against real repos', () => {
+  test('a post-checkout hook in the clone does not leak into the staged branch', async () => {
+    await preserveCommand('add', [CALLER]);
+    await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
+    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await cutFeatureBranch('origin/main');
+    const hook = `${fx.work}/.git/hooks/post-checkout`;
+    await Bun.write(
+      hook,
+      '#!/bin/sh\necho hooked > hooked.txt\ngit add hooked.txt\n'
+    );
+    await chmod(hook, 0o755);
+
+    await stageCommand('feature');
+
+    expect(
+      await fx.fileAt(fx.publicFork ?? '', 'feature', 'hooked.txt')
+    ).toBeNull();
+  });
+
   test('stage strips a preserve-only managed commit', async () => {
     await preserveCommand('add', [CALLER]);
     await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });

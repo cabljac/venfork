@@ -251,6 +251,9 @@ venfork sync develop   # Sync develop branch with upstream/develop
 - Public default branch remains aligned with upstream
 - Your current work on feature branches is completely unaffected
 - If divergent commits are detected, sync will abort to prevent data loss
+- The managed commit is built from git trees on a temporary index, never from your working copy, so sparse-checkout, hooks, clean filters and `core.quotePath` do not change it
+- Workflow allow/block entries match file basenames exactly (no glob patterns)
+- A preserved file that upstream adds is replaced by upstream's version. If upstream later deletes that path again, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork preserve remove <path>` to let it go
 
 ### `venfork status`
 
