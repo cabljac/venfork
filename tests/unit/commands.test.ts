@@ -19,7 +19,10 @@ interface WriteFileCall {
 type SignalHandler = () => void | Promise<void>;
 type MockResponse =
   | { exitCode: number; stdout: string; stderr: string }
-  | ((command: string, options: { reject?: boolean }) => Promise<unknown>);
+  | ((
+      command: string,
+      options: { reject?: boolean; input?: string }
+    ) => Promise<unknown>);
 
 // Track calls to our mocks
 const execaCalls: string[] = [];
@@ -3151,6 +3154,132 @@ describe('syncCommand - error paths', () => {
     }
 
     expect(process.exit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('stageCommand --pr payload', () => {
+  function mockPrStage(upstreamUrl = 'git@github.com:up/repo.git'): {
+    bodies: string[];
+  } {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: upstreamUrl,
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    const bodies: string[] = [];
+    mockResponses.set('gh pr create --repo', (_cmd, opts) => {
+      bodies.push(String((opts as { input?: string }).input ?? ''));
+      return Promise.resolve({
+        exitCode: 0,
+        stdout: 'https://github.com/up/repo/pull/1\n',
+        stderr: '',
+      });
+    });
+    return { bodies };
+  }
+
+  test('the synthetic body lists commit subjects without SHAs or the managed commit', async () => {
+    const { bodies } = mockPrStage();
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set(
+      'git log --oneline --no-merges upstream/main..feature-branch',
+      {
+        exitCode: 0,
+        stdout:
+          'abc1234 feat: real work\ndef5678 chore: venfork-managed mirror commit',
+        stderr: '',
+      }
+    );
+    mockResponses.set(
+      'git log --no-merges --format=%H%x00%s upstream/main..feature-branch',
+      {
+        exitCode: 0,
+        stdout:
+          'aaaa1111aaaa\0feat: real work\nbbbb2222bbbb\0chore: venfork-managed mirror commit',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git log -1 --format=%s bbbb2222bbbb', {
+      exitCode: 0,
+      stdout: 'chore: venfork-managed mirror commit',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } catch {
+      // updateVenforkConfig may fail under mocks
+    }
+
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain('- feat: real work');
+    expect(bodies[0]).not.toContain('venfork-managed');
+    expect(bodies[0]).not.toMatch(/\b[0-9a-f]{7,}\b/);
+  });
+
+  test('the confirm preview shows the whole body', async () => {
+    mockPrStage();
+    const longBody = `Summary. ${'x'.repeat(2000)} END`;
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          { number: 7, url: 'u', title: 'feat: long', body: longBody },
+        ]),
+        stderr: '',
+      }
+    );
+
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } catch {
+      // updateVenforkConfig may fail under mocks
+    }
+
+    const preview = noteCalls.find(
+      (n) => n.title === 'Upstream PR body preview'
+    );
+    expect(preview?.message).toBe(longBody);
+  });
+
+  test('--pr refuses an upstream remote that is not a GitHub repository', async () => {
+    mockPrStage('/srv/git/upstream.git');
+
+    await expect(
+      stageCommand('feature-branch', { createPr: true })
+    ).rejects.toThrow('process.exit(1)');
+
+    expect(clack.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "upstream remote '/srv/git/upstream.git' is not a GitHub repository"
+      )
+    );
+    expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
   });
 });
 
