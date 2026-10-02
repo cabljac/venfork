@@ -36,6 +36,15 @@ export async function preserveCommand(
           'Preserved files'
         );
       }
+      const invalid = config.invalidPreserve ?? [];
+      if (invalid.length > 0) {
+        p.note(
+          invalid
+            .map((entry) => `- ${entry}: venfork preserve remove ${entry}`)
+            .join('\n'),
+          'Invalid entries (sync refuses to run until they are removed)'
+        );
+      }
       p.outro('✨ Preserve list shown');
       return;
     }
@@ -44,6 +53,30 @@ export async function preserveCommand(
       await updateVenforkConfig(repoDir, { preserve: null });
       p.outro(
         '✨ Preserve list cleared. Run `venfork sync` to apply on the private mirror default branch.'
+      );
+      return;
+    }
+
+    const config = await readVenforkConfigFromRepo(repoDir);
+    const current = [
+      ...(config?.preserve ?? []),
+      ...(config?.invalidPreserve ?? []),
+    ];
+
+    if (action === 'remove') {
+      const toRemove = new Set(
+        paths.map((entry) => normalizePreservePath(entry) ?? entry)
+      );
+      const filtered = current.filter((entry) => !toRemove.has(entry));
+      await updateVenforkConfig(repoDir, {
+        preserve: filtered.length > 0 ? filtered : null,
+      });
+      p.note(
+        [...toRemove].map((entry) => `- ${entry}`).join('\n'),
+        'Removed from preserve list'
+      );
+      p.outro(
+        '✨ Preserve list updated. Run `venfork sync` to apply on the private mirror default branch.'
       );
       return;
     }
@@ -59,33 +92,15 @@ export async function preserveCommand(
       validated.push(cleaned);
     }
 
-    const current = (await readVenforkConfigFromRepo(repoDir))?.preserve ?? [];
-
-    if (action === 'add') {
-      const merged = Array.from(new Set([...current, ...validated]));
-      await updateVenforkConfig(repoDir, { preserve: merged });
-      p.note(
-        validated.map((entry) => `- ${entry}`).join('\n'),
-        'Added to preserve list'
-      );
-      p.outro(
-        '✨ Preserve list updated. Commit the file(s) to the mirror default branch (if not already), then run `venfork sync`.'
-      );
-      return;
-    }
-
-    // action === 'remove'
-    const toRemove = new Set(validated);
-    const filtered = current.filter((entry) => !toRemove.has(entry));
-    await updateVenforkConfig(repoDir, {
-      preserve: filtered.length > 0 ? filtered : null,
-    });
+    // action === 'add'
+    const merged = Array.from(new Set([...current, ...validated]));
+    await updateVenforkConfig(repoDir, { preserve: merged });
     p.note(
       validated.map((entry) => `- ${entry}`).join('\n'),
-      'Removed from preserve list'
+      'Added to preserve list'
     );
     p.outro(
-      '✨ Preserve list updated. Run `venfork sync` to apply on the private mirror default branch.'
+      '✨ Preserve list updated. Commit the file(s) to the mirror default branch (if not already), then run `venfork sync`.'
     );
   } catch (error) {
     p.log.error(error instanceof Error ? error.message : String(error));

@@ -85,6 +85,20 @@ function getMockExecaResponse(
     }
   }
 
+  // The config branch exists only when a test mocks its content.
+  if (
+    command.includes('ls-remote --exit-code origin refs/heads/venfork-config')
+  ) {
+    const exists = mockResponses.has(
+      'git show FETCH_HEAD:.venfork/config.json'
+    );
+    return Promise.resolve({
+      exitCode: exists ? 0 : 2,
+      stdout: '',
+      stderr: '',
+    });
+  }
+
   // Git auth commands
   if (command.includes('gh auth status')) {
     return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
@@ -1527,6 +1541,11 @@ describe('stageCommand', () => {
       stdout: 'chore(venfork): hourly sync public fork via dedicated PAT',
       stderr: '',
     });
+    mockResponses.set('git log -1 --format=%ae wf222', {
+      exitCode: 0,
+      stdout: 'venfork-bot@users.noreply.github.com',
+      stderr: '',
+    });
     mockResponses.set('git show --name-only --pretty=format: wf222', {
       exitCode: 0,
       stdout: '.github/workflows/venfork-sync.yml',
@@ -2891,6 +2910,11 @@ describe('syncCommand - error paths', () => {
     mockResponses.set('git log -1 --format=%s abc123', {
       exitCode: 0,
       stdout: 'chore(workflows): Add workflows for venfork sync',
+      stderr: '',
+    });
+    mockResponses.set('git log -1 --format=%ae abc123', {
+      exitCode: 0,
+      stdout: 'venfork-bot@users.noreply.github.com',
       stderr: '',
     });
     mockResponses.set('git show --name-only --pretty=format: abc123', {

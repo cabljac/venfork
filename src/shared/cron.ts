@@ -6,6 +6,80 @@ const FIELD_RANGES = [
   { min: 0, max: 7 },
 ] as const;
 
+function isValidCronField(field: string, min: number, max: number): boolean {
+  if (field === '*') {
+    return true;
+  }
+
+  const isValidNumber = (value: string): boolean => {
+    if (!/^\d+$/.test(value)) {
+      return false;
+    }
+    const parsed = Number.parseInt(value, 10);
+    return parsed >= min && parsed <= max;
+  };
+
+  const isValidRange = (value: string): boolean => {
+    const [start, end] = value.split('-');
+    if (!start || !end || !isValidNumber(start) || !isValidNumber(end)) {
+      return false;
+    }
+    return Number.parseInt(start, 10) <= Number.parseInt(end, 10);
+  };
+
+  const stepParts = field.split('/');
+  if (stepParts.length > 2) {
+    return false;
+  }
+  if (stepParts.length === 2) {
+    const [base, step] = stepParts;
+    if (
+      !base ||
+      !step ||
+      !isValidNumber(step) ||
+      Number.parseInt(step, 10) <= 0
+    ) {
+      return false;
+    }
+    if (base === '*') {
+      return true;
+    }
+    if (base.includes(',')) {
+      return false;
+    }
+    return base.includes('-') ? isValidRange(base) : isValidNumber(base);
+  }
+
+  if (field.includes(',')) {
+    return field
+      .split(',')
+      .every((part) =>
+        part.includes('-') ? isValidRange(part) : isValidNumber(part)
+      );
+  }
+  if (field.includes('-')) {
+    return isValidRange(field);
+  }
+  return isValidNumber(field);
+}
+
+/**
+ * True when `cron` is a 5-field cron expression GitHub Actions accepts:
+ * numbers, ranges, lists and `/step` (step >= 1) within each field's
+ * bounds. Macros such as `@hourly` are rejected.
+ */
+export function isValidCronExpression(cron: string): boolean {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    return false;
+  }
+
+  return parts.every((part, index) => {
+    const range = FIELD_RANGES[index];
+    return isValidCronField(part, range.min, range.max);
+  });
+}
+
 function expandField(field: string, min: number, max: number): Set<number> {
   const values = new Set<number>();
   for (const part of field.split(',')) {
@@ -28,13 +102,14 @@ function expandField(field: string, min: number, max: number): Set<number> {
 /**
  * Longest gap in minutes between two consecutive fire times of a 5-field
  * cron expression (UTC, as GitHub Actions evaluates it), measured over the
- * coming 400 days. Returns null when the expression fires fewer than twice
- * in that window. Assumes the expression is already valid.
+ * coming 800 days, so yearly schedules are covered. Returns null when the
+ * expression is invalid or fires fewer than twice in that window.
  */
 export function cronMaxIntervalMinutes(
   cron: string,
   from: Date = new Date()
 ): number | null {
+  if (!isValidCronExpression(cron)) return null;
   const fields = cron.trim().split(/\s+/);
   const [minutes, hours, days, months, weekdays] = fields.map((field, i) =>
     expandField(field, FIELD_RANGES[i].min, FIELD_RANGES[i].max)
@@ -52,7 +127,7 @@ export function cronMaxIntervalMinutes(
   );
   let previous: number | null = null;
   let maxGap: number | null = null;
-  for (let day = 0; day < 400; day++) {
+  for (let day = 0; day < 800; day++) {
     const date = new Date(startDay + day * 86_400_000);
     if (!months.has(date.getUTCMonth() + 1)) continue;
     const domMatch = days.has(date.getUTCDate());

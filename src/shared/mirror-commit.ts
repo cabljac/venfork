@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
-import type { VenforkConfig } from '../config.js';
+import { assertNoInvalidPreserve, type VenforkConfig } from '../config.js';
 import { GitError } from '../errors.js';
 import { generateSyncWorkflow } from '../workflow.js';
 import {
@@ -234,6 +234,7 @@ export async function updateOriginTip(args: {
   cwd?: string;
 }): Promise<{ tip: string; pushed: boolean }> {
   const { config, defaultBranch, upstreamTip, previousMirrorTip, cwd } = args;
+  assertNoInvalidPreserve(config);
   const schedule = config?.schedule;
   const scheduleActive = Boolean(schedule?.enabled && schedule.cron);
   const preserve = config?.preserve ?? [];

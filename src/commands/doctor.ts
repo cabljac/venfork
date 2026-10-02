@@ -1,9 +1,13 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { readVenforkConfigFromRepo, type VenforkConfig } from '../config.js';
+import { ConfigError } from '../errors.js';
 import { checkGhAuth, getDefaultBranch } from '../git.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
-import { cronMaxIntervalMinutes } from '../shared/cron.js';
+import {
+  cronMaxIntervalMinutes,
+  isValidCronExpression,
+} from '../shared/cron.js';
 import { checkDivergence } from '../shared/divergence.js';
 import { isManagedCommit } from '../shared/managed-commit.js';
 import { netExec, netFailureReason } from '../shared/net.js';
@@ -81,22 +85,43 @@ export async function runDoctorChecks(
   ];
 
   const inRepo = await git(false)`git rev-parse --git-dir`;
-  const config: VenforkConfig | null =
-    inRepo.exitCode === 0 ? await readVenforkConfigFromRepo(cwd) : null;
+  let config: VenforkConfig | null = null;
+  let configProblem = '';
+  if (inRepo.exitCode !== 0) {
+    configProblem = `${cwd} is not a git repository`;
+  } else {
+    try {
+      config = await readVenforkConfigFromRepo(cwd, { allowInvalidCron: true });
+      if (!config) configProblem = 'venfork-config branch not found on origin';
+    } catch (err) {
+      if (!(err instanceof ConfigError)) throw err;
+      configProblem =
+        err.reason === 'fetch' ? `fetch failed: ${err.message}` : err.message;
+    }
+  }
   if (!config) {
     checks.push({
       id: 'repo',
       ok: false,
-      detail:
-        inRepo.exitCode === 0
-          ? 'venfork-config branch not found or unreadable on origin'
-          : `${cwd} is not a git repository`,
+      detail: configProblem,
       fix: 'Run from a clone made by `venfork setup` or `venfork clone`.',
     });
     for (const id of laterIds) skip(id, 'needs a readable venfork config');
     return checks;
   }
-  checks.push({ id: 'repo', ok: true, detail: 'venfork-config readable' });
+  const cronValue = config.schedule?.cron ?? '';
+  const cronInvalid =
+    config.schedule !== undefined && !isValidCronExpression(cronValue);
+  checks.push(
+    cronInvalid
+      ? {
+          id: 'repo',
+          ok: false,
+          detail: `venfork-config schedule.cron '${cronValue}' is not a valid 5-field cron expression`,
+          fix: 'venfork schedule set "<cron>" (or venfork schedule disable)',
+        }
+      : { id: 'repo', ok: true, detail: 'venfork-config readable' }
+  );
 
   const noPublic = config.mode === 'no-public';
   const remotes: Record<string, Remote> = {};
@@ -268,6 +293,7 @@ export async function runDoctorChecks(
     }
 
     const preserveList = config.preserve ?? [];
+    const invalidPreserve = config.invalidPreserve ?? [];
     const missing: string[] = [];
     for (const preservePath of preserveList) {
       const exists = await git(
@@ -276,21 +302,30 @@ export async function runDoctorChecks(
       if (exists.exitCode !== 0) missing.push(preservePath);
     }
     checks.push(
-      missing.length === 0
+      invalidPreserve.length > 0
         ? {
             id: 'preserve',
-            ok: true,
-            detail:
-              preserveList.length === 0
-                ? 'no preserved paths'
-                : `${preserveList.length} preserved path(s) present`,
-          }
-        : {
-            id: 'preserve',
             ok: false,
-            detail: `missing on origin/${defaultBranch}: ${missing.join(', ')}`,
-            fix: `Commit the file(s) to origin/${defaultBranch}, or \`venfork preserve remove ${missing.join(' ')}\`. Sync aborts until then.`,
+            detail: `invalid entries (single files only): ${invalidPreserve.join(', ')}`,
+            fix: invalidPreserve
+              .map((entry) => `venfork preserve remove ${entry}`)
+              .join('; '),
           }
+        : missing.length === 0
+          ? {
+              id: 'preserve',
+              ok: true,
+              detail:
+                preserveList.length === 0
+                  ? 'no preserved paths'
+                  : `${preserveList.length} preserved path(s) present`,
+            }
+          : {
+              id: 'preserve',
+              ok: false,
+              detail: `missing on origin/${defaultBranch}: ${missing.join(', ')}`,
+              fix: `Commit the file(s) to origin/${defaultBranch}, or \`venfork preserve remove ${missing.join(' ')}\`. Sync aborts until then.`,
+            }
     );
 
     const schedule = config.schedule;
@@ -349,6 +384,12 @@ export async function runDoctorChecks(
   if (!scheduleActive || !schedule) {
     for (const id of ghIds) {
       checks.push({ id, ok: true, detail: 'schedule disabled' });
+    }
+    return checks;
+  }
+  if (cronInvalid) {
+    for (const id of ghIds) {
+      skip(id, `schedule.cron '${cronValue}' is invalid`);
     }
     return checks;
   }

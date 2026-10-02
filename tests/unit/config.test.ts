@@ -199,32 +199,30 @@ describe('updateVenforkConfig', () => {
     );
   });
 
-  test('drops invalid preserve paths during normalize', async () => {
+  test('keeps invalid preserve paths apart and writes them back', async () => {
+    const invalid = [
+      '/abs/path',
+      '../escape',
+      'foo/../bar',
+      '',
+      'has space.yml',
+      'tabs\there.yml',
+      'win\\path.yml',
+      'C:/abs.yml',
+      '-rf',
+      '--all',
+    ];
     const updated = await updateVenforkConfig('/tmp/repo', {
-      preserve: [
-        '/abs/path',
-        '../escape',
-        'foo/../bar',
-        '.github/workflows/ok.yml',
-        '',
-        // Whitespace anywhere in the path is rejected — keeps the
-        // `venfork preserve add <path>` divergence-error hint
-        // copy/paste-safe without any quoting.
-        'has space.yml',
-        'tabs\there.yml',
-        // Backslashes and Windows drive prefixes are rejected too.
-        'win\\path.yml',
-        'C:/abs.yml',
-        // Leading `-` is rejected so a filename can't be parsed as a git
-        // option (e.g. `git add --all`). All internal call sites use `--`,
-        // but rejecting up-front means a malformed entry can't reach them.
-        '-rf',
-        '--all',
-      ],
+      preserve: [...invalid, '.github/workflows/ok.yml'],
     });
 
-    // Only the well-formed relative path survives.
     expect(updated.preserve).toEqual(['.github/workflows/ok.yml']);
+    expect(updated.invalidPreserve).toEqual([...invalid].sort());
+    const written = JSON.parse(writeFileCalls.at(-1)?.content ?? '{}');
+    expect(written.preserve).toEqual(
+      [...invalid, '.github/workflows/ok.yml'].sort()
+    );
+    expect(written.invalidPreserve).toBeUndefined();
   });
 
   test('records and merges shippedBranches entries', async () => {

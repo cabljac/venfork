@@ -1,14 +1,16 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import {
+  assertNoInvalidPreserve,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
   type VenforkConfig,
 } from '../config.js';
-import { SyncDivergenceError } from '../errors.js';
+import { ConfigError, SyncDivergenceError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import {
   checkDivergence,
+  type DroppedManagedCommit,
   formatDivergenceReport,
 } from '../shared/divergence.js';
 import {
@@ -112,6 +114,19 @@ async function syncPulledPr(
 }
 
 /**
+ * Warns, before anything is pushed, about commits that sync will replace
+ * because they look venfork-managed without carrying the trailer.
+ */
+function warnWeakManaged(commits: DroppedManagedCommit[]): void {
+  if (commits.length === 0) return;
+  p.log.warn(
+    `Treating ${commits.length} commit(s) as venfork-managed without the Venfork-Managed trailer; sync replaces them:\n${commits
+      .map(({ commit, kind }) => `  - ${commit.slice(0, 12)} (${kind})`)
+      .join('\n')}`
+  );
+}
+
+/**
  * Sync command: Update default branches of origin and public to match upstream.
  *
  * With `reportIssues` (set by the generated workflow), a divergence opens or
@@ -151,6 +166,7 @@ export async function syncCommand(
     }
 
     const config = await readVenforkConfigFromRepo(repoDir);
+    assertNoInvalidPreserve(config);
     const noPublic = config?.mode === 'no-public';
 
     // Step 1: Fetch from upstream
@@ -196,7 +212,7 @@ export async function syncCommand(
       cwd: options?.cwd,
     });
     const publicDivergence = noPublic
-      ? { count: 0, files: [] as string[] }
+      ? { count: 0, files: [] as string[], weakManaged: [] }
       : await checkDivergence({
           remote: 'public',
           defaultBranch,
@@ -211,8 +227,8 @@ export async function syncCommand(
     if (originDivergence.count > 0 || publicDivergence.count > 0) {
       const divergence = new SyncDivergenceError(
         defaultBranch,
-        originDivergence,
-        publicDivergence
+        { count: originDivergence.count, files: originDivergence.files },
+        { count: publicDivergence.count, files: publicDivergence.files }
       );
       const report = formatDivergenceReport(divergence);
       p.log.warn('Divergent commits detected:');
@@ -222,6 +238,11 @@ export async function syncCommand(
       }
       throw divergence;
     }
+
+    warnWeakManaged([
+      ...originDivergence.weakManaged,
+      ...publicDivergence.weakManaged,
+    ]);
 
     // Read before anything is pushed: preserved files come from this tip, and
     // it is the lease for the origin push.
@@ -272,7 +293,8 @@ export async function syncCommand(
       );
     }
   } catch (error) {
-    if (error instanceof SyncDivergenceError) {
+    if (error instanceof SyncDivergenceError || error instanceof ConfigError) {
+      if (error instanceof ConfigError) s.stop('Config error');
       throw error;
     }
     s.stop('Error occurred');

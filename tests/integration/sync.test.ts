@@ -6,7 +6,7 @@ mock.module('@clack/prompts', quietPrompts);
 
 import { preserveCommand, syncCommand } from '../../src/commands.js';
 import { updateVenforkConfig } from '../../src/config.js';
-import { SyncDivergenceError } from '../../src/errors.js';
+import { ConfigError, SyncDivergenceError } from '../../src/errors.js';
 import { getDefaultBranch } from '../../src/git.js';
 import { checkDivergence } from '../../src/shared/divergence.js';
 import { isManagedCommit } from '../../src/shared/managed-commit.js';
@@ -326,26 +326,24 @@ describe('sync with the managed commit', () => {
     );
   });
 
-  test('a glob preserve entry is dropped and never reverts an upstream change', async () => {
+  test('a glob preserve entry aborts sync instead of reverting an upstream change', async () => {
     await updateVenforkConfig(fx.work, { preserve: ['src/file-*.txt'] });
-    await sync();
     await fx.commitOnUpstream({ 'src/file-1.txt': 'upstream new\n' });
+    const originBefore = await fx.sha(fx.origin, 'main');
 
-    await sync();
+    await expect(sync()).rejects.toBeInstanceOf(ConfigError);
 
-    expect(await fx.fileAt(fx.origin, 'main', 'src/file-1.txt')).toBe(
-      'upstream new\n'
-    );
+    expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
   });
 
-  test('a pathspec-magic preserve entry is dropped and never rolls the tree back', async () => {
+  test('a pathspec-magic preserve entry aborts sync instead of rolling the tree back', async () => {
     await updateVenforkConfig(fx.work, { preserve: [':!nothing'] });
-    await sync();
-    const upstreamTip = await fx.commitOnUpstream({ 'src/added.txt': 'x\n' });
+    await fx.commitOnUpstream({ 'src/added.txt': 'x\n' });
+    const originBefore = await fx.sha(fx.origin, 'main');
 
-    await sync();
+    await expect(sync()).rejects.toBeInstanceOf(ConfigError);
 
-    expect(await fx.sha(fx.origin, 'main')).toBe(upstreamTip);
+    expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
   });
 
   test('a preserved file whose parent becomes an upstream file fails and names both paths', async () => {

@@ -197,3 +197,68 @@ describe('doctor against real repos', () => {
     expect(checks.slice(1).every((check) => check.ok === 'skipped')).toBe(true);
   });
 });
+
+describe('doctor and a broken config', () => {
+  test('an unparseable config is reported as invalid, not missing', async () => {
+    await fx.writeRawConfig('{ not json');
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(checks.repo.ok).toBe(false);
+    expect(checks.repo.detail).toContain('not valid JSON');
+    expect(checks.repo.detail).not.toContain('not found');
+  });
+
+  test('an unreachable origin is reported as a fetch failure', async () => {
+    await fx.git(fx.work, 'remote', 'set-url', 'origin', `${fx.root}/gone.git`);
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(checks.repo.ok).toBe(false);
+    expect(checks.repo.detail).toStartWith('fetch failed: ');
+  });
+
+  test('a missing config branch has its own message', async () => {
+    await fx.git(
+      fx.work,
+      'push',
+      '--quiet',
+      'origin',
+      ':refs/heads/venfork-config'
+    );
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(checks.repo.ok).toBe(false);
+    expect(checks.repo.detail).toContain('venfork-config branch not found');
+  });
+
+  test('the preserve check names invalid entries', async () => {
+    const raw = await fx.readRawConfig();
+    await fx.writeRawConfig(
+      JSON.stringify({ ...raw, preserve: ['docs/*.md'] })
+    );
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(checks.preserve.ok).toBe(false);
+    expect(checks.preserve.detail).toContain('docs/*.md');
+    expect(checks.preserve.fix).toContain('venfork preserve remove docs/*.md');
+  });
+
+  test('an invalid cron skips cron-age with the reason', async () => {
+    const raw = await fx.readRawConfig();
+    await fx.writeRawConfig(
+      JSON.stringify({ ...raw, schedule: { enabled: true, cron: '@hourly' } })
+    );
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(checks.repo.ok).toBe(false);
+    expect(checks.repo.detail).toContain("schedule.cron '@hourly'");
+    expect(checks['cron-age'].ok).toBe('skipped');
+    expect(checks['cron-age'].detail).toContain(
+      "schedule.cron '@hourly' is invalid"
+    );
+  });
+});

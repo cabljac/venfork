@@ -1,6 +1,7 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import {
+  assertNoInvalidPreserve,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
   type VenforkConfigPatch,
@@ -8,87 +9,11 @@ import {
 import { SyncDivergenceError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
+import { isValidCronExpression } from '../shared/cron.js';
 import { checkDivergence } from '../shared/divergence.js';
 import { resolveCommit, updateOriginTip } from '../shared/mirror-commit.js';
 import { netFetch } from '../shared/net.js';
 import { parseRepoPath } from '../utils.js';
-
-function isValidCronField(field: string, min: number, max: number): boolean {
-  if (field === '*') {
-    return true;
-  }
-
-  const isValidNumber = (value: string): boolean => {
-    if (!/^\d+$/.test(value)) {
-      return false;
-    }
-    const parsed = Number.parseInt(value, 10);
-    return parsed >= min && parsed <= max;
-  };
-
-  const isValidRange = (value: string): boolean => {
-    const [start, end] = value.split('-');
-    if (!start || !end || !isValidNumber(start) || !isValidNumber(end)) {
-      return false;
-    }
-    return Number.parseInt(start, 10) <= Number.parseInt(end, 10);
-  };
-
-  const stepParts = field.split('/');
-  if (stepParts.length > 2) {
-    return false;
-  }
-  if (stepParts.length === 2) {
-    const [base, step] = stepParts;
-    if (
-      !base ||
-      !step ||
-      !isValidNumber(step) ||
-      Number.parseInt(step, 10) <= 0
-    ) {
-      return false;
-    }
-    if (base === '*') {
-      return true;
-    }
-    if (base.includes(',')) {
-      return false;
-    }
-    return base.includes('-') ? isValidRange(base) : isValidNumber(base);
-  }
-
-  if (field.includes(',')) {
-    return field
-      .split(',')
-      .every((part) =>
-        part.includes('-') ? isValidRange(part) : isValidNumber(part)
-      );
-  }
-  if (field.includes('-')) {
-    return isValidRange(field);
-  }
-  return isValidNumber(field);
-}
-
-function isValidCronExpression(cron: string): boolean {
-  const parts = cron.trim().split(/\s+/);
-  if (parts.length !== 5) {
-    return false;
-  }
-
-  const ranges = [
-    { min: 0, max: 59 }, // minute
-    { min: 0, max: 23 }, // hour
-    { min: 1, max: 31 }, // day of month
-    { min: 1, max: 12 }, // month
-    { min: 0, max: 7 }, // day of week
-  ];
-
-  return parts.every((part, index) => {
-    const range = ranges[index];
-    return isValidCronField(part, range.min, range.max);
-  });
-}
 
 /**
  * Applies a schedule config change and re-stamps origin/<defaultBranch> the
@@ -103,10 +28,13 @@ async function applyScheduleChange(
 ): Promise<void> {
   await netFetch('upstream', repoDir);
   await netFetch('origin', repoDir);
-  const current = await readVenforkConfigFromRepo(repoDir);
+  const current = await readVenforkConfigFromRepo(repoDir, {
+    allowInvalidCron: true,
+  });
   if (!current) {
     throw new Error('venfork-config branch not found or invalid');
   }
+  assertNoInvalidPreserve(current);
   const upstreamTip = await resolveCommit(`upstream/${defaultBranch}`, repoDir);
   if (!upstreamTip) {
     throw new Error(
@@ -125,10 +53,14 @@ async function applyScheduleChange(
     cwd: repoDir,
   });
   if (originDivergence.count > 0) {
-    throw new SyncDivergenceError(defaultBranch, originDivergence, {
-      count: 0,
-      files: [],
-    });
+    throw new SyncDivergenceError(
+      defaultBranch,
+      { count: originDivergence.count, files: originDivergence.files },
+      {
+        count: 0,
+        files: [],
+      }
+    );
   }
   const updated = await updateVenforkConfig(repoDir, patch);
   await updateOriginTip({
@@ -194,14 +126,17 @@ export async function scheduleCommand(
 
     if (action === 'disable') {
       s.start('Disabling schedule and removing the workflow');
-      const currentConfig = await readVenforkConfigFromRepo(repoDir);
+      const currentConfig = await readVenforkConfigFromRepo(repoDir, {
+        allowInvalidCron: true,
+      });
       if (!currentConfig) {
         throw new Error('venfork-config branch not found or invalid');
       }
+      const currentCron = currentConfig.schedule?.cron ?? '';
       await applyScheduleChange(repoDir, defaultBranch, {
         schedule: {
           enabled: false,
-          cron: currentConfig.schedule?.cron || '0 * * * *',
+          cron: isValidCronExpression(currentCron) ? currentCron : '0 * * * *',
         },
       });
       s.stop('Schedule disabled and workflow removed');

@@ -1,5 +1,9 @@
 import { $ } from 'execa';
-import { SYNC_WORKFLOW_PATH, WORKFLOWS_DIR } from './constants.js';
+import {
+  SYNC_WORKFLOW_PATH,
+  VENFORK_BOT_EMAIL,
+  WORKFLOWS_DIR,
+} from './constants.js';
 
 /**
  * Subject line emitted on every venfork-managed "+1 commit" — both the
@@ -79,30 +83,63 @@ async function commitTouchesWorkflowPath(
   return allUnderWorkflows && touchesManagedWorkflow;
 }
 
+/** Which signal classified a commit as venfork-managed. */
+export type ManagedCommitKind =
+  | 'trailer'
+  | 'subject'
+  | 'legacy-subject'
+  | 'path-heuristic';
+
+async function authorEmail(ref: string, cwd?: string): Promise<string | null> {
+  const result = await $({
+    ...(cwd ? { cwd } : {}),
+    reject: false,
+  })`git log -1 --format=%ae ${ref}`;
+  return result.exitCode === 0 ? result.stdout.trim() : null;
+}
+
 /**
- * Detects the venfork-managed "+1 commit" so sync's divergence check and
- * stage's cherry-pick filter can skip it without losing user work.
- *
- * Any of these signals classifies a commit as managed:
- *  0. A `Venfork-Managed: 1` trailer.
- *  1. Subject matches the current `MANAGED_COMMIT_MESSAGE`.
- *  2. Subject matches one of `LEGACY_MANAGED_COMMIT_MESSAGES` — covers
- *     mirrors created before the message was generalized.
- *  3. Path heuristic: commit touches the managed `venfork-sync.yml` and
- *     reaches no further than `.github/workflows/`. This rescues historical
- *     rollouts that bundled extra workflow files alongside the managed one,
- *     while keeping user-authored commits to *other* workflow files (e.g.
- *     ci.yml) classified as user content.
+ * Classifies the venfork-managed "+1 commit" so sync's divergence check and
+ * stage's cherry-pick filter can skip it without losing user work. Returns
+ * the first matching signal, or null for a user commit:
+ *  - `trailer`: a `Venfork-Managed: 1` trailer.
+ *  - `subject`: subject equals `MANAGED_COMMIT_MESSAGE`.
+ *  - `legacy-subject`: subject is in `LEGACY_MANAGED_COMMIT_MESSAGES`.
+ *  - `path-heuristic`: authored by the venfork bot, touches the managed
+ *    `venfork-sync.yml` and nothing outside `.github/workflows/`. This
+ *    rescues historical rollouts that bundled extra workflow files.
  */
+export async function classifyManagedCommit(
+  ref: string,
+  cwd?: string
+): Promise<ManagedCommitKind | null> {
+  if (await hasManagedTrailer(ref, cwd)) return 'trailer';
+  const subject = await commitSubject(ref, cwd);
+  if (subject === MANAGED_COMMIT_MESSAGE) return 'subject';
+  if (subject !== null && LEGACY_MANAGED_COMMIT_MESSAGES.includes(subject)) {
+    return 'legacy-subject';
+  }
+  if (
+    (await authorEmail(ref, cwd)) === VENFORK_BOT_EMAIL &&
+    (await commitTouchesWorkflowPath(ref, cwd))
+  ) {
+    return 'path-heuristic';
+  }
+  return null;
+}
+
+/** True when {@link classifyManagedCommit} finds any managed signal. */
 export async function isManagedCommit(
   ref: string,
   cwd?: string
 ): Promise<boolean> {
-  if (await hasManagedTrailer(ref, cwd)) return true;
-  const subject = await commitSubject(ref, cwd);
-  if (subject !== null) {
-    if (subject === MANAGED_COMMIT_MESSAGE) return true;
-    if (LEGACY_MANAGED_COMMIT_MESSAGES.includes(subject)) return true;
-  }
-  return commitTouchesWorkflowPath(ref, cwd);
+  return (await classifyManagedCommit(ref, cwd)) !== null;
+}
+
+/**
+ * True for kinds weak enough that dropping the commit deserves a warning:
+ * anything except the trailer, which only venfork writes.
+ */
+export function isWeakManagedKind(kind: ManagedCommitKind): boolean {
+  return kind !== 'trailer';
 }
