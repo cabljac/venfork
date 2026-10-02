@@ -38,7 +38,6 @@ export async function scheduleCommand(
       const updated = await applyConfigChange(
         repoDir,
         { schedule: { enabled: true, cron } },
-        (current) => ({ schedule: current.schedule ?? null }),
         { allowInvalidCron: true }
       );
       s.stop('Schedule and workflow updated');
@@ -85,7 +84,6 @@ export async function scheduleCommand(
               : '0 * * * *',
           },
         },
-        (current) => ({ schedule: current.schedule ?? null }),
         { allowInvalidCron: true }
       );
       s.stop('Schedule disabled and workflow removed');

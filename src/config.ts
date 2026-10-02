@@ -219,12 +219,13 @@ function isLeaseFailure(err: unknown): boolean {
   return /stale info/i.test(msg) || /\[rejected\][^\n]*stale/i.test(msg);
 }
 
+/** Pushes `config` as a new `venfork-config` commit and returns its SHA. */
 async function writeConfigBranch(
   repoDir: string,
   config: VenforkConfig,
   commitMessage: string,
   options: { expectedSha?: string } = {}
-): Promise<void> {
+): Promise<string> {
   const uniqueId = randomBytes(8).toString('hex');
   const tempDir = path.join(os.tmpdir(), `venfork-config-${uniqueId}`);
 
@@ -241,6 +242,9 @@ async function writeConfigBranch(
     await $({
       cwd: tempDir,
     })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${commitMessage}`;
+    const written = (
+      await $({ cwd: tempDir })`git rev-parse HEAD`
+    ).stdout.trim();
 
     const remoteResult = await $({ cwd: repoDir })`git remote get-url origin`;
     const originUrl = remoteResult.stdout.trim();
@@ -274,6 +278,7 @@ async function writeConfigBranch(
         'git push'
       );
     }
+    return written;
   } finally {
     try {
       await rm(tempDir, { recursive: true, force: true });
@@ -774,10 +779,9 @@ export async function readVenforkConfigFromRepo(
 
 /**
  * Like `readVenforkConfigFromRepo` but also returns the SHA of the commit
- * the config was read from. Used by `updateVenforkConfig` so the
- * subsequent push can lease against that SHA.
+ * the config was read from, so a later write can lease against it.
  */
-async function readVenforkConfigFromRepoWithSha(
+export async function readVenforkConfigFromRepoWithSha(
   repoDir: string,
   options: NormalizeOptions = {}
 ): Promise<{ config: VenforkConfig; sha: string } | null> {
@@ -933,6 +937,58 @@ export async function updateVenforkConfig(
   throw new Error(
     `Could not update venfork-config after ${MAX_RETRIES} concurrent-write retries. Re-run the command, or resolve any unexpected state on the venfork-config branch.`
   );
+}
+
+/**
+ * Writes `config` to `venfork-config` only if origin still has the commit
+ * `expectedSha`, and returns the new commit's SHA. No retry: a moved branch
+ * throws a `ConfigError` with reason `conflict` and nothing is written.
+ */
+export async function writeVenforkConfigAt(
+  repoDir: string,
+  config: VenforkConfig,
+  expectedSha: string
+): Promise<string> {
+  try {
+    return await writeConfigBranch(
+      repoDir,
+      config,
+      UPDATE_CONFIG_COMMIT_MESSAGE,
+      { expectedSha }
+    );
+  } catch (err) {
+    if (isLeaseFailure(err)) {
+      throw new ConfigError(
+        `${CONFIG_BRANCH} changed on origin since this command read it; nothing was written. Re-run the command.`,
+        { reason: 'conflict', cause: err }
+      );
+    }
+    throw err;
+  }
+}
+
+/**
+ * Points `venfork-config` on origin back at the existing commit `sha`, only
+ * if origin still has `expectedSha`. A moved branch throws a `ConfigError`
+ * with reason `conflict`; any other failure throws a `GitError`.
+ */
+export async function restoreVenforkConfig(
+  repoDir: string,
+  sha: string,
+  expectedSha: string
+): Promise<void> {
+  const push = await netExec(repoDir, {
+    bufferOutput: true,
+  })`git push origin ${sha}:refs/heads/${CONFIG_BRANCH} --force-with-lease=refs/heads/${CONFIG_BRANCH}:${expectedSha} --no-follow-tags`;
+  if (push.exitCode === 0) return;
+  const reason = netFailureReason(push);
+  if (/stale info/i.test(reason)) {
+    throw new ConfigError(
+      `${CONFIG_BRANCH} changed on origin after ${expectedSha}`,
+      { reason: 'conflict' }
+    );
+  }
+  throw new GitError(`git push ${CONFIG_BRANCH} failed: ${reason}`, 'git push');
 }
 
 /**

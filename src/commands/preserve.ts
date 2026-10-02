@@ -4,7 +4,6 @@ import {
   normalizePreservePath,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
-  type VenforkConfig,
   type VenforkConfigPatch,
 } from '../config.js';
 import { getDefaultBranch } from '../git.js';
@@ -68,7 +67,7 @@ async function writeRemoval(
 ): Promise<void> {
   const carrying = await managedCommitCarrying(repoDir, removed);
   if (carrying?.where === 'tip') {
-    await applyConfigChange(repoDir, patch, restorePreserve);
+    await applyConfigChange(repoDir, patch);
     return;
   }
   await updateVenforkConfig(repoDir, patch);
@@ -78,14 +77,6 @@ async function writeRemoval(
       `origin/${carrying.defaultBranch} has diverged and its managed commit still carries ${names}. \`venfork sync\` drops it once the divergent commits are moved off origin/${carrying.defaultBranch}.`
     );
   }
-}
-
-function restorePreserve(current: VenforkConfig): VenforkConfigPatch {
-  const previous = [
-    ...(current.preserve ?? []),
-    ...(current.invalidPreserve ?? []),
-  ];
-  return { preserve: previous.length > 0 ? previous : null };
 }
 
 /**
