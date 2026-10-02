@@ -377,12 +377,8 @@ describe('sync with the managed commit', () => {
     });
     await fx.commitOnUpstream({ 'src/z.txt': 'z\n' });
 
-    await expect(sync()).rejects.toThrow('process.exit(1)');
-
-    expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Preserved path 'tools' is a directory on origin/main; preserve supports single files only"
-      )
+    await expect(sync()).rejects.toThrow(
+      "  - tools: venfork preserve remove 'tools'"
     );
   });
 });

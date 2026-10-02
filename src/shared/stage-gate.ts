@@ -1,4 +1,5 @@
 import { $ } from 'execa';
+import { invalidPreserveError } from '../config.js';
 import {
   GitError,
   MirrorReferenceError,
@@ -274,6 +275,7 @@ async function mirrorTrees(
 async function blobsInTrees(
   trees: readonly string[],
   entries: readonly string[],
+  preserve: readonly string[],
   cwd: string
 ): Promise<TreeBlob[]> {
   const specs: Array<{ entry: string; spec: string }> = [];
@@ -287,21 +289,49 @@ async function blobsInTrees(
     cwd
   );
   const blobs: TreeBlob[] = [];
-  const subtrees = new Map<string, { oid: string; entry: string }>();
   for (const [i, info] of found.entries()) {
     const entry = specs[i]?.entry ?? '';
     if (info?.type === 'blob') blobs.push({ path: entry, oid: info.oid });
     if (info?.type === 'tree') {
-      subtrees.set(`${info.oid}\0${entry}`, { oid: info.oid, entry });
-    }
-  }
-  for (const { oid, entry } of subtrees.values()) {
-    const listing = await $({ cwd })`git ls-tree -r -z ${oid}`;
-    for (const blob of parseTreeEntries(listing.stdout)) {
-      blobs.push({ path: `${entry}/${blob.path}`, oid: blob.oid });
+      if (preserve.includes(entry)) throw invalidPreserveError([entry]);
+      throw new VenforkError(
+        `Refusing to publish: ${entry} is a directory in the mirror history, where venfork only ever writes a file. Remove it from the mirror history and retry.`
+      );
     }
   }
   return blobs;
+}
+
+/**
+ * Throws the invalid preserve entry {@link ConfigError} when any entry in
+ * `preserve` is a directory at one of `refs` (missing refs are skipped).
+ * Preserve accepts single files only; a directory entry left by an old
+ * config would otherwise protect nothing under it.
+ *
+ * @param preserve The preserve allowlist.
+ * @param refs Mirror commits to look in, such as `origin/<default>`.
+ * @param cwd Mirror checkout.
+ */
+export async function assertPreserveEntriesAreNotDirectories(
+  preserve: readonly string[],
+  refs: readonly string[],
+  cwd: string
+): Promise<void> {
+  if (preserve.length === 0) return;
+  const specs = refs.flatMap((ref) =>
+    preserve.map((entry) => ({ entry, spec: `${ref}:${entry}` }))
+  );
+  const found = await batchCheck(
+    specs.map(({ spec }) => spec),
+    cwd
+  );
+  const directories = new Set<string>();
+  for (const [i, info] of found.entries()) {
+    if (info?.type === 'tree') directories.add(specs[i]?.entry ?? '');
+  }
+  if (directories.size > 0) {
+    throw invalidPreserveError([...directories].sort());
+  }
 }
 
 /**
@@ -380,8 +410,8 @@ export interface MirrorBlobs {
 /**
  * Blob ids of the preserved files, the managed sync workflow and the
  * venfork config as the mirror holds or ever held them, mapped to the path
- * they were found at. A preserve entry that is a directory contributes every
- * file under it. A blob that is a version of the same path at `base` or in
+ * they were found at. A preserve entry that is a directory anywhere in that
+ * history is refused as an invalid entry. A blob that is a version of the same path at `base` or in
  * its history is left out: it is upstream content, not mirror content.
  *
  * `refs` (and the venfork-config refs) are read at their tips, at their
@@ -417,7 +447,7 @@ export async function collectMirrorBlobs(
   const found: TreeBlob[] = [];
   for (const group of groups) {
     const trees = await mirrorTrees(group, base, cap, cwd);
-    found.push(...(await blobsInTrees(trees, group.entries, cwd)));
+    found.push(...(await blobsInTrees(trees, group.entries, preserve, cwd)));
   }
   const upstream = await upstreamVersions(
     [...new Set(found.map((blob) => blob.path))],

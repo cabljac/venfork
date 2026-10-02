@@ -31,6 +31,7 @@ import {
 } from '../shared/redaction.js';
 import { findMirrorRepoPath } from '../shared/repo.js';
 import {
+  assertPreserveEntriesAreNotDirectories,
   assertPublishableCommits,
   collectMirrorBlobs,
 } from '../shared/stage-gate.js';
@@ -306,6 +307,14 @@ async function planStaging(
       `Refusing to stage '${branch}': it is upstream's default branch, and staging it would overwrite ${branch} on ${noPublic ? 'upstream' : 'the public fork'}. Stage a feature branch instead.`
     );
   }
+  await assertPreserveEntriesAreNotDirectories(
+    config?.preserve ?? [],
+    [
+      `refs/remotes/origin/${upstreamDefaultBranch}`,
+      `refs/heads/${upstreamDefaultBranch}`,
+    ],
+    cwd
+  );
   const mergeBase = await $({
     cwd,
     reject: false,

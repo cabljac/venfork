@@ -23,6 +23,7 @@ import {
 } from './managed-commit.js';
 import { netExec, netFailureReason } from './net.js';
 import { compareSemver, pinnedVenforkVersion } from './semver.js';
+import { assertPreserveEntriesAreNotDirectories } from './stage-gate.js';
 
 /** True for a `*.yml` / `*.yaml` file directly in `.github/workflows/`. */
 function isTopLevelWorkflow(file: string): boolean {
@@ -440,6 +441,13 @@ export async function buildOriginTip(args: {
 }): Promise<string> {
   const { config, defaultBranch, upstreamTip, previousMirrorTip, cwd } = args;
   assertNoInvalidPreserve(config);
+  if (previousMirrorTip) {
+    await assertPreserveEntriesAreNotDirectories(
+      config?.preserve ?? [],
+      [previousMirrorTip],
+      cwd ?? process.cwd()
+    );
+  }
   const schedule = config?.schedule;
   const scheduleActive = Boolean(schedule?.enabled && schedule.cron);
   if (scheduleActive && previousMirrorTip) {

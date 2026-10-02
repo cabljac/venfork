@@ -23,6 +23,7 @@ import {
   updateOriginTip,
 } from '../shared/mirror-commit.js';
 import { netExec, netFailureReason, netFetch } from '../shared/net.js';
+import { assertPreserveEntriesAreNotDirectories } from '../shared/stage-gate.js';
 import {
   reportSyncBlocked,
   resolveSyncBlocked,
@@ -214,6 +215,12 @@ export async function syncCommand(
         );
       }
     }
+
+    await assertPreserveEntriesAreNotDirectories(
+      preserveList,
+      [`refs/remotes/origin/${defaultBranch}`],
+      repoDir
+    );
 
     // Step 3: Check for divergence
     s.start('Checking for divergent commits');

@@ -78,6 +78,42 @@ async function forcePreserve(entries: string[]): Promise<void> {
   await fx.writeRawConfig(JSON.stringify({ ...config, preserve: entries }));
 }
 
+/**
+ * Moves `ref` through `count` new commits that each hold a different
+ * `dir/` subtree, then back to its tip, so only the reflog holds them.
+ */
+async function reflogOfDirectoryVersions(
+  ref: string,
+  dir: string,
+  count: number
+): Promise<void> {
+  const tip = await fx.git(fx.work, 'rev-parse', ref);
+  let script = '';
+  for (let i = 0; i < count; i++) {
+    const body = `version ${i}\n`;
+    script += `commit refs/tmp/dirs\nmark :${i + 1}\ncommitter t <t@t> ${1700000000 + i} +0000\ndata 2\nv\n`;
+    script += `from ${i === 0 ? tip : `:${i}`}\n`;
+    script += `M 100644 inline ${dir}/f${i % 5}.txt\ndata ${body.length}\n${body}\n`;
+  }
+  const marks = `${fx.root}/dirs.marks`;
+  await $({
+    cwd: fx.work,
+    input: script,
+  })`git fast-import --quiet --export-marks=${marks}`;
+  const shas = (await Bun.file(marks).text())
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => line.split(' ')[1] ?? '');
+  await fx.git(fx.work, 'update-ref', '-d', 'refs/tmp/dirs');
+  let entries = '';
+  let previous = tip;
+  for (const sha of [...shas, tip]) {
+    entries += `${previous} ${sha} t <t@t> 1700000000 +0000\tfetch\n`;
+    previous = sha;
+  }
+  await Bun.write(`${fx.work}/.git/logs/${ref}`, entries);
+}
+
 describe('preserve add verifies each entry is a file on origin', () => {
   test('refuses a directory entry', async () => {
     await fx.commitOnOrigin({ [DIR_FILE]: 'client plan\n' });
@@ -142,14 +178,16 @@ describe('preserve add verifies each entry is a file on origin', () => {
   });
 });
 
-describe('a directory entry from an old config fails closed', () => {
-  test('a changed file under the directory is refused', async () => {
+describe('a directory entry from an old config is invalid', () => {
+  const HINT = `venfork preserve remove '${DIR}'`;
+
+  test('a changed file under the directory is refused with the remove hint', async () => {
     await fx.commitOnOrigin({ [DIR_FILE]: 'client plan\n' });
     await forcePreserve([DIR]);
     await featureFrom('upstream/main');
     await commitFile(DIR_FILE, 'something else\n', 'docs: other');
 
-    await expectRefused(`mirror-only path(s) ${DIR_FILE}`);
+    await expectRefused(HINT);
   });
 
   test('a copy of a file under the directory at a new path is refused', async () => {
@@ -158,7 +196,7 @@ describe('a directory entry from an old config fails closed', () => {
     await featureFrom('upstream/main');
     await commitFile('notes/copy.md', 'client plan\n', 'docs: copy');
 
-    await expectRefused('notes/copy.md');
+    await expectRefused(HINT);
   });
 
   test('a teammate commit of the file is refused', async () => {
@@ -166,19 +204,49 @@ describe('a directory entry from an old config fails closed', () => {
     await fx.commitOnOrigin({ [DIR_FILE]: 'client plan\n' });
     await featureFrom('origin/main');
 
-    await expectRefused(`mirror-only path(s) ${DIR_FILE}`);
+    await expectRefused(HINT);
   });
 
-  test('sync aborts and leaves origin untouched', async () => {
+  test('sync refuses with the remove hint and leaves origin untouched', async () => {
     await forcePreserve([DIR]);
     await fx.commitOnOrigin({ [DIR_FILE]: 'client plan\n' });
     const before = await fx.pushCount(fx.origin, 'refs/heads/main');
 
     await expect(
       syncCommand(undefined, { cwd: fx.work, quiet: true })
-    ).rejects.toThrow('Sync aborted to prevent data loss');
+    ).rejects.toThrow(HINT);
 
     expect(await fx.pushCount(fx.origin, 'refs/heads/main')).toBe(before);
+  });
+
+  test('a directory with 2000 versions in the reflog is refused in under 2 s', async () => {
+    await fx.commitOnOrigin({ 'keep/f0.txt': 'kept\n' });
+    await forcePreserve(['keep']);
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+    await reflogOfDirectoryVersions('refs/remotes/origin/main', 'keep', 2000);
+    await featureFrom('upstream/main');
+    await commitFile('src/a.txt', 'a\n', 'feat: a');
+
+    const started = Date.now();
+    await expectRefused("venfork preserve remove 'keep'");
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  test('collectMirrorBlobs refuses a directory entry without listing it', async () => {
+    await fx.commitOnOrigin({ 'keep/f0.txt': 'kept\n' });
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+    await reflogOfDirectoryVersions('refs/remotes/origin/main', 'keep', 2000);
+
+    const started = Date.now();
+    await expect(
+      collectMirrorBlobs(
+        ['refs/remotes/origin/main'],
+        ['keep'],
+        'upstream/main',
+        fx.work
+      )
+    ).rejects.toThrow("venfork preserve remove 'keep'");
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 });
 

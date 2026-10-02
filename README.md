@@ -322,7 +322,7 @@ venfork stage feature-auth --pr --base develop
    - was authored or committed by the venfork bot.
    - has an author, committer or message that contains origin's URL, origin's `owner/name`, origin's repo name as the repo of any `owner/name` or URL (when it has at least six characters and differs from upstream's; `src/<name>/` and the plain word pass) or the word `venfork` (this includes `<!-- venfork:internal -->` markers).
 
-   Path matching ignores case. A preserve entry that is a directory (possible in an old config) covers every file under it. The branch name goes through the same term check before anything is fetched.
+   Path matching ignores case. A preserve entry that is a directory on origin's default branch, on your local default branch or anywhere in the mirror history the check reads (possible in an old config) is refused as an invalid entry, with the `venfork preserve remove '<entry>'` command to run. The branch name goes through the same term check before anything is fetched.
 4. Shows the target, the branch, every commit subject and every file that any published commit adds or changes, then asks for confirmation. A file that a later commit deletes is listed as "removed later in the branch, still in history", because the public history still holds it. When commit messages, or with `--pr` the upstream PR title or body, contain `#N`, it warns that those numbers will resolve against upstream.
 5. Pushes the rebuilt head with `--force-with-lease` and `--no-follow-tags`, so no local tag goes with it.
 6. Provides a compare URL so you can open the PR yourself.
@@ -548,7 +548,7 @@ venfork preserve clear
 - The sync workflow and anything under `.venfork/` cannot be preserved: venfork owns them. A commit with the managed trailer that also changes any other file counts as your work, so sync stops on it as divergence.
 - If the `venfork-config` branch is missing while `origin/<default>` still carries a managed commit, sync refuses. Restore the branch. `venfork setup` never overwrites an existing config branch.
 
-**Directory entries:** an old config can still hold a directory entry. `venfork stage` treats every file under it as preserved, but `venfork sync` aborts with a divergence error until you run `venfork preserve remove <directory>` and add each file.
+**Directory entries:** an old config can still hold a directory entry. `venfork stage` and `venfork sync` treat an entry that is a directory on origin's default branch as invalid and refuse to run until you run `venfork preserve remove '<directory>'` and add each file. Every `venfork preserve remove` command venfork prints single-quotes its entries, so a shell does not expand `*.md`.
 
 **Invalid entries:** an entry written by an older venfork, or by hand, that is not a valid single-file path (for example `docs/*.md`) makes sync abort and shows up in `venfork preserve list` and `venfork doctor`. Remove it with `venfork preserve remove <entry>`, using the entry exactly as listed. `remove` works on invalid entries too.
 
