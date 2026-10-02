@@ -460,7 +460,7 @@ export async function runDoctorChecks(
           id: 'cron-age',
           ok: false,
           detail: `last run ${formatAge(ageMinutes)} ago, but cron fires at least every ${formatAge(interval)}`,
-          fix: 'GitHub pauses scheduled workflows after 60 days without repository activity. Re-enable it in the Actions tab or run `gh workflow run venfork-sync.yml`.',
+          fix: 'Check the workflow is enabled in the Actions tab (GitHub disables schedules in public repos after 60 idle days), or run `gh workflow run venfork-sync.yml`.',
         }
   );
   return checks;

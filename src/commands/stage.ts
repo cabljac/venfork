@@ -9,6 +9,7 @@ import {
 import { getDefaultBranch } from '../git.js';
 import { confirmOrAutoYes } from '../shared/confirm.js';
 import { WORKFLOWS_DIR } from '../shared/constants.js';
+import { changedFilesInCommit } from '../shared/divergence.js';
 import { isManagedCommit } from '../shared/managed-commit.js';
 import {
   findInternalPr,
@@ -42,16 +43,6 @@ async function branchHasManagedCommits(
     if (await isManagedCommit(commit, cwd)) return true;
   }
   return false;
-}
-
-async function remoteBranchExists(
-  remote: string,
-  branch: string
-): Promise<boolean> {
-  const result = await $({
-    reject: false,
-  })`git ls-remote --exit-code --heads ${remote} ${branch}`;
-  return result.exitCode === 0;
 }
 
 /**
@@ -114,6 +105,7 @@ async function assertNoEvilMerges(
 async function buildPublicStageHeadWithoutWorkflowCommit(
   branch: string,
   defaultBranch: string,
+  preserve: string[],
   cwd?: string
 ): Promise<string> {
   const repoDir = cwd ?? process.cwd();
@@ -169,6 +161,14 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
             cwd: tempDir,
             reject: false,
           })`git cherry-pick --abort`;
+          const touched = (await changedFilesInCommit(commit, repoDir)).filter(
+            (file) => preserve.includes(file)
+          );
+          if (touched.length > 0) {
+            throw new Error(
+              `Failed to stage '${branch}': commit ${commit.slice(0, 9)} changes preserved mirror-only path(s) ${touched.join(', ')}, which do not exist on upstream/${defaultBranch}. Move those changes to the mirror default branch (they cannot go upstream), drop them from '${branch}', and retry.`
+            );
+          }
           throw new Error(
             `Failed to stage '${branch}' because cherry-picking ${commit} onto upstream/${defaultBranch} caused conflicts. Rebase '${branch}' on upstream/${defaultBranch} and retry.`
           );
@@ -206,6 +206,8 @@ export interface StagingPlan {
   upstreamDefaultBranch: string;
   /** True when the branch carries a venfork-managed commit that must not reach the push target. */
   hasManagedCommits: boolean;
+  /** Mirror-only paths from the preserve allowlist; they never exist upstream. */
+  preserve: string[];
   /** True when the head and base of the upstream PR live in the same repo (no-public mode). */
   noPublic: boolean;
 }
@@ -275,6 +277,7 @@ async function planStaging(branch: string, cwd: string): Promise<StagingPlan> {
     upstreamRepoPath,
     upstreamDefaultBranch,
     hasManagedCommits,
+    preserve: config?.preserve ?? [],
     noPublic,
   };
 }
@@ -306,42 +309,23 @@ async function executeStagingPush(
     const stageHead = await buildPublicStageHeadWithoutWorkflowCommit(
       plan.branch,
       plan.upstreamDefaultBranch,
+      plan.preserve,
       cwd
     );
     s.stop('Prepared sanitized branch');
 
     s.start(`Pushing sanitized branch to ${target}`);
-    if (plan.noPublic) {
-      // URL push: `--force-with-lease=<ref>` (no expect) relies on a
-      // remote-tracking ref that doesn't exist for URL pushes, so resolve
-      // the remote tip explicitly via ls-remote and pass it as the lease.
-      const ls = await $({
-        cwd,
-        reject: false,
-      })`git ls-remote --exit-code ${pushDest} refs/heads/${plan.branch}`;
-      if (ls.exitCode === 0) {
-        const expectedSha = ls.stdout.trim().split(/\s+/)[0] ?? '';
-        await $({
-          cwd,
-        })`git push ${pushDest} ${stageHead}:refs/heads/${plan.branch} --force-with-lease=refs/heads/${plan.branch}:${expectedSha}`;
-      } else {
-        await $({
-          cwd,
-        })`git push ${pushDest} ${stageHead}:refs/heads/${plan.branch}`;
-      }
-    } else {
-      // Standard mode: remote name with the implicit-lease form (lease
-      // value comes from refs/remotes/public/<branch>).
-      if (await remoteBranchExists(plan.pushRemote, plan.branch)) {
-        await $({
-          cwd,
-        })`git push ${plan.pushRemote} ${stageHead}:refs/heads/${plan.branch} --force-with-lease=refs/heads/${plan.branch}`;
-      } else {
-        await $({
-          cwd,
-        })`git push ${plan.pushRemote} ${stageHead}:refs/heads/${plan.branch}`;
-      }
-    }
+    // Lease on the tip read via ls-remote: a URL push (no-public mode) has no
+    // remote-tracking ref, and a public tracking ref may be stale or absent.
+    const ls = await $({
+      cwd,
+      reject: false,
+    })`git ls-remote --exit-code ${pushDest} refs/heads/${plan.branch}`;
+    const expectedSha =
+      ls.exitCode === 0 ? (ls.stdout.trim().split(/\s+/)[0] ?? '') : '';
+    await $({
+      cwd,
+    })`git push ${pushDest} ${stageHead}:refs/heads/${plan.branch} --force-with-lease=refs/heads/${plan.branch}:${expectedSha}`;
     s.stop('Push successful');
     return stageHead;
   }

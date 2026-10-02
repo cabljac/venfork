@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import * as prompts from '@clack/prompts';
 import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
@@ -72,5 +73,36 @@ describe('stage against real repos', () => {
     await stageCommand('feature');
 
     expect(await fx.sha(fx.publicFork ?? '', 'feature')).toBe(featureSha);
+  });
+
+  test('stage re-pushes a rebuilt branch when the public tracking ref is missing', async () => {
+    await preserveCommand('add', [CALLER]);
+    await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
+    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await cutFeatureBranch('origin/main');
+    await stageCommand('feature');
+    await fx.git(fx.work, 'commit', '--quiet', '--amend', '-m', 'feat: v2');
+    await fx.git(fx.work, 'update-ref', '-d', 'refs/remotes/public/feature');
+
+    await stageCommand('feature');
+
+    expect(
+      await fx.subjects(fx.publicFork ?? '', 'feature', 'main..feature')
+    ).toEqual(['feat: v2']);
+  });
+
+  test('stage names the preserved path when a commit touching it cannot be replayed', async () => {
+    await preserveCommand('add', [CALLER]);
+    await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
+    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await cutFeatureBranch('origin/main');
+    await Bun.write(`${fx.work}/${CALLER}`, 'edited on the branch\n');
+    await fx.git(fx.work, 'commit', '--quiet', '-am', 'chore: tweak caller');
+
+    await expect(stageCommand('feature')).rejects.toThrow('process.exit(1)');
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(`preserved mirror-only path(s) ${CALLER}`)
+    );
   });
 });
