@@ -468,9 +468,9 @@ function decodeText(bytes: Buffer): string | null {
 }
 
 /**
- * The first URL-derived term (one with a `/` or `:`) found in binary bytes
- * as UTF-8 or UTF-16LE, ignoring ASCII case. A bare repo name is not
- * searched: it matches too much binary data.
+ * The first URL-derived term (one with a `/` or `:`) found in `bytes` as
+ * UTF-8, UTF-16LE or UTF-16BE, ignoring ASCII case, at any offset. A bare
+ * repo name is not searched: it matches too much binary data.
  */
 function findTermInBytes(
   bytes: Buffer,
@@ -479,9 +479,11 @@ function findTermInBytes(
   const haystack = bytes.toString('latin1').toLowerCase();
   for (const term of terms) {
     if (!/[/:]/.test(term)) continue;
-    for (const encoding of ['utf8', 'utf16le'] as const) {
-      const needle = Buffer.from(term, encoding).toString('latin1');
-      if (haystack.includes(needle.toLowerCase())) return term;
+    const lower = term.toLowerCase();
+    const le = Buffer.from(lower, 'utf16le');
+    const needles = [Buffer.from(lower, 'utf8'), le, Buffer.from(le).swap16()];
+    for (const needle of needles) {
+      if (haystack.includes(needle.toString('latin1'))) return term;
     }
   }
   return null;
@@ -500,8 +502,9 @@ function findTermInBytes(
  *    `venfork`) or looks like a venfork `config.json`; or when the venfork
  *    bot authored or committed the commit, or its author, committer or
  *    message contains a deny-list term. Text is read as UTF-8, or UTF-16
- *    when it starts with a byte order mark; a binary file is searched only
- *    for the URL-derived terms, as UTF-8 and UTF-16LE bytes.
+ *    when it starts with a byte order mark. Every file, text or binary, is
+ *    also searched for the URL-derived terms as UTF-8, UTF-16LE and
+ *    UTF-16BE bytes; compressed and UTF-32 content is not decoded.
  *  - {@link VenforkError} when a file is too large to read.
  *
  * Deleting a preserved path is allowed: no content leaves.
@@ -571,13 +574,13 @@ export async function assertPublishableCommits(
           cwd
         );
         const text = decodeText(bytes);
-        if (text === null) {
-          hit = findTermInBytes(bytes, locationTerms);
-        } else {
-          hit = looksLikeVenforkConfig(text)
-            ? CONFIG_SIGNATURE
-            : findDeniedText(text, locationTerms);
-        }
+        const textHit =
+          text === null
+            ? null
+            : looksLikeVenforkConfig(text)
+              ? CONFIG_SIGNATURE
+              : findDeniedText(text, locationTerms);
+        hit = textHit ?? findTermInBytes(bytes, locationTerms);
         scanned.set(change.newOid, hit);
       }
       if (hit !== null) {

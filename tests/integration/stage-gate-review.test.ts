@@ -169,13 +169,14 @@ describe('upstream history is not mirror content', () => {
   });
 });
 describe('the gate reads every text encoding', () => {
-  test('a UTF-16LE file naming the mirror is refused', async () => {
+  test('a UTF-16LE file whose mirror URL is split by zero-width spaces is refused', async () => {
+    const hidden = fx.origin.split('').join('\u200b');
     await featureFrom('upstream/main');
     await commitFile(
       'docs/remote.txt',
       Buffer.concat([
         Buffer.from([0xff, 0xfe]),
-        Buffer.from(`clone ${fx.origin}\n`, 'utf16le'),
+        Buffer.from(`clone ${hidden}\n`, 'utf16le'),
       ]),
       'docs: remote'
     );
@@ -183,17 +184,68 @@ describe('the gate reads every text encoding', () => {
     await expectRefused('docs/remote.txt', fx.origin);
   });
 
-  test('a UTF-16BE file naming the mirror is refused', async () => {
-    const le = Buffer.from(`clone ${fx.origin}\n`, 'utf16le');
-    const be = Buffer.alloc(le.length);
-    for (let i = 0; i + 1 < le.length; i += 2) {
-      be[i] = le[i + 1] ?? 0;
-      be[i + 1] = le[i] ?? 0;
-    }
+  test('a UTF-16BE file whose mirror URL is split by zero-width spaces is refused', async () => {
+    const hidden = fx.origin.split('').join('\u200b');
     await featureFrom('upstream/main');
     await commitFile(
       'docs/remote.txt',
-      Buffer.concat([Buffer.from([0xfe, 0xff]), be]),
+      Buffer.concat([
+        Buffer.from([0xfe, 0xff]),
+        Buffer.from(`clone ${hidden}\n`, 'utf16le').swap16(),
+      ]),
+      'docs: remote'
+    );
+
+    await expectRefused('docs/remote.txt', fx.origin);
+  });
+
+  test('a UTF-16LE byte order mark before a UTF-8 mirror URL is refused', async () => {
+    await featureFrom('upstream/main');
+    await commitFile(
+      'docs/remote.txt',
+      Buffer.concat([
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from(`clone ${fx.origin}\n`),
+      ]),
+      'docs: remote'
+    );
+
+    await expectRefused('docs/remote.txt', fx.origin);
+  });
+
+  test('a UTF-16BE byte order mark before a UTF-8 mirror URL is refused', async () => {
+    await featureFrom('upstream/main');
+    await commitFile(
+      'docs/remote.txt',
+      Buffer.concat([
+        Buffer.from([0xfe, 0xff]),
+        Buffer.from(`clone ${fx.origin}\n`),
+      ]),
+      'docs: remote'
+    );
+
+    await expectRefused('docs/remote.txt', fx.origin);
+  });
+
+  test('a UTF-16LE mirror URL after 8001 ASCII bytes, without a BOM, is refused', async () => {
+    await featureFrom('upstream/main');
+    await commitFile(
+      'docs/remote.txt',
+      Buffer.concat([
+        Buffer.alloc(8001, 0x61),
+        Buffer.from(`\nclone ${fx.origin}\n`, 'utf16le'),
+      ]),
+      'docs: remote'
+    );
+
+    await expectRefused('docs/remote.txt', fx.origin);
+  });
+
+  test('a UTF-16BE file without a BOM ending in the mirror URL is refused', async () => {
+    await featureFrom('upstream/main');
+    await commitFile(
+      'docs/remote.txt',
+      Buffer.from(`clone ${fx.origin.toUpperCase()}`, 'utf16le').swap16(),
       'docs: remote'
     );
 
