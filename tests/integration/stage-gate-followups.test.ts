@@ -104,6 +104,32 @@ describe('preserve add verifies each entry is a file on origin', () => {
     );
   });
 
+  test('refuses a gitlink', async () => {
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+    await fx.git(fx.work, 'checkout', '--quiet', '-b', 'sub', 'origin/main');
+    const commit = await fx.git(fx.work, 'rev-parse', 'HEAD');
+    await fx.git(
+      fx.work,
+      'update-index',
+      '--add',
+      '--cacheinfo',
+      `160000,${commit},vendor/lib`
+    );
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'chore: submodule');
+    await fx.git(fx.work, 'push', '--quiet', 'origin', 'HEAD:main');
+
+    await expect(preserveCommand('add', ['vendor/lib'])).rejects.toThrow(
+      'process.exit(1)'
+    );
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Cannot preserve 'vendor/lib': it is not a file on origin/main"
+      )
+    );
+    expect((await fx.readRawConfig()).preserve).toBeUndefined();
+  });
+
   test('accepts a regular file and an executable', async () => {
     await fx.commitOnOrigin({
       [DOC]: 'notes\n',
