@@ -727,6 +727,62 @@ describe('setupCommand - idempotent recovery', () => {
     expect(execaCalls.some((c) => c.includes('git fetch upstream'))).toBe(true);
   });
 
+  test('refuses an existing venfork-config that disagrees, before rewiring remotes', async () => {
+    mockResponses.set('gh repo create', {
+      exitCode: 1,
+      stderr: 'name already exists on this account',
+      stdout: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        upstreamUrl: 'git@github.com:other/project.git',
+        mode: 'no-public',
+      }),
+      stderr: '',
+    });
+
+    await expect(
+      setupCommand('git@github.com:test/repo.git', 'test-vendor')
+    ).rejects.toThrow('process.exit(1)');
+
+    expect(clack.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'existing venfork-config disagrees with this setup: mode is no-public (expected standard); upstreamUrl is git@github.com:other/project.git (expected git@github.com:test/repo.git); publicForkUrl is (none) (expected git@github.com:testuser/repo.git)'
+      )
+    );
+    expect(execaCalls.some((c) => c.includes('git remote set-url'))).toBe(
+      false
+    );
+    expect(execaCalls.some((c) => c.includes('git remote add'))).toBe(false);
+  });
+
+  test('keeps an existing venfork-config that agrees, in another URL form', async () => {
+    mockResponses.set('gh repo create', {
+      exitCode: 1,
+      stderr: 'name already exists on this account',
+      stdout: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        upstreamUrl: 'https://github.com/test/repo',
+        publicForkUrl: 'git@github.com:testuser/repo.git',
+      }),
+      stderr: '',
+    });
+
+    await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+
+    expect(
+      execaCalls.some((c) =>
+        c.includes('git remote set-url --push upstream DISABLE')
+      )
+    ).toBe(true);
+  });
+
   test('still seeds new private mirror and runs sync when public fork already exists', async () => {
     mockResponses.set('gh repo fork', {
       exitCode: 1,
