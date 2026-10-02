@@ -512,10 +512,29 @@ function isValidCronExpression(cron: string): boolean {
   });
 }
 
-async function isScheduleEnabled(cwd?: string): Promise<boolean> {
-  const repoDir = cwd ?? process.cwd();
-  const config = await readVenforkConfigFromRepo(repoDir);
-  return Boolean(config?.schedule?.enabled);
+async function branchHasManagedCommits(
+  branch: string,
+  defaultBranch: string,
+  cwd: string
+): Promise<boolean> {
+  const result = await $({
+    cwd,
+    reject: false,
+  })`git rev-list upstream/${defaultBranch}..${branch}`;
+  if (result.exitCode !== 0) {
+    throw new GitError(
+      `Cannot inspect '${branch}' for venfork-managed commits: upstream/${defaultBranch} is not available locally. Run \`git fetch upstream\` and retry.`,
+      `git rev-list upstream/${defaultBranch}..${branch}`
+    );
+  }
+  const commits = result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const commit of commits) {
+    if (await isManagedCommit(commit, cwd)) return true;
+  }
+  return false;
 }
 
 async function listWorkflowFiles(cwd: string): Promise<string[]> {
@@ -2254,13 +2273,14 @@ export interface StagingPlan {
   upstreamUrl: string;
   upstreamRepoPath: string;
   upstreamDefaultBranch: string;
-  scheduleEnabled: boolean;
+  /** True when the branch carries a venfork-managed commit that must not reach the push target. */
+  hasManagedCommits: boolean;
   /** True when the head and base of the upstream PR live in the same repo (no-public mode). */
   noPublic: boolean;
 }
 
 /**
- * Resolves remotes, default branch, and schedule state for a staging push.
+ * Resolves remotes, default branch, and managed-commit presence for a staging push.
  * Pure read; no network writes. Throws `BranchNotFoundError` /
  * `RemoteNotFoundError` so callers can render a single failure path.
  */
@@ -2308,7 +2328,11 @@ async function planStaging(branch: string, cwd: string): Promise<StagingPlan> {
   const pushOwner = pushRepoPath.split('/')[0] ?? '';
 
   const upstreamDefaultBranch = await getDefaultBranch('upstream');
-  const scheduleEnabled = await isScheduleEnabled(cwd);
+  const hasManagedCommits = await branchHasManagedCommits(
+    branch,
+    upstreamDefaultBranch,
+    cwd
+  );
 
   return {
     branch,
@@ -2319,14 +2343,14 @@ async function planStaging(branch: string, cwd: string): Promise<StagingPlan> {
     upstreamUrl,
     upstreamRepoPath,
     upstreamDefaultBranch,
-    scheduleEnabled,
+    hasManagedCommits,
     noPublic,
   };
 }
 
 /**
  * Pushes the branch to the public fork, stripping the internal workflow
- * commit when scheduled sync is enabled. Returns the SHA pushed.
+ * commit when the branch contains one. Returns the SHA pushed.
  *
  * The caller owns the spinner so consistent UI text appears in every
  * command that stages (`stage`, `ship`).
@@ -2344,7 +2368,7 @@ async function executeStagingPush(
   const pushDest = plan.noPublic ? plan.pushUrl : plan.pushRemote;
   const target = plan.noPublic ? 'upstream' : 'public fork';
 
-  if (plan.scheduleEnabled) {
+  if (plan.hasManagedCommits) {
     await $({ cwd })`git fetch upstream`;
     await $({ cwd })`git fetch origin`;
     s.start(`Preparing sanitized branch for ${target} staging`);
@@ -3661,7 +3685,7 @@ venfork schedule <status|set <cron>|disable>
 
 venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing]
   Push branch to public fork for PR to upstream
-  When schedule is enabled, strips internal workflow commit before public push
+  When the branch contains a venfork-managed commit, strips it before public push
   With --pr, also opens the upstream PR using the internal-review PR's body
     (with <!-- venfork:internal -->...<!-- /venfork:internal --> blocks redacted)
   Options:

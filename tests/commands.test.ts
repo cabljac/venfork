@@ -256,6 +256,23 @@ async function startSetupCommand(
   promise.catch(() => {});
 }
 
+/** Makes the staged branch appear to carry one venfork-managed commit. */
+function mockManagedCommitOnBranch(
+  branch = 'feature-branch',
+  sha = 'managed0'
+): void {
+  mockResponses.set(`git rev-list upstream/main..${branch}`, {
+    exitCode: 0,
+    stdout: sha,
+    stderr: '',
+  });
+  mockResponses.set(`git log -1 --format=%s ${sha}`, {
+    exitCode: 0,
+    stdout: 'chore: venfork-managed mirror commit',
+    stderr: '',
+  });
+}
+
 beforeEach(() => {
   // Clear tracking arrays
   execaCalls.length = 0;
@@ -1275,6 +1292,7 @@ describe('stageCommand', () => {
   });
 
   test('omits workflow commits from public staging history', async () => {
+    mockManagedCommitOnBranch();
     mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,
       stdout: JSON.stringify({
@@ -1315,7 +1333,141 @@ describe('stageCommand', () => {
     ).toBe(true);
   });
 
+  test('strips a preserve-only managed commit even when schedule is disabled', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['internal/NOTES.md'],
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream/main..feature-branch', {
+      exitCode: 0,
+      stdout: 'mgd111\nfeat222',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-list --reverse --topo-order --no-merges upstream/main..feature-branch',
+      { exitCode: 0, stdout: 'mgd111\nfeat222', stderr: '' }
+    );
+    mockResponses.set('git log -1 --format=%s mgd111', {
+      exitCode: 0,
+      stdout: 'chore: venfork-managed mirror commit',
+      stderr: '',
+    });
+    mockResponses.set('git show --name-only --pretty=format: mgd111', {
+      exitCode: 0,
+      stdout: 'internal/NOTES.md',
+      stderr: '',
+    });
+    mockResponses.set('git log -1 --format=%s feat222', {
+      exitCode: 0,
+      stdout: 'feat: real feature work',
+      stderr: '',
+    });
+    mockResponses.set('git show --name-only --pretty=format: feat222', {
+      exitCode: 0,
+      stdout: 'src/index.ts',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    const pickCalls = execaCalls.filter((cmd) =>
+      cmd.includes('git cherry-pick --allow-empty')
+    );
+    expect(pickCalls.some((cmd) => cmd.includes('feat222'))).toBe(true);
+    expect(pickCalls.some((cmd) => cmd.includes('mgd111'))).toBe(false);
+    expect(
+      execaCalls.some((cmd) => /git push public feature-branch(\s|$)/.test(cmd))
+    ).toBe(false);
+    expect(
+      execaCalls.some(
+        (cmd) => cmd.includes('git push public') && cmd.includes('--force')
+      )
+    ).toBe(true);
+  });
+
+  test('pushes the branch as-is when it carries no managed commit', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+        preserve: ['internal/NOTES.md'],
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream/main..feature-branch', {
+      exitCode: 0,
+      stdout: 'feat222',
+      stderr: '',
+    });
+    mockResponses.set('git log -1 --format=%s feat222', {
+      exitCode: 0,
+      stdout: 'feat: real feature work',
+      stderr: '',
+    });
+    mockResponses.set('git show --name-only --pretty=format: feat222', {
+      exitCode: 0,
+      stdout: 'src/index.ts',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) => /git push public feature-branch(\s|$)/.test(cmd))
+    ).toBe(true);
+    expect(execaCalls.some((cmd) => cmd.includes('git worktree add'))).toBe(
+      false
+    );
+    expect(execaCalls.some((cmd) => cmd.includes('git cherry-pick'))).toBe(
+      false
+    );
+  });
+
+  test('refuses to push when managed-commit detection cannot see upstream', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['internal/NOTES.md'],
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream/main..feature-branch', {
+      exitCode: 128,
+      stdout: '',
+      stderr: 'fatal: bad revision',
+    });
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
+  });
+
   test('filters workflow commits by identity, not by position in origin/main', async () => {
+    mockManagedCommitOnBranch();
     // Reproduces the bug where a feature branch reachable from an older
     // origin/main still carried the historical managed workflow commit. After
     // a later `venfork sync` rewrites origin/main with a *new* managed commit,
@@ -1388,6 +1540,7 @@ describe('stageCommand', () => {
   });
 
   test('preserves user-authored workflow commits that do not touch venfork-sync.yml', async () => {
+    mockManagedCommitOnBranch();
     // A user edits .github/workflows/ci.yml on a feature branch, intending
     // to send it upstream. The commit only touches files under
     // .github/workflows but does NOT touch the managed venfork-sync.yml.
@@ -1436,6 +1589,7 @@ describe('stageCommand', () => {
   });
 
   test('aborts when a merge commit has evil resolutions outside .github/workflows', async () => {
+    mockManagedCommitOnBranch();
     mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,
       stdout: JSON.stringify({
@@ -1474,6 +1628,7 @@ describe('stageCommand', () => {
   });
 
   test('aborts when merge commit inspection fails', async () => {
+    mockManagedCommitOnBranch();
     mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,
       stdout: JSON.stringify({
@@ -1512,6 +1667,7 @@ describe('stageCommand', () => {
   });
 
   test('allows merge commits whose evil files are all under .github/workflows', async () => {
+    mockManagedCommitOnBranch();
     // The common shape: feature branch merges origin/<default> back in purely
     // to resolve the managed `venfork-sync.yml` conflict. The merge is "evil"
     // for that file only, which is irrelevant on the public fork.
@@ -1569,6 +1725,7 @@ describe('stageCommand', () => {
   });
 
   test('linearizes history with --no-merges so merge commits are skipped', async () => {
+    mockManagedCommitOnBranch();
     // Simulates a feature branch that merged origin/<default> back in after a
     // sync rewrite. The merge commit exists only to resolve a workflow-file
     // conflict; cherry-picking it onto upstream would fail ("is a merge but
@@ -3756,6 +3913,7 @@ describe('no-public mode', () => {
     });
 
     test('schedule-mode push by URL uses explicit-SHA lease via ls-remote', async () => {
+      mockManagedCommitOnBranch();
       mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
         exitCode: 0,
         stdout: noPublicConfig({

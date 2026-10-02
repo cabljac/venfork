@@ -307,8 +307,8 @@ venfork stage feature-auth --pr --base develop
 **What it does (without `--pr`):**
 1. Verifies branch exists
 2. Shows staging details and confirmation
-3. Rebuilds branch history on top of upstream while removing internal workflow commits
-4. Pushes sanitized history to public fork
+3. If the branch contains a venfork-managed commit, rebuilds its history on top of upstream without that commit (otherwise pushes the branch as-is)
+4. Pushes the result to the public fork
 5. Provides a compare URL so you can open the PR yourself
 
 **What `--pr` adds:**
