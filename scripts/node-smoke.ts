@@ -3,11 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { $ } from 'execa';
 import { createMirrorFixture } from '../tests/harness/mirror-fixture.js';
+import { verifyDoctorOutput } from './smoke-checks.js';
 
 /**
  * Runs the built CLI under the `node` on PATH against a local fixture and
- * checks that `doctor --json` prints a JSON array of checks starting with
- * the repo row. Run after `bun run build`.
+ * checks that `doctor --json` exits 0 and prints the expected checks, all ok.
+ * Run after `bun run build`.
  */
 const entry = path.resolve(import.meta.dir, '..', 'dist', 'index.js');
 const tmp = await mkdtemp(path.join(os.tmpdir(), 'venfork-node-smoke-'));
@@ -24,19 +25,14 @@ try {
     env: { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
   })`node ${entry} doctor --json`;
 
-  let checks: Array<{ id?: string; ok?: unknown }>;
-  try {
-    checks = JSON.parse(result.stdout);
-  } catch {
+  const problem = verifyDoctorOutput(result.exitCode, result.stdout);
+  if (problem) {
     throw new Error(
-      `doctor --json under node ${process.version} did not print JSON:\n${result.stdout}\n${result.stderr}`
+      `doctor --json under node ${process.version}: ${problem}\n${result.stderr}`
     );
   }
-  if (!Array.isArray(checks) || checks[0]?.id !== 'repo') {
-    throw new Error(`unexpected doctor output: ${result.stdout}`);
-  }
   console.log(
-    `node ${(await $`node --version`).stdout}: doctor --json printed ${checks.length} checks`
+    `node ${(await $`node --version`).stdout}: doctor --json printed the expected checks`
   );
 } finally {
   await fx.cleanup();

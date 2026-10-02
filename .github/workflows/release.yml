@@ -56,6 +56,20 @@ jobs:
       - name: Build
         run: bun run build
 
+      - name: Verify build output
+        run: |
+          if [ ! -f dist/index.js ]; then
+            echo "Build failed - dist/index.js not found"
+            exit 1
+          fi
+          if ! head -n 1 dist/index.js | grep -q "#!/usr/bin/env node"; then
+            echo "Build failed - shebang missing"
+            exit 1
+          fi
+
+      - name: Smoke test the built CLI under Node.js
+        run: bun run smoke:node
+
       - name: Publish to npm
         run: npm publish --access public --provenance
         env:
