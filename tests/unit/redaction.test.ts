@@ -107,6 +107,39 @@ describe('stripInternalBlocks', () => {
   });
 });
 
+describe('stripInternalBlocks comment scanner', () => {
+  test('a marker with an arrow in its note is still a marker', () => {
+    const input =
+      'pub <!-- venfork:internal owner->bob -->SECRET<!-- /venfork:internal --> tail';
+    expect(stripInternalBlocks(input)).toBe('pub  tail');
+  });
+
+  test('a comment closed with --!> is a marker', () => {
+    const input =
+      'pub <!-- venfork:internal --!>SECRET<!-- /venfork:internal --!> tail';
+    expect(stripInternalBlocks(input)).toBe('pub  tail');
+  });
+
+  test('a marker hidden by a zero-width space is still a marker', () => {
+    const input =
+      'pub <!-- ven\u200bfork:internal -->SECRET<!-- /ven\u200bfork:internal --> tail';
+    expect(stripInternalBlocks(input)).toBe('pub  tail');
+  });
+
+  test.each([
+    ['plain text', 'Staged from acme/widget-private via venfork'],
+    ['a triple-dash comment', 'pub <!--- venfork:internal --->SECRET'],
+    ['an escaped comment', 'pub &lt;!-- venfork:internal --&gt;SECRET'],
+    ['an unclosed comment', 'pub <!-- venfork:internal SECRET'],
+  ])('refuses venfork left in %s', (_label, input) => {
+    expect(() => stripInternalBlocks(input)).toThrow(RedactionError);
+  });
+
+  test('keeps an issue reference', () => {
+    expect(stripInternalBlocks('Fixes #42')).toBe('Fixes #42');
+  });
+});
+
 describe('translateInternalTitle', () => {
   test('strips internal blocks from a title', () => {
     expect(

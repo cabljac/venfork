@@ -119,29 +119,49 @@ export class ConfigError extends VenforkError {
 
 /**
  * Thrown when internal-block redaction cannot prove a body is safe to
- * publish: an unmatched close marker, or a leftover HTML comment that
- * mentions venfork (for example a misspelled marker).
+ * publish: an unmatched close marker, a comment that mentions venfork but is
+ * not a marker, or any venfork mention left after stripping.
  */
 export class RedactionError extends VenforkError {
   constructor(public readonly snippet: string) {
     super(
-      `Refusing to publish: could not redact a venfork marker safely near '${snippet}'. Fix the <!-- venfork:internal --> ... <!-- /venfork:internal --> markers and retry.`
+      `Refusing to publish: '${snippet}' mentions venfork outside a well-formed <!-- venfork:internal --> ... <!-- /venfork:internal --> block. Fix the markers or remove the mention and retry.`
     );
     this.name = 'RedactionError';
   }
 }
 
 /**
+ * Thrown when text bound for the public fork or upstream (a commit's
+ * author, committer or message, or a PR title or body) points back at the
+ * private mirror.
+ */
+export class MirrorReferenceError extends VenforkError {
+  constructor(
+    public readonly where: string,
+    public readonly matched: string,
+    remedy: string
+  ) {
+    super(
+      `Refusing to publish: ${where} contains '${matched}', which points back at the private mirror. ${remedy}`
+    );
+    this.name = 'MirrorReferenceError';
+  }
+}
+
+/**
  * Thrown when `venfork stage` would push mirror-only paths (the managed
- * sync workflow or preserved files) to the public fork or upstream.
+ * sync workflow, `.venfork/` or preserved files) or mirror-held content to
+ * the public fork or upstream.
  */
 export class StageLeakError extends VenforkError {
   constructor(
     public readonly branch: string,
-    public readonly paths: string[]
+    public readonly paths: string[],
+    public readonly commit?: string
   ) {
     super(
-      `Refusing to stage '${branch}': it would publish mirror-only path(s) ${paths.join(', ')}. Drop those changes from the branch (they belong on the mirror default branch only) and retry.`
+      `Refusing to stage '${branch}': ${commit ? `commit ${commit}` : 'it'} would publish mirror-only path(s) ${paths.join(', ')}. Rewrite the branch so no commit adds or changes them (they belong on the mirror default branch only) and retry.`
     );
     this.name = 'StageLeakError';
   }

@@ -1,5 +1,6 @@
 import { $ } from 'execa';
 import { RedactionError } from '../errors.js';
+import { canonicalText } from './deny-list.js';
 
 /** Internal review PR fields read from the private mirror via gh. */
 export interface InternalPrInfo {
@@ -9,10 +10,16 @@ export interface InternalPrInfo {
   body: string;
 }
 
-const VENFORK_INTERNAL_OPEN_RE = /<!--\s*venfork\s*:\s*internal\b[^>]*-->/gi;
-const VENFORK_INTERNAL_CLOSE_RE =
-  /<!--\s*\/\s*venfork\s*:\s*internal\b[^>]*-->/gi;
-const LEFTOVER_VENFORK_COMMENT_RE = /<!--[^>]*venfork[^>]*-->/i;
+const HTML_COMMENT_RE = /<!--[\s\S]*?--!?>/g;
+const MARKER_RE = /^\s*(\/)?\s*venfork\s*:\s*internal\b/i;
+
+/** Text around the first canonical `venfork` mention, for error messages. */
+function venforkSnippet(text: string): string | null {
+  const folded = canonicalText(text);
+  const at = folded.toLowerCase().indexOf('venfork');
+  if (at === -1) return null;
+  return folded.slice(Math.max(0, at - 20), at + 40);
+}
 
 interface RedactionMarker {
   type: 'open' | 'close';
@@ -22,18 +29,20 @@ interface RedactionMarker {
 
 /**
  * Removes properly-nested `<!-- venfork:internal -->...<!-- /venfork:internal -->`
- * blocks from `body`. Walks markers in document order and tracks depth, so
- * nested pairs collapse correctly: every char between the outermost open and
- * its matching close is dropped (including any inner pairs).
+ * blocks from `body`. Scans every HTML comment (`<!--` to the first `-->` or
+ * `--!>`), classifies its body as an open or close marker, and tracks depth,
+ * so every char between the outermost open and its matching close is dropped
+ * (including any inner pairs).
  *
  * Markers match case-insensitively, with optional whitespace around the
  * `/` and `:` and any note after the keyword
  * (`<!-- VENFORK: internal (draft) -->`).
  *
  * Fails closed with {@link RedactionError}:
- *  - an unmatched close marker, or
- *  - any HTML comment mentioning venfork left after stripping (a
- *    misspelled marker such as `venfork:intenral`).
+ *  - an unmatched close marker,
+ *  - a comment that mentions venfork but is not a marker (a misspelled
+ *    marker such as `venfork:intenral`), or
+ *  - any `venfork` mention left anywhere after stripping.
  *
  * An unmatched open marker drops everything to end-of-input.
  *
@@ -41,26 +50,23 @@ interface RedactionMarker {
  */
 export function stripInternalBlocks(body: string): string {
   const markers: RedactionMarker[] = [];
-  // Reset lastIndex on the global regexes — they're module-scoped and would
-  // otherwise carry state across calls.
-  VENFORK_INTERNAL_OPEN_RE.lastIndex = 0;
-  VENFORK_INTERNAL_CLOSE_RE.lastIndex = 0;
-
-  for (
-    let m = VENFORK_INTERNAL_OPEN_RE.exec(body);
-    m !== null;
-    m = VENFORK_INTERNAL_OPEN_RE.exec(body)
-  ) {
-    markers.push({ type: 'open', start: m.index, end: m.index + m[0].length });
+  for (const m of body.matchAll(HTML_COMMENT_RE)) {
+    const comment = m[0];
+    const inner = canonicalText(
+      comment.slice(4, comment.length - (comment.endsWith('--!>') ? 4 : 3))
+    );
+    const marker = inner.match(MARKER_RE);
+    if (marker) {
+      const start = m.index ?? 0;
+      markers.push({
+        type: marker[1] ? 'close' : 'open',
+        start,
+        end: start + comment.length,
+      });
+    } else if (/venfork/i.test(inner)) {
+      throw new RedactionError(comment);
+    }
   }
-  for (
-    let m = VENFORK_INTERNAL_CLOSE_RE.exec(body);
-    m !== null;
-    m = VENFORK_INTERNAL_CLOSE_RE.exec(body)
-  ) {
-    markers.push({ type: 'close', start: m.index, end: m.index + m[0].length });
-  }
-  markers.sort((a, b) => a.start - b.start);
 
   let result = '';
   let cursor = 0;
@@ -68,7 +74,6 @@ export function stripInternalBlocks(body: string): string {
   for (const marker of markers) {
     if (marker.type === 'open') {
       if (depth === 0) {
-        // Surfacing into a new redacted block — emit content up to here.
         result += body.slice(cursor, marker.start);
       }
       depth += 1;
@@ -85,11 +90,9 @@ export function stripInternalBlocks(body: string): string {
   if (depth === 0) {
     result += body.slice(cursor);
   }
-  // depth > 0 here means an unclosed open marker — content from the
-  // unmatched open to end-of-input is intentionally dropped.
-  const leftover = result.match(LEFTOVER_VENFORK_COMMENT_RE);
-  if (leftover) {
-    throw new RedactionError(leftover[0]);
+  const leftover = venforkSnippet(result);
+  if (leftover !== null) {
+    throw new RedactionError(leftover);
   }
   return result;
 }
