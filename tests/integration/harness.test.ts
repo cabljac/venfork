@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { $ } from 'execa';
+import { envWithoutIsolatedKeys } from '../harness/env.js';
 import { createMirrorFixture } from '../harness/mirror-fixture.js';
 
 const LEAK_KEYS = [
@@ -11,19 +12,30 @@ const LEAK_KEYS = [
   'GIT_CONFIG_KEY_0',
   'GIT_CONFIG_VALUE_0',
 ] as const;
-let sentinelDir: string | undefined;
+let savedEnv: Map<string, string | undefined>;
+let scratchDir: string | undefined;
+
+beforeEach(() => {
+  savedEnv = new Map(LEAK_KEYS.map((key) => [key, process.env[key]]));
+});
 
 afterEach(async () => {
-  for (const key of LEAK_KEYS) delete process.env[key];
-  if (sentinelDir) await rm(sentinelDir, { recursive: true, force: true });
-  sentinelDir = undefined;
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  if (scratchDir) await rm(scratchDir, { recursive: true, force: true });
+  scratchDir = undefined;
 });
 
 describe('mirror fixture isolation', () => {
   test('ignores and restores GIT_DIR and GIT_CONFIG_* from the parent process', async () => {
-    sentinelDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-sentinel-'));
-    const sentinel = path.join(sentinelDir, 'sentinel.git');
-    await $`git init --quiet --bare ${sentinel}`;
+    scratchDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-sentinel-'));
+    const sentinel = path.join(scratchDir, 'sentinel.git');
+    await $({
+      env: envWithoutIsolatedKeys(),
+      extendEnv: false,
+    })`git init --quiet --bare ${sentinel}`;
     process.env.GIT_DIR = sentinel;
     process.env.GIT_CONFIG_COUNT = '1';
     process.env.GIT_CONFIG_KEY_0 = 'user.name';
@@ -56,18 +68,38 @@ describe('mirror fixture isolation', () => {
   });
 
   test('a failed fixture build restores the environment and removes its directory', async () => {
+    scratchDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-tmproot-'));
     process.env.GIT_DIR = '/parent/.git';
-    const fixtureDirs = async () =>
-      (await readdir(os.tmpdir())).filter((name) =>
-        name.startsWith('venfork-fixture-')
-      );
-    const before = await fixtureDirs();
 
     await expect(
-      createMirrorFixture({ defaultBranch: 'bad..name' })
+      createMirrorFixture({ defaultBranch: 'bad..name', tmpRoot: scratchDir })
     ).rejects.toThrow();
 
     expect(process.env.GIT_DIR).toBe('/parent/.git');
-    expect(await fixtureDirs()).toEqual(before);
+    expect(await readdir(scratchDir)).toEqual([]);
+  });
+
+  test('builds the fixture under tmpRoot', async () => {
+    scratchDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-tmproot-'));
+    const fx = await createMirrorFixture({ tmpRoot: scratchDir });
+    try {
+      expect(path.dirname(fx.root)).toBe(scratchDir);
+    } finally {
+      await fx.cleanup();
+    }
+    expect(await readdir(scratchDir)).toEqual([]);
+  });
+
+  test('refuses to clean up nested fixtures out of order', async () => {
+    const outer = await createMirrorFixture();
+    const inner = await createMirrorFixture();
+    try {
+      await expect(outer.cleanup()).rejects.toThrow(
+        'cleaned up in reverse order of creation'
+      );
+    } finally {
+      await inner.cleanup();
+      await outer.cleanup();
+    }
   });
 });

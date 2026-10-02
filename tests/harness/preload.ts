@@ -1,4 +1,5 @@
 import { beforeEach, mock } from 'bun:test';
+import { resetQuietPrompts } from './prompts.js';
 
 /**
  * Replaces `process.exit` for every test file so a command that exits
@@ -10,7 +11,9 @@ const exitStub = mock((code?: number | string | null) => {
 
 process.exit = exitStub as unknown as typeof process.exit;
 
+/** Re-installs the stub and clears shared mocks before every test. */
 beforeEach(() => {
   process.exit = exitStub as unknown as typeof process.exit;
   exitStub.mockClear();
+  resetQuietPrompts();
 });

@@ -21,6 +21,8 @@ export interface MirrorFixtureOptions {
   upstreamCommits?: number;
   /** Upstream default branch name. Defaults to `main`. */
   defaultBranch?: string;
+  /** Directory the fixture's temp dir is created in. Defaults to `os.tmpdir()`. */
+  tmpRoot?: string;
 }
 
 /**
@@ -55,11 +57,24 @@ export interface MirrorFixture {
   modeAt(repo: string, ref: string, filePath: string): Promise<string | null>;
   /** Runs git in `cwd` and returns trimmed stdout. */
   git(cwd: string, ...args: string[]): Promise<string>;
-  /** Restores process env and deletes every fixture directory. */
+  /**
+   * Restores process env and deletes every fixture directory. Throws when a
+   * fixture created later has not been cleaned up yet.
+   */
   cleanup(): Promise<void>;
 }
 
 const FIXTURE_EPOCH = 1_700_000_000;
+const liveFixtures: symbol[] = [];
+
+function releaseFixture(token: symbol): void {
+  if (liveFixtures.at(-1) !== token) {
+    throw new Error(
+      'Mirror fixtures must be cleaned up in reverse order of creation'
+    );
+  }
+  liveFixtures.pop();
+}
 
 /**
  * Builds a fresh {@link MirrorFixture} in a temp directory.
@@ -68,7 +83,8 @@ const FIXTURE_EPOCH = 1_700_000_000;
  * variable, HOME, XDG_CONFIG_HOME and the GitHub tokens are hidden (see
  * {@link isolateGitEnv}), `GIT_CONFIG_GLOBAL` points at a fixture config
  * and `HOME` at an empty fixture directory. Call `cleanup()` to restore
- * them; nested fixtures must be cleaned up in reverse order. Fixture
+ * them; nested fixtures must be cleaned up in reverse order, and
+ * `cleanup()` throws otherwise. Fixture
  * commits use pinned, increasing dates so their SHAs are reproducible. The
  * commands under test run with the real clock unless a test pins
  * `GIT_COMMITTER_DATE` itself.
@@ -78,7 +94,9 @@ export async function createMirrorFixture(
 ): Promise<MirrorFixture> {
   const mode = options.mode ?? 'standard';
   const defaultBranch = options.defaultBranch ?? 'main';
-  const root = await mkdtemp(path.join(os.tmpdir(), 'venfork-fixture-'));
+  const root = await mkdtemp(
+    path.join(options.tmpRoot ?? os.tmpdir(), 'venfork-fixture-')
+  );
   const globalConfig = path.join(root, 'gitconfig');
   const home = path.join(root, 'home');
   await writeFile(
@@ -102,6 +120,8 @@ export async function createMirrorFixture(
     GIT_CONFIG_GLOBAL: globalConfig,
     GIT_CONFIG_NOSYSTEM: '1',
   });
+  const token = Symbol('mirror-fixture');
+  liveFixtures.push(token);
 
   try {
     let tick = 0;
@@ -235,12 +255,14 @@ export async function createMirrorFixture(
         return out.match(/^(\d+) /)?.[1] ?? null;
       },
       async cleanup() {
+        releaseFixture(token);
         restoreEnv();
         await rm(root, { recursive: true, force: true });
       },
     };
     return fixture;
   } catch (err) {
+    releaseFixture(token);
     restoreEnv();
     await rm(root, { recursive: true, force: true });
     throw err;
