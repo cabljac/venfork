@@ -409,6 +409,25 @@ Both sub-commands write a linkage to `venfork-config`:
 
 This is **only the linkage** — there is no *live* sync. `pull` snapshots the upstream body and comments into the mirror issue at pull time, but later comments and state changes do not propagate. If the upstream issue is closed, the internal one stays open until you close it manually (and vice versa). Treat the records as a "where did this go?" audit log rather than a live mirror.
 
+### `venfork doctor [--json]`
+
+Check that a mirror is healthy. Also available as `venfork status --check`. It only reads, apart from fetching the remotes and the `venfork-config` branch.
+
+| Check | What it verifies |
+|---|---|
+| `repo` | You are in a git repo and `venfork-config` is readable |
+| `remotes` | `origin`/`upstream`(/`public`) exist, match the config, and upstream push is `DISABLE` |
+| `mode` | The remotes match the recorded `standard` / `no-public` mode |
+| `invariant` | `origin/<default>` is an upstream commit plus at most one managed commit |
+| `divergence` | No user commits on `origin`/`public` that would make sync abort |
+| `preserve` | Every preserved path exists on `origin/<default>` |
+| `workflow` | The sync workflow on `origin/<default>` matches what this venfork version would write |
+| `token` | `VENFORK_PUSH_TOKEN` is set on the mirror (standard mode with a schedule) |
+| `last-run` | The last `venfork-sync.yml` run did not fail |
+| `cron-age` | The last run is not older than twice the cron interval |
+
+Each failing check prints a fix. GitHub checks show as skipped when `gh` is not authenticated. The command exits 1 when any check fails; `--json` prints the results for CI.
+
 ### `venfork schedule <status|set <cron>|disable>`
 
 Manage automated sync configuration stored in `venfork-config`.

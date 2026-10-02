@@ -67,6 +67,10 @@ Determinism rule: the managed commit's author and committer are the venfork bot 
 
 `venfork stage --pr` and `venfork issue stage` promote internal content to upstream. Before doing so, `stripInternalBlocks` removes `<!-- venfork:internal -->…<!-- /venfork:internal -->` regions from PR/issue bodies. The markers are overridable via `VENFORK_INTERNAL_OPEN_RE` / `VENFORK_INTERNAL_CLOSE_RE`. Anything that flows from mirror → public/upstream must go through this redaction.
 
+### Health checks
+
+`venfork doctor` (`src/commands/doctor.ts`) returns `{ id, ok: true | false | 'skipped', detail, fix? }` per check and exits 1 when any check is `false`. Git checks are covered by integration tests; the gh-backed checks (`token`, `last-run`, `cron-age`) are string-mocked in `tests/unit/doctor.test.ts` and degrade to `skipped` without gh auth or a GitHub origin.
+
 ### Network-op safety
 
 Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/net.ts`: no stdin (credential/host-key prompts fail fast instead of hanging), a hard timeout (`VENFORK_GIT_TIMEOUT`, default 600s), and `BatchMode=yes`. Use these helpers for new network calls rather than raw `$` — a misconfigured credential should error, not block on an invisible prompt.

@@ -43,9 +43,15 @@ venfork clone <vendor-repo> [--no-public] [--upstream <url>]
 venfork --version
   Print the installed venfork version
 
-venfork status
+venfork status [--check] [--json]
   Show current repository setup and configuration
   Check which remotes are configured and setup completion
+  --check runs the same health checks as \`venfork doctor\`
+
+venfork doctor [--json]
+  Check mirror health: remotes, the managed-commit invariant, divergence,
+  preserved files, the sync workflow, VENFORK_PUSH_TOKEN and the last scheduled run
+  Exits 1 when any check fails; --json prints machine-readable results for CI
 
 venfork sync [branch]
   Update default branches of origin and public to match upstream

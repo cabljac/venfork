@@ -1,4 +1,9 @@
 export { cloneCommand } from './commands/clone.js';
+export {
+  type DoctorCheck,
+  doctorCommand,
+  runDoctorChecks,
+} from './commands/doctor.js';
 export { showHelp } from './commands/help.js';
 export { issueCommand, renderPulledComments } from './commands/issue.js';
 export { preserveCommand } from './commands/preserve.js';
