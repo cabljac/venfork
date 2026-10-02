@@ -10,6 +10,8 @@ import {
   syncCommand,
 } from '../../src/commands.js';
 import { updateVenforkConfig } from '../../src/config.js';
+import { VENFORK_VERSION } from '../../src/version.js';
+import { generateSyncWorkflow } from '../../src/workflow.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
@@ -260,5 +262,29 @@ describe('doctor and a broken config', () => {
     expect(checks['cron-age'].detail).toContain(
       "schedule.cron '@hourly' is invalid"
     );
+  });
+});
+
+describe('doctor and the pinned version', () => {
+  test('names both versions when origin pins a newer venfork', async () => {
+    await scheduledAndSynced();
+    await fx.commitOnOrigin(
+      {
+        '.github/workflows/venfork-sync.yml': generateSyncWorkflow(
+          '0 */6 * * *',
+          'standard',
+          '99.0.0'
+        ),
+      },
+      'chore: venfork-managed mirror commit\n\nVenfork-Managed: 1'
+    );
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(checks.workflow.ok).toBe(false);
+    expect(checks.workflow.detail).toContain(
+      `origin pins venfork 99.0.0, newer than this CLI (${VENFORK_VERSION})`
+    );
+    expect(checks.workflow.fix).toContain('Upgrade venfork');
   });
 });

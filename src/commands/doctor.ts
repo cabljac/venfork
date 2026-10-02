@@ -11,6 +11,7 @@ import {
 import { checkDivergence } from '../shared/divergence.js';
 import { isManagedCommit } from '../shared/managed-commit.js';
 import { netExec, netFailureReason } from '../shared/net.js';
+import { compareSemver, pinnedVenforkVersion } from '../shared/semver.js';
 import { parseRepoPath } from '../utils.js';
 import { VENFORK_VERSION } from '../version.js';
 import { generateSyncWorkflow } from '../workflow.js';
@@ -350,12 +351,24 @@ export async function runDoctorChecks(
           fix: 'Run `venfork sync`.',
         });
       } else if (workflowOnOrigin !== expected) {
-        checks.push({
-          id: 'workflow',
-          ok: false,
-          detail: `${SYNC_WORKFLOW_PATH} is stale (config or venfork ${VENFORK_VERSION} would write different YAML)`,
-          fix: 'Run `venfork sync`.',
-        });
+        const pinned = pinnedVenforkVersion(workflowOnOrigin);
+        const newer =
+          pinned !== null && (compareSemver(pinned, VENFORK_VERSION) ?? 0) > 0;
+        checks.push(
+          newer
+            ? {
+                id: 'workflow',
+                ok: false,
+                detail: `origin pins venfork ${pinned}, newer than this CLI (${VENFORK_VERSION}); sync refuses to downgrade it`,
+                fix: `Upgrade venfork to ${pinned} or later.`,
+              }
+            : {
+                id: 'workflow',
+                ok: false,
+                detail: `${SYNC_WORKFLOW_PATH} is stale (origin pins venfork ${pinned ?? 'unknown'}; config or venfork ${VENFORK_VERSION} would write different YAML)`,
+                fix: 'Run `venfork sync`.',
+              }
+        );
       } else {
         checks.push({
           id: 'workflow',

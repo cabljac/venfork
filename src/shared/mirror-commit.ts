@@ -4,7 +4,8 @@ import path from 'node:path';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { assertNoInvalidPreserve, type VenforkConfig } from '../config.js';
-import { GitError } from '../errors.js';
+import { GitError, VenforkError } from '../errors.js';
+import { VENFORK_VERSION } from '../version.js';
 import { generateSyncWorkflow } from '../workflow.js';
 import {
   SYNC_WORKFLOW_PATH,
@@ -17,6 +18,7 @@ import {
   MANAGED_COMMIT_TRAILER,
 } from './managed-commit.js';
 import { netExec, netFailureReason } from './net.js';
+import { compareSemver, pinnedVenforkVersion } from './semver.js';
 
 /** Basenames of `entries`, trimmed, de-duplicated and sorted. */
 export function normalizeWorkflowList(entries: string[]): string[] {
@@ -404,6 +406,9 @@ export async function updateOriginTip(args: {
   assertNoInvalidPreserve(config);
   const schedule = config?.schedule;
   const scheduleActive = Boolean(schedule?.enabled && schedule.cron);
+  if (scheduleActive && previousMirrorTip) {
+    await assertNoPinDowngrade(previousMirrorTip, cwd);
+  }
   const preserve = config?.preserve ?? [];
   if (!scheduleActive && preserve.length === 0) {
     const pushed = await pushBranchWithLease({
@@ -431,6 +436,28 @@ export async function updateOriginTip(args: {
     previousMirrorTip,
     cwd,
   });
+}
+
+/**
+ * Throws when the sync workflow on `mirrorTip` pins a newer venfork than the
+ * running CLI, so an older CLI never rewrites a newer pin (local and runner
+ * syncs would otherwise keep rewriting each other's managed commit).
+ */
+export async function assertNoPinDowngrade(
+  mirrorTip: string,
+  cwd?: string
+): Promise<void> {
+  const shown = await $({
+    ...(cwd ? { cwd } : {}),
+    reject: false,
+  })`git show ${`${mirrorTip}:${SYNC_WORKFLOW_PATH}`}`;
+  if (shown.exitCode !== 0) return;
+  const pinned = pinnedVenforkVersion(shown.stdout);
+  if (pinned && (compareSemver(pinned, VENFORK_VERSION) ?? 0) > 0) {
+    throw new VenforkError(
+      `origin pins venfork ${pinned}, you are running ${VENFORK_VERSION}; upgrade the CLI or set VENFORK_INSTALL_SPEC`
+    );
+  }
 }
 
 /**
