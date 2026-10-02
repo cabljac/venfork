@@ -177,3 +177,20 @@ describe('parseStageCliArgs issue', () => {
     );
   });
 });
+
+describe('parseStageCliArgs issue rejects branch-only flags', () => {
+  const cases: string[][] = [
+    ['--pr'],
+    ['--draft'],
+    ['--base', 'develop'],
+    ['--internal-pr', '3'],
+    ['--no-update-existing'],
+  ];
+  for (const flags of cases) {
+    test(`refuses ${flags[0]} on stage issue`, () => {
+      expect(() => parseStageCliArgs(['issue', '12', ...flags])).toThrow(
+        /only applies to stage branch/
+      );
+    });
+  }
+});

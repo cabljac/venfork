@@ -99,6 +99,18 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
         "venfork stage issue requires an issue number or URL. To stage a branch named 'issue', run `venfork stage branch issue`."
       );
     }
+    const branchOnly = [
+      createPr && '--pr',
+      draft && '--draft',
+      base !== undefined && '--base',
+      internalPrNumber !== undefined && '--internal-pr',
+      noUpdateExisting && '--no-update-existing',
+    ].filter((flag): flag is string => typeof flag === 'string');
+    if (branchOnly.length > 0) {
+      throw new Error(
+        `${branchOnly.join(', ')} only applies to stage branch, not stage issue`
+      );
+    }
     return { kind: 'issue', ref: rest[0], title };
   }
 
