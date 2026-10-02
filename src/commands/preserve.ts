@@ -12,6 +12,7 @@ import { changedFilesInCommit } from '../shared/divergence.js';
 import { hasManagedTrailer } from '../shared/managed-commit.js';
 import { resolveCommit } from '../shared/mirror-commit.js';
 import { netFetch } from '../shared/net.js';
+import { assertPreserveEntriesAreFiles } from '../shared/preserve-entries.js';
 
 /**
  * Which of `paths` origin's managed commit carries, and where that commit
@@ -78,7 +79,6 @@ async function writeRemoval(
     );
   }
 }
-import { assertPreserveEntriesAreFiles } from '../shared/preserve-entries.js';
 
 /**
  * Preserve command: manage the `preserve` allowlist of mirror-only file paths
