@@ -161,7 +161,7 @@ describe('managed commit content check', () => {
 describe('managed commit left behind by a preserve removal', () => {
   /** Origin's managed commit carries m and n; the config names only m. */
   async function staleManagedCommit(): Promise<void> {
-    await preserveCommand('add', ['tools/m.txt', 'tools/n.txt']);
+    await seedPreserve(fx, ['tools/m.txt', 'tools/n.txt']);
     await fx.commitOnOrigin({ 'tools/m.txt': 'm\n', 'tools/n.txt': 'n\n' });
     await sync();
     await updateVenforkConfig(fx.work, { preserve: ['tools/m.txt'] });
@@ -236,7 +236,7 @@ describe('managed commit left behind by a preserve removal', () => {
   });
 
   test('preserve remove on a diverged origin warns that origin still carries the file', async () => {
-    await preserveCommand('add', ['tools/m.txt', 'tools/n.txt']);
+    await seedPreserve(fx, ['tools/m.txt', 'tools/n.txt']);
     await fx.commitOnOrigin({ 'tools/m.txt': 'm\n', 'tools/n.txt': 'n\n' });
     await sync();
     await fx.commitOnOrigin({ 'src/user.txt': 'user\n' });
