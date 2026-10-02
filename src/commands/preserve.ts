@@ -1,4 +1,5 @@
 import * as p from '@clack/prompts';
+import { $ } from 'execa';
 import {
   normalizePreservePath,
   readVenforkConfigFromRepo,
@@ -13,33 +14,69 @@ import { hasManagedTrailer } from '../shared/managed-commit.js';
 import { resolveCommit } from '../shared/mirror-commit.js';
 import { netFetch } from '../shared/net.js';
 
-/** True when origin's managed commit carries any of `paths`. */
-async function managedCommitCarries(
+/**
+ * Which of `paths` origin's managed commit carries, and where that commit
+ * is: `tip` when it is origin's tip, `buried` when user commits sit on top
+ * of it. Null when no managed commit on origin carries any of them.
+ */
+async function managedCommitCarrying(
   repoDir: string,
   paths: string[]
-): Promise<boolean> {
+): Promise<{
+  where: 'tip' | 'buried';
+  defaultBranch: string;
+  carried: string[];
+} | null> {
+  await netFetch('upstream', repoDir);
   await netFetch('origin', repoDir);
   const defaultBranch = await getDefaultBranch('upstream', repoDir);
   const tip = await resolveCommit(`origin/${defaultBranch}`, repoDir);
-  if (!tip || !(await hasManagedTrailer(tip, repoDir))) return false;
-  const files = await changedFilesInCommit(tip, repoDir);
-  return paths.some((entry) => files.includes(entry));
+  if (!tip) return null;
+  const ahead = (
+    await $({
+      cwd: repoDir,
+    })`git rev-list ${`upstream/${defaultBranch}..${tip}`}`
+  ).stdout
+    .split('\n')
+    .filter(Boolean);
+  for (const commit of ahead) {
+    if (!(await hasManagedTrailer(commit, repoDir))) continue;
+    const files = await changedFilesInCommit(commit, repoDir);
+    const carried = paths.filter((entry) => files.includes(entry));
+    if (carried.length > 0) {
+      return {
+        where: commit === tip ? 'tip' : 'buried',
+        defaultBranch,
+        carried,
+      };
+    }
+  }
+  return null;
 }
 
 /**
  * Writes a preserve-list change that drops `removed`. When origin's managed
  * commit still carries a dropped file, origin is re-stamped in the same step
- * so the managed commit never holds a file the list no longer names.
+ * so the managed commit never holds a file the list no longer names. When
+ * user commits sit on top of that managed commit, only the config is
+ * written and a warning says sync drops the file once origin is back in line.
  */
 async function writeRemoval(
   repoDir: string,
   patch: VenforkConfigPatch,
   removed: string[]
 ): Promise<void> {
-  if (await managedCommitCarries(repoDir, removed)) {
+  const carrying = await managedCommitCarrying(repoDir, removed);
+  if (carrying?.where === 'tip') {
     await applyConfigChange(repoDir, patch, restorePreserve);
-  } else {
-    await updateVenforkConfig(repoDir, patch);
+    return;
+  }
+  await updateVenforkConfig(repoDir, patch);
+  if (carrying?.where === 'buried') {
+    const names = carrying.carried.map((entry) => `'${entry}'`).join(', ');
+    p.log.warn(
+      `origin/${carrying.defaultBranch} has diverged and its managed commit still carries ${names}. \`venfork sync\` drops it once the divergent commits are moved off origin/${carrying.defaultBranch}.`
+    );
   }
 }
 

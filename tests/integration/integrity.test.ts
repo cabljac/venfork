@@ -230,6 +230,26 @@ describe('managed commit left behind by a preserve removal', () => {
       'n edited\n'
     );
   });
+
+  test('preserve remove on a diverged origin warns that origin still carries the file', async () => {
+    await preserveCommand('add', ['tools/m.txt', 'tools/n.txt']);
+    await fx.commitOnOrigin({ 'tools/m.txt': 'm\n', 'tools/n.txt': 'n\n' });
+    await sync();
+    await fx.commitOnOrigin({ 'src/user.txt': 'user\n' });
+    const before = await fx.sha(fx.origin, 'main');
+
+    await preserveCommand('remove', ['tools/n.txt']);
+
+    expect(prompts.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "origin/main has diverged and its managed commit still carries 'tools/n.txt'"
+      )
+    );
+    expect(await fx.sha(fx.origin, 'main')).toBe(before);
+    expect((await readVenforkConfigFromRepo(fx.work))?.preserve).toEqual([
+      'tools/m.txt',
+    ]);
+  });
 });
 
 describe('missing venfork-config branch', () => {
