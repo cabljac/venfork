@@ -101,7 +101,7 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   • stage: read internal mirror issue, strip venfork:internal blocks,
     open the upstream counterpart, record linkage in venfork-config
   • pull: read upstream issue, open an internal triage issue on the mirror,
-    record linkage. No comment sync — the linkage is one-shot.`,
+    record linkage. No comment sync; the linkage is one-shot.`,
   ],
   [
     'workflows',

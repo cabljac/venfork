@@ -107,7 +107,7 @@ export async function runDoctorChecks(
       if (!config) {
         configProblem = 'venfork-config branch not found on origin';
         configFix =
-          'Re-run `venfork setup <upstream>` for this mirror; it is safe on existing repos and writes the venfork-config branch.';
+          'Re-run `venfork setup <upstream> <mirror-name>` from the parent directory of this clone; for existing repos it repairs the clone and pushes the venfork-config branch.';
       }
     } catch (err) {
       if (!(err instanceof ConfigError)) throw err;
