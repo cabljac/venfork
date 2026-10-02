@@ -5,6 +5,7 @@ import {
   StageLeakError,
   VenforkError,
 } from '../errors.js';
+import { parseRepoPath } from '../utils.js';
 import { SYNC_WORKFLOW_PATH, VENFORK_BOT_EMAIL } from './constants.js';
 import {
   canonicalText,
@@ -19,7 +20,8 @@ const EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391';
 /** Repo-relative path of the config file on the `venfork-config` branch. */
 const CONFIG_PATH = '.venfork/config.json';
 
-const CONFIG_SIGNATURE = '"upstreamUrl" and "publicForkUrl" keys';
+const CONFIG_SIGNATURE =
+  'a venfork config (an "upstreamUrl" key with "publicForkUrl", "mode": "no-public", "preserve", "schedule" or a link map)';
 
 /** Default for {@link CollectMirrorBlobsOptions.historyCap}. */
 const HISTORY_COMMIT_CAP = 2000;
@@ -68,13 +70,46 @@ function isUrlLike(value: unknown): boolean {
   return typeof value === 'string' && /[/:]/.test(value) && !/\s/.test(value);
 }
 
+/** Config keys, lowercased, that hold links between mirror and upstream work. */
+const LINK_MAP_KEYS = [
+  'shippedbranches',
+  'pulledprs',
+  'shippedissues',
+  'pulledissues',
+];
+
+/** Lowercased config keys only venfork writes, beside `publicForkUrl` and `mode`. */
+const VENFORK_ONLY_KEYS = [...LINK_MAP_KEYS, 'preserve', 'schedule'];
+
+/** Compares repo URLs by `owner/repo`, or by the URL itself when it is not GitHub. */
+function repoKey(url: string): string {
+  return (
+    parseRepoPath(url) ||
+    url
+      .trim()
+      .replace(/\.git\/?$/, '')
+      .replace(/\/$/, '')
+  ).toLowerCase();
+}
+
+function isNonEmpty(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  return (
+    typeof value === 'object' && value !== null && Object.keys(value).length > 0
+  );
+}
+
 /**
- * True for a JSON object shaped like a venfork `config.json`, whatever its
- * values: a `version` key, a URL-valued `upstreamUrl` and, when present, a
- * URL-valued `publicForkUrl`. Never true when self-reference is allowed.
+ * True for a JSON object shaped like a venfork `config.json`: a URL-valued
+ * `upstreamUrl` plus a URL-valued `publicForkUrl`, `"mode": "no-public"`
+ * or any of `preserve`, `schedule` and the link maps. When self-reference
+ * is allowed, only such an object that names one of `recordedUrls` or
+ * holds a non-empty link map.
  */
-function looksLikeVenforkConfig(text: string): boolean {
-  if (selfReferenceAllowed()) return false;
+function looksLikeVenforkConfig(
+  text: string,
+  recordedUrls: readonly string[]
+): boolean {
   let parsed: unknown;
   try {
     parsed = JSON.parse(canonicalText(text));
@@ -87,11 +122,20 @@ function looksLikeVenforkConfig(text: string): boolean {
   const fields = new Map(
     Object.entries(parsed).map(([key, value]) => [key.toLowerCase(), value])
   );
-  return (
-    fields.has('version') &&
-    isUrlLike(fields.get('upstreamurl')) &&
-    (!fields.has('publicforkurl') || isUrlLike(fields.get('publicforkurl')))
+  const upstreamUrl = fields.get('upstreamurl');
+  const publicForkUrl = fields.get('publicforkurl');
+  if (!isUrlLike(upstreamUrl)) return false;
+  const venforkShaped =
+    isUrlLike(publicForkUrl) ||
+    fields.get('mode') === 'no-public' ||
+    VENFORK_ONLY_KEYS.some((key) => fields.has(key));
+  if (!venforkShaped) return false;
+  if (!selfReferenceAllowed()) return true;
+  const recorded = new Set(recordedUrls.map(repoKey));
+  const named = [upstreamUrl, publicForkUrl].some(
+    (url) => typeof url === 'string' && recorded.has(repoKey(url))
   );
+  return named || LINK_MAP_KEYS.some((key) => isNonEmpty(fields.get(key)));
 }
 
 function parseTreeEntries(stdout: string): TreeBlob[] {
@@ -413,6 +457,12 @@ export interface StageGateInput {
   mirrorBlobs: ReadonlyMap<string, string>;
   /** Output of `mirrorDenyList`. */
   denyList: readonly string[];
+  /**
+   * This mirror's upstream and public fork URLs (from the config and the
+   * remotes). A config-shaped file naming one is refused even when
+   * self-reference is allowed.
+   */
+  recordedUrls: readonly string[];
   /** Rebuilt commit id to the branch commit it was cherry-picked from. */
   originalOf: ReadonlyMap<string, string>;
   /** Mirror checkout. */
@@ -578,7 +628,7 @@ export async function assertPublishableCommits(
         const textHit =
           text === null
             ? null
-            : looksLikeVenforkConfig(text)
+            : looksLikeVenforkConfig(text, input.recordedUrls)
               ? CONFIG_SIGNATURE
               : findDeniedText(text, locationTerms, { hostOnlyNames: true });
         hit = textHit ?? findTermInBytes(bytes, locationTerms);

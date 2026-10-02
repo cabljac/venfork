@@ -365,6 +365,7 @@ describe('file content needs a host before the bare mirror name', () => {
       preserve: [],
       mirrorBlobs: new Map(),
       denyList: NAME_TERMS,
+      recordedUrls: [],
       originalOf: new Map(),
       cwd: fx.work,
     });
@@ -400,16 +401,30 @@ describe('the config signature', () => {
     await expectShipped();
   });
 
-  test('is skipped when self-reference is allowed', async () => {
-    process.env.VENFORK_ALLOW_SELF_REFERENCE = '1';
+  test('a package-like JSON with only version and upstreamUrl ships', async () => {
     await featureFrom('upstream/main');
     await commitFile(
-      'fixtures/config.json',
-      '{ "version": "1", "upstreamUrl": "git@github.com:a/b.git", "publicForkUrl": "git@github.com:c/b.git" }\n',
+      'fixtures/repo.json',
+      '{ "version": "2.0.0", "upstreamUrl": "https://example.com/x" }\n',
       'test: fixture'
     );
 
     await expectShipped();
+  });
+
+  test.each([
+    ['mode no-public', '"mode": "no-public"'],
+    ['an empty preserve list', '"preserve": []'],
+    ['a schedule', '"schedule": { "enabled": false }'],
+  ])('upstreamUrl with %s is refused', async (_label, extra) => {
+    await featureFrom('upstream/main');
+    await commitFile(
+      'notes/c.json',
+      `{ "upstreamUrl": "git@github.com:a/b.git", ${extra} }\n`,
+      'docs: notes'
+    );
+
+    await expectRefused('notes/c.json', 'venfork config');
   });
 
   test('a config.json with other values is refused', async () => {
@@ -421,6 +436,68 @@ describe('the config signature', () => {
     );
 
     await expectRefused('notes/c.json');
+  });
+
+  describe('with self-reference allowed', () => {
+    const fixture = {
+      version: '1',
+      upstreamUrl: 'git@github.com:a/b.git',
+      publicForkUrl: 'git@github.com:c/b.git',
+    };
+
+    test('a config for another project ships', async () => {
+      process.env.VENFORK_ALLOW_SELF_REFERENCE = '1';
+      await featureFrom('upstream/main');
+      await commitFile(
+        'fixtures/config.json',
+        `${JSON.stringify(fixture)}\n`,
+        'test: fixture'
+      );
+
+      await expectShipped();
+    });
+
+    test('a config with a non-empty link map is refused', async () => {
+      process.env.VENFORK_ALLOW_SELF_REFERENCE = '1';
+      await featureFrom('upstream/main');
+      await commitFile(
+        'fixtures/config.json',
+        JSON.stringify({ ...fixture, pulledPrs: { 'pr-1': { prNumber: 1 } } }),
+        'test: fixture'
+      );
+
+      await expectRefused('fixtures/config.json', 'venfork config');
+    });
+
+    test('this mirror config re-serialised is refused', async () => {
+      const config = await fx.readRawConfig();
+      process.env.VENFORK_ALLOW_SELF_REFERENCE = '1';
+      await featureFrom('upstream/main');
+      await commitFile(
+        'notes/c.json',
+        JSON.stringify(config, null, 4),
+        'docs: c'
+      );
+
+      await expectRefused('notes/c.json', 'venfork config');
+    });
+
+    test('this mirror config with a shipped branch is refused', async () => {
+      const config = await fx.readRawConfig();
+      process.env.VENFORK_ALLOW_SELF_REFERENCE = '1';
+      await featureFrom('upstream/main');
+      await commitFile(
+        'notes/c.json',
+        JSON.stringify(
+          { ...config, shippedBranches: { 'client-secret': { prNumber: 1 } } },
+          null,
+          4
+        ),
+        'docs: c'
+      );
+
+      await expectRefused('notes/c.json', 'venfork config');
+    });
   });
 });
 describe('the preview lists every file the history publishes', () => {

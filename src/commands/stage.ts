@@ -222,6 +222,8 @@ export interface StagingPlan {
   preserve: string[];
   /** True when the head and base of the upstream PR live in the same repo (no-public mode). */
   noPublic: boolean;
+  /** Upstream and public fork URLs from the config and the remotes. */
+  recordedUrls: string[];
 }
 
 /**
@@ -331,6 +333,16 @@ async function planStaging(
     upstreamDefaultBranch,
     preserve: config?.preserve ?? [],
     noPublic,
+    recordedUrls: [
+      ...new Set(
+        [
+          config?.upstreamUrl,
+          config?.publicForkUrl,
+          upstreamUrl,
+          noPublic ? undefined : pushUrl,
+        ].filter((url): url is string => Boolean(url))
+      ),
+    ],
   };
 }
 
@@ -383,6 +395,7 @@ async function prepareStage(
     preserve: plan.preserve,
     mirrorBlobs,
     denyList,
+    recordedUrls: plan.recordedUrls,
     originalOf: rebuilt.originalOf,
     cwd,
   });
