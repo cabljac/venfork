@@ -96,7 +96,9 @@ The built files will be in the `dist/` directory.
 venfork/
 ├── src/
 │   ├── index.ts       # CLI entry point
-│   ├── commands.ts    # Command implementations
+│   ├── commands.ts    # Barrel re-exporting every command
+│   ├── commands/      # One file per command
+│   ├── shared/        # Helpers shared by several commands
 │   ├── git.ts         # Git/GitHub utilities
 │   ├── utils.ts       # Pure utility functions
 │   └── errors.ts      # Custom error types
