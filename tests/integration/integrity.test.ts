@@ -71,6 +71,9 @@ describe('preserve cannot capture venfork state', () => {
     await expect(preserveCommand('add', [WF])).rejects.toThrow(
       'process.exit(1)'
     );
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(`Invalid preserve path '${WF}'`)
+    );
     await scheduleCommand('set', '30 2 * * *');
 
     expect(await fx.fileAt(fx.origin, 'main', WF)).toContain(
