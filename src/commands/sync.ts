@@ -9,7 +9,12 @@ import {
 import { SyncDivergenceError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { checkDivergence } from '../shared/divergence.js';
-import { applyMirrorPlusOneCommit } from '../shared/mirror-commit.js';
+import {
+  pushBranchWithLease,
+  resolveCommit,
+  updateOriginTip,
+} from '../shared/mirror-commit.js';
+import { netFetch } from '../shared/net.js';
 
 /**
  * Returns the upstream PR number for `branch` if it's a pulled-in PR. First
@@ -107,7 +112,6 @@ export async function syncCommand(
   targetBranch?: string,
   options?: { cwd?: string; quiet?: boolean }
 ): Promise<void> {
-  const cwdOpt = options?.cwd ? { cwd: options.cwd } : {};
   const quiet = options?.quiet ?? false;
 
   if (!quiet) {
@@ -141,20 +145,26 @@ export async function syncCommand(
 
     // Step 1: Fetch from upstream
     s.start('Fetching from upstream');
-    await $(cwdOpt)`git fetch upstream`;
-    await $(cwdOpt)`git fetch origin`;
+    await netFetch('upstream', options?.cwd);
+    await netFetch('origin', options?.cwd);
     if (!noPublic) {
-      await $(cwdOpt)`git fetch public`;
+      await netFetch('public', options?.cwd);
     }
     s.stop('Fetched from all remotes');
 
     // Step 2: Detect default branch if not specified
     const defaultBranch =
       targetBranch || (await getDefaultBranch('upstream', options?.cwd));
-    const scheduleConfig = config?.schedule;
-    const enabledWorkflows = config?.enabledWorkflows ?? [];
-    const disabledWorkflows = config?.disabledWorkflows ?? [];
     const preserveList = config?.preserve ?? [];
+    const upstreamTip = await resolveCommit(
+      `upstream/${defaultBranch}`,
+      options?.cwd
+    );
+    if (!upstreamTip) {
+      throw new Error(
+        `upstream/${defaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
+      );
+    }
 
     // Step 3: Check for divergence
     s.start('Checking for divergent commits');
@@ -252,60 +262,41 @@ export async function syncCommand(
       );
     }
 
-    // Capture the previous mirror tip BEFORE the force-push so
-    // `applyMirrorPlusOneCommit` can read preserved files from it. After the
-    // push, `origin/<defaultBranch>` (locally and remotely) points at the
-    // upstream tree and the previous mirror state is no longer reachable
-    // through that ref.
-    const prevTipResult = await $({
-      ...cwdOpt,
-      reject: false,
-    })`git rev-parse --verify origin/${defaultBranch}`;
-    const previousMirrorTip =
-      prevTipResult.exitCode === 0 ? prevTipResult.stdout.trim() : '';
-
-    // Step 5: Push upstream default branch to origin (and public, in standard mode)
-    s.start(
-      noPublic
-        ? `Syncing ${defaultBranch} to origin`
-        : `Syncing ${defaultBranch} to origin and public`
+    // Read before anything is pushed: preserved files come from this tip, and
+    // it is the lease for the origin push.
+    const previousMirrorTip = await resolveCommit(
+      `origin/${defaultBranch}`,
+      options?.cwd
     );
 
-    await $(
-      cwdOpt
-    )`git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} --force-with-lease`;
+    s.start(`Syncing ${defaultBranch} to origin`);
+    const { pushed: originPushed } = await updateOriginTip({
+      config,
+      defaultBranch,
+      upstreamTip,
+      previousMirrorTip,
+      cwd: options?.cwd,
+    });
+    s.stop(
+      originPushed
+        ? `Updated origin/${defaultBranch}`
+        : `origin/${defaultBranch} already up to date`
+    );
+
     if (!noPublic) {
-      await $(
-        cwdOpt
-      )`git push public upstream/${defaultBranch}:refs/heads/${defaultBranch} --force-with-lease`;
-    }
-
-    s.stop(noPublic ? 'Synced to origin' : 'Synced to all remotes');
-
-    // Step 6: Enforce mirror "+1 commit" model. Runs when schedule is enabled
-    // (writes the managed sync workflow + filters upstream workflows) OR when
-    // preserve is non-empty (carries mirror-only files forward across sync).
-    const scheduleActive = Boolean(
-      scheduleConfig?.enabled && scheduleConfig.cron
-    );
-    if (scheduleActive || preserveList.length > 0) {
-      s.start('Re-applying mirror "+1 commit"');
-      await applyMirrorPlusOneCommit({
-        defaultBranch,
-        schedule:
-          scheduleActive && scheduleConfig
-            ? {
-                cron: scheduleConfig.cron,
-                mode: noPublic ? 'no-public' : 'standard',
-              }
-            : null,
-        enabledWorkflows,
-        disabledWorkflows,
-        preserve: preserveList,
-        previousMirrorTip,
+      s.start(`Syncing ${defaultBranch} to public`);
+      const publicPushed = await pushBranchWithLease({
+        remote: 'public',
+        branch: defaultBranch,
+        target: upstreamTip,
+        expected: await resolveCommit(`public/${defaultBranch}`, options?.cwd),
         cwd: options?.cwd,
       });
-      s.stop('Mirror "+1 commit" applied');
+      s.stop(
+        publicPushed
+          ? `Updated public/${defaultBranch}`
+          : `public/${defaultBranch} already up to date`
+      );
     }
 
     if (!quiet) {

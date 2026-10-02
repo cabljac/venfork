@@ -1,11 +1,17 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
-import { readVenforkConfigFromRepo, updateVenforkConfig } from '../config.js';
+import {
+  readVenforkConfigFromRepo,
+  updateVenforkConfig,
+  type VenforkConfigPatch,
+} from '../config.js';
+import { SyncDivergenceError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
-import { updateWorkflowOnOriginDefault } from '../shared/mirror-commit.js';
+import { checkDivergence } from '../shared/divergence.js';
+import { resolveCommit, updateOriginTip } from '../shared/mirror-commit.js';
+import { netFetch } from '../shared/net.js';
 import { parseRepoPath } from '../utils.js';
-import { generateSyncWorkflow } from '../workflow.js';
 
 function isValidCronField(field: string, min: number, max: number): boolean {
   if (field === '*') {
@@ -85,6 +91,56 @@ function isValidCronExpression(cron: string): boolean {
 }
 
 /**
+ * Applies a schedule config change and re-stamps origin/<defaultBranch> the
+ * same way sync does, so the default branch is upstream plus at most one
+ * deterministic managed commit. Refuses, before touching config, when
+ * origin carries user commits that the re-stamp would discard.
+ */
+async function applyScheduleChange(
+  repoDir: string,
+  defaultBranch: string,
+  patch: VenforkConfigPatch
+): Promise<void> {
+  await netFetch('upstream', repoDir);
+  await netFetch('origin', repoDir);
+  const current = await readVenforkConfigFromRepo(repoDir);
+  if (!current) {
+    throw new Error('venfork-config branch not found or invalid');
+  }
+  const upstreamTip = await resolveCommit(`upstream/${defaultBranch}`, repoDir);
+  if (!upstreamTip) {
+    throw new Error(
+      `upstream/${defaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
+    );
+  }
+  const previousMirrorTip = await resolveCommit(
+    `origin/${defaultBranch}`,
+    repoDir
+  );
+  const originDivergence = await checkDivergence({
+    remote: 'origin',
+    defaultBranch,
+    allowPreserved: true,
+    preserveAllowed: new Set(current.preserve ?? []),
+    cwd: repoDir,
+  });
+  if (originDivergence.count > 0) {
+    throw new SyncDivergenceError(defaultBranch, originDivergence, {
+      count: 0,
+      files: [],
+    });
+  }
+  const updated = await updateVenforkConfig(repoDir, patch);
+  await updateOriginTip({
+    config: updated,
+    defaultBranch,
+    upstreamTip,
+    previousMirrorTip,
+    cwd: repoDir,
+  });
+}
+
+/**
  * Schedule command: Configure automated sync via GitHub Actions workflow.
  */
 export async function scheduleCommand(
@@ -111,23 +167,11 @@ export async function scheduleCommand(
         process.exit(1);
       }
 
-      s.start('Updating schedule in venfork-config');
-      const updatedConfig = await updateVenforkConfig(repoDir, {
+      s.start('Updating schedule and the workflow on the default branch');
+      await applyScheduleChange(repoDir, defaultBranch, {
         schedule: { enabled: true, cron },
       });
-      s.stop('Schedule configuration updated');
-
-      const scheduleMode: 'standard' | 'no-public' =
-        updatedConfig.mode === 'no-public' ? 'no-public' : 'standard';
-
-      await $`git fetch origin`;
-      s.start('Updating workflow on default branch');
-      await updateWorkflowOnOriginDefault(
-        defaultBranch,
-        generateSyncWorkflow(cron, scheduleMode),
-        repoDir
-      );
-      s.stop('Workflow updated');
+      s.stop('Schedule and workflow updated');
 
       let mirrorPath = '<owner>/<mirror>';
       try {
@@ -149,23 +193,18 @@ export async function scheduleCommand(
     }
 
     if (action === 'disable') {
-      s.start('Disabling schedule in venfork-config');
+      s.start('Disabling schedule and removing the workflow');
       const currentConfig = await readVenforkConfigFromRepo(repoDir);
       if (!currentConfig) {
         throw new Error('venfork-config branch not found or invalid');
       }
-      await updateVenforkConfig(repoDir, {
+      await applyScheduleChange(repoDir, defaultBranch, {
         schedule: {
           enabled: false,
           cron: currentConfig.schedule?.cron || '0 * * * *',
         },
       });
-      s.stop('Schedule configuration updated');
-
-      await $`git fetch origin`;
-      s.start('Removing workflow from default branch');
-      await updateWorkflowOnOriginDefault(defaultBranch, null, repoDir);
-      s.stop('Workflow removed');
+      s.stop('Schedule disabled and workflow removed');
 
       p.outro(
         `✨ Scheduled sync disabled\n\nBranch: ${defaultBranch}\nWorkflow removed: ${SYNC_WORKFLOW_PATH}`

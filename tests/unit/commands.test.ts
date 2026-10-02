@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { PassThrough } from 'node:stream';
+import * as clack from '@clack/prompts';
 
 /**
  * Command tests with execution-based mocking
@@ -88,6 +89,15 @@ function getMockExecaResponse(command: string) {
   // Git info commands
   if (command.includes('git branch --show-current')) {
     return Promise.resolve({ exitCode: 0, stdout: 'main', stderr: '' });
+  }
+  if (command.includes('git rev-parse --verify upstream/')) {
+    return Promise.resolve({ exitCode: 0, stdout: 'upstream0tip', stderr: '' });
+  }
+  if (command.includes('git write-tree')) {
+    return Promise.resolve({ exitCode: 0, stdout: 'mirror0tree', stderr: '' });
+  }
+  if (command.includes(' commit-tree ')) {
+    return Promise.resolve({ exitCode: 0, stdout: 'managed0tip', stderr: '' });
   }
   const preserveSource = command.match(
     /^git --literal-pathspecs ls-tree (?!HEAD )\S+ -- (.+)$/
@@ -765,12 +775,12 @@ describe('syncCommand', () => {
 
     expect(
       pushCalls.some((cmd) =>
-        cmd.includes('git push origin upstream/main:refs/heads/main')
+        cmd.includes('git push origin upstream0tip:refs/heads/main')
       )
     ).toBe(true);
     expect(
       pushCalls.some((cmd) =>
-        cmd.includes('git push public upstream/main:refs/heads/main')
+        cmd.includes('git push public upstream0tip:refs/heads/main')
       )
     ).toBe(true);
   });
@@ -825,13 +835,15 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'commit --allow-empty -m chore: venfork-managed mirror commit'
+          'git -c i18n.commitEncoding=UTF-8 commit-tree --no-gpg-sign mirror0tree -p upstream0tip -m chore: venfork-managed mirror commit -m Venfork-Managed: 1'
         )
       )
     ).toBe(true);
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git push origin HEAD:main --force-with-lease')
+        cmd.includes(
+          'git push origin managed0tip:refs/heads/main --force-with-lease=refs/heads/main:'
+        )
       )
     ).toBe(true);
     expect(
@@ -907,7 +919,9 @@ describe('syncCommand', () => {
     // The deterministic commit + force-push happen.
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git push origin HEAD:main --force-with-lease')
+        cmd.includes(
+          'git push origin managed0tip:refs/heads/main --force-with-lease=refs/heads/main:'
+        )
       )
     ).toBe(true);
   });
@@ -982,7 +996,7 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some(
         (cmd) =>
-          cmd.includes('commit --allow-empty') &&
+          cmd.includes(' commit-tree ') &&
           cmd.includes('chore: venfork-managed mirror commit')
       )
     ).toBe(false);
@@ -1048,7 +1062,9 @@ describe('syncCommand', () => {
     ).toBe(true);
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git push origin HEAD:main --force-with-lease')
+        cmd.includes(
+          'git push origin managed0tip:refs/heads/main --force-with-lease=refs/heads/main:'
+        )
       )
     ).toBe(true);
   });
@@ -1098,7 +1114,7 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git push origin upstream/main:refs/heads/main --force-with-lease'
+          'git push origin upstream0tip:refs/heads/main --force-with-lease=refs/heads/main:'
         )
       )
     ).toBe(false);
@@ -1154,7 +1170,7 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git push origin upstream/main:refs/heads/main --force-with-lease'
+          'git push origin upstream0tip:refs/heads/main --force-with-lease=refs/heads/main:'
         )
       )
     ).toBe(true);
@@ -1209,11 +1225,11 @@ describe('syncCommand', () => {
       // Expected in mocked environment
     }
 
-    // Sync should NOT have aborted — the upstream-to-origin push happens.
+    // Sync should NOT have aborted: the managed commit is pushed to origin.
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git push origin upstream/main:refs/heads/main --force-with-lease'
+          'git push origin managed0tip:refs/heads/main --force-with-lease=refs/heads/main:aaaa1111bbbb2222cccc3333dddd4444eeee5555'
         )
       )
     ).toBe(true);
@@ -2349,8 +2365,11 @@ describe('scheduleCommand', () => {
       // Expected in mocked environment
     }
 
+    // With no schedule or preserve left, origin goes back to the upstream tip.
     expect(
-      execaCalls.some((cmd) => cmd.includes('git rm --quiet --ignore-unmatch'))
+      execaCalls.some((cmd) =>
+        cmd.includes('git push origin upstream0tip:refs/heads/main')
+      )
     ).toBe(true);
   });
 });
@@ -2850,7 +2869,7 @@ describe('syncCommand - error paths', () => {
     // Sync should have proceeded to the push step, not aborted.
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git push origin upstream/main:refs/heads/main')
+        cmd.includes('git push origin upstream0tip:refs/heads/main')
       )
     ).toBe(true);
   });
@@ -2878,7 +2897,7 @@ describe('syncCommand - error paths', () => {
     expect(process.exit).not.toHaveBeenCalled();
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git push origin upstream/main:refs/heads/main')
+        cmd.includes('git push origin upstream0tip:refs/heads/main')
       )
     ).toBe(false);
   });
@@ -2911,9 +2930,62 @@ describe('syncCommand - error paths', () => {
     expect(process.exit).not.toHaveBeenCalled();
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git push origin upstream/main:refs/heads/main')
+        cmd.includes('git push origin upstream0tip:refs/heads/main')
       )
     ).toBe(false);
+  });
+
+  test('treats a missing origin branch as a first sync', async () => {
+    mockResponses.set('git rev-parse --verify origin/main', {
+      exitCode: 128,
+      stdout: '',
+      stderr: 'fatal: Needed a single revision',
+    });
+
+    await syncCommand('main');
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git rev-list upstream/main..origin/main')
+      )
+    ).toBe(false);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git push origin upstream0tip:refs/heads/main --force-with-lease=refs/heads/main:'
+        )
+      )
+    ).toBe(true);
+  });
+
+  test('aborts when the divergence check itself fails', async () => {
+    mockResponses.set('git rev-list upstream/main..origin/main', () =>
+      Promise.reject(new Error('fatal: bad revision'))
+    );
+
+    await expect(syncCommand('main')).rejects.toThrow('process.exit called');
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
+  });
+
+  test('reports a missing upstream branch before checking divergence', async () => {
+    mockResponses.set('git rev-parse --verify upstream/main', {
+      exitCode: 128,
+      stdout: '',
+      stderr: 'fatal: Needed a single revision',
+    });
+    mockResponses.set('git rev-list upstream/main..', () =>
+      Promise.reject(
+        new Error("fatal: bad revision 'upstream/main..origin/main'")
+      )
+    );
+
+    await expect(syncCommand('main')).rejects.toThrow('process.exit called');
+
+    expect(clack.log.error).toHaveBeenLastCalledWith(
+      'upstream/main not found after fetch. Check the upstream remote and the default branch name.'
+    );
   });
 
   test('handles fetch errors', async () => {
@@ -3291,7 +3363,7 @@ describe('syncCommand - pulled PR branches', () => {
     // Should NOT run the default-branch divergence flow.
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git push origin upstream/main:refs/heads/main')
+        cmd.includes('git push origin upstream0tip:refs/heads/main')
       )
     ).toBe(false);
   });
