@@ -38,6 +38,11 @@ const originalProcessOn = process.on;
 const originalProcessOff = process.off;
 const originalProcessExit = process.exit;
 
+/** Renders an interpolated value the way execa splits it into argv. */
+function argText(value: unknown): string {
+  return Array.isArray(value) ? value.join(' ') : String(value);
+}
+
 // Mock execa BEFORE any imports
 mock.module('execa', () => ({
   // biome-ignore lint/suspicious/noExplicitAny: Mocking execa's complex overloaded types requires any
@@ -55,14 +60,14 @@ mock.module('execa', () => ({
       _options = stringsOrOptions;
       // biome-ignore lint/suspicious/noExplicitAny: Template literal values type
       return mock((strings: TemplateStringsArray, ...vals: any[]) => {
-        command = String.raw({ raw: strings }, ...vals);
+        command = String.raw({ raw: strings }, ...vals.map(argText));
         execaCalls.push(command);
         return getMockExecaResponse(command);
       });
     }
 
     // Called without options: $`command`
-    command = String.raw({ raw: stringsOrOptions }, ...values);
+    command = String.raw({ raw: stringsOrOptions }, ...values.map(argText));
     execaCalls.push(command);
     return getMockExecaResponse(command);
   }),
@@ -275,6 +280,30 @@ async function startSetupCommand(
 
   // Suppress unhandled rejection warnings
   promise.catch(() => {});
+}
+
+/** Gives origin, upstream and public different GitHub URLs; origin is private. */
+function useDistinctRemotes(): void {
+  mockResponses.set('git remote get-url origin', {
+    exitCode: 0,
+    stdout: 'git@github.com:acme/widget-private.git',
+    stderr: '',
+  });
+  mockResponses.set('git remote get-url upstream', {
+    exitCode: 0,
+    stdout: 'git@github.com:upstream-org/widget.git',
+    stderr: '',
+  });
+  mockResponses.set('git remote get-url public', {
+    exitCode: 0,
+    stdout: 'git@github.com:acme/widget.git',
+    stderr: '',
+  });
+  mockResponses.set('gh repo view acme/widget-private --json isPrivate', {
+    exitCode: 0,
+    stdout: 'true',
+    stderr: '',
+  });
 }
 
 /** Makes the staged branch appear to carry one venfork-managed commit. */
@@ -2986,6 +3015,72 @@ describe('syncCommand - error paths', () => {
     expect(clack.log.error).toHaveBeenLastCalledWith(
       'upstream/main not found after fetch. Check the upstream remote and the default branch name.'
     );
+  });
+
+  test('--report-issues opens the sync-blocked issue on the origin repo', async () => {
+    const savedRepo = process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REPOSITORY;
+    try {
+      useDistinctRemotes();
+      mockResponses.set('git rev-list upstream/main..origin/main', {
+        exitCode: 0,
+        stdout: 'abc123\n',
+        stderr: '',
+      });
+      mockResponses.set('gh issue list', {
+        exitCode: 0,
+        stdout: '[]',
+        stderr: '',
+      });
+
+      await expect(
+        syncCommand('main', { reportIssues: true })
+      ).rejects.toBeInstanceOf(SyncDivergenceError);
+
+      expect(
+        execaCalls.some((cmd) =>
+          cmd.startsWith(
+            'gh issue create --repo acme/widget-private --title Scheduled sync blocked: divergent commits on origin/main --label venfork-sync-blocked'
+          )
+        )
+      ).toBe(true);
+      expect(
+        execaCalls
+          .filter((cmd) => cmd.startsWith('gh '))
+          .every((cmd) => cmd.includes('acme/widget-private'))
+      ).toBe(true);
+    } finally {
+      if (savedRepo !== undefined) process.env.GITHUB_REPOSITORY = savedRepo;
+    }
+  });
+
+  test('--report-issues closes the sync-blocked issue after a successful sync', async () => {
+    const savedRepo = process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REPOSITORY;
+    try {
+      useDistinctRemotes();
+      mockResponses.set('gh issue list', {
+        exitCode: 0,
+        stdout: '[{"number":9}]',
+        stderr: '',
+      });
+
+      await syncCommand('main', { reportIssues: true });
+
+      expect(
+        execaCalls.some((cmd) =>
+          cmd.startsWith('gh issue close 9 --repo acme/widget-private')
+        )
+      ).toBe(true);
+    } finally {
+      if (savedRepo !== undefined) process.env.GITHUB_REPOSITORY = savedRepo;
+    }
+  });
+
+  test('without --report-issues sync never calls gh', async () => {
+    await syncCommand('main');
+
+    expect(execaCalls.some((cmd) => cmd.startsWith('gh '))).toBe(false);
   });
 
   test('handles fetch errors', async () => {

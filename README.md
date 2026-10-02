@@ -443,6 +443,12 @@ venfork schedule disable
 1. Stores schedule state (`enabled`, `cron`) in `.venfork/config.json` on `venfork-config`
 2. `set` and `disable` re-stamp the private mirror default branch the same way `venfork sync` does: upstream plus at most one managed commit, with `.github/workflows/venfork-sync.yml` added (`set`) or removed (`disable`). Like sync, they refuse when origin has commits that upstream does not have.
 
+**When a scheduled sync fails**
+
+The workflow runs `venfork sync --report-issues` with the job's `GITHUB_TOKEN` (the workflow asks for `issues: write`). If sync is blocked by divergent commits, it opens an issue on the mirror labelled `venfork-sync-blocked`, or refreshes the body of the open one, with the changed files and the exact `venfork preserve add ...` or rebase steps. A final `if: failure()` step covers every other failure (install errors, a missing token, timeouts) by opening the same labelled issue or commenting on it with the run URL. The next successful sync comments "Resolved by <run>" and closes the issue. If you close the issue by hand while the divergence is still there, the next blocked run opens a new one. Outside GitHub Actions, `--report-issues` only files the issue when gh confirms the mirror is a private repository.
+
+The workflow runs one sync at a time (`concurrency: venfork-sync`, queued, not cancelled) and stops a run after 30 minutes.
+
 **Pinned venfork version**
 
 The generated workflow installs exactly the venfork version that wrote it (`npm install -g venfork@<version>`). The runner therefore regenerates byte-identical YAML and the managed commit stays stable. To upgrade a mirror, install the new venfork locally and run `venfork sync` (or `venfork schedule set` again). That rewrites the workflow with the new pin in one managed-commit update. Check the installed version with `venfork --version`.

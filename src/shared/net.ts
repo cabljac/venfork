@@ -13,21 +13,25 @@ import { GIT_NET_TIMEOUT_MS, NET_ENV } from './constants.js';
  *   stream them (seed pushes).
  * @param opts.bufferOutput Pipe and buffer stdout/stderr and never reject, so
  *   the caller can read `exitCode`, `stdout`, `stderr` and `timedOut`.
+ * @param opts.input Fixed stdin content; stdin closes after it, so a prompt
+ *   still cannot wait for the user.
  */
 export function netExec(
   cwd?: string,
-  opts?: { captureOutput?: boolean; bufferOutput?: boolean }
+  opts?: { captureOutput?: boolean; bufferOutput?: boolean; input?: string }
 ) {
   const captureOutput = opts?.captureOutput === true;
   const bufferOutput = opts?.bufferOutput === true;
+  const stdin = opts?.input === undefined ? 'ignore' : 'pipe';
   return $({
     ...(cwd ? { cwd } : {}),
+    ...(opts?.input === undefined ? {} : { input: opts.input }),
     env: NET_ENV,
     timeout: GIT_NET_TIMEOUT_MS,
     stdio:
       captureOutput || bufferOutput
-        ? ['ignore', 'pipe', 'pipe']
-        : ['ignore', 'inherit', 'inherit'],
+        ? [stdin, 'pipe', 'pipe']
+        : [stdin, 'inherit', 'inherit'],
     ...(captureOutput ? { buffer: false } : {}),
     ...(bufferOutput ? { reject: false } : {}),
   });

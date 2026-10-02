@@ -24,6 +24,7 @@ import { parsePreserveCliArgs } from './preserve-args.js';
 import { parsePullRequestCliArgs } from './pull-request-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
 import { parseStageCliArgs } from './stage-args.js';
+import { parseSyncCliArgs } from './sync-args.js';
 import { VENFORK_VERSION } from './version.js';
 import { parseWorkflowsCliArgs } from './workflows-args.js';
 
@@ -73,9 +74,11 @@ async function main(): Promise<void> {
       });
       break;
     }
-    case 'sync':
-      await syncCommand(args[1]);
+    case 'sync': {
+      const parsed = parseSyncCliArgs(args.slice(1));
+      await syncCommand(parsed.branch, { reportIssues: parsed.reportIssues });
       break;
+    }
     case 'schedule':
       await scheduleCommand(args[1], args[2]);
       break;
