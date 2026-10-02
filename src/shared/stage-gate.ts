@@ -505,10 +505,13 @@ function findTermInBytes(
  *  - {@link VenforkError} when a file is too large to read.
  *
  * Deleting a preserved path is allowed: no content leaves.
+ *
+ * @returns Every path some commit adds, modifies or retypes, in first-seen
+ *   order, including paths a later commit deletes (history still holds them).
  */
 export async function assertPublishableCommits(
   input: StageGateInput
-): Promise<void> {
+): Promise<string[]> {
   const { branch, base, head, preserve, mirrorBlobs, denyList, cwd } = input;
   const list = await $({
     cwd,
@@ -517,6 +520,7 @@ export async function assertPublishableCommits(
   const upstreamBlobs = new Map<string, string | null>();
   const locationTerms = mirrorLocationTerms(denyList);
   const scanned = new Map<string, string | null>();
+  const publishedPaths = new Set<string>();
 
   for (const commit of commits) {
     const label = (input.originalOf.get(commit) ?? commit).slice(0, 12);
@@ -526,6 +530,7 @@ export async function assertPublishableCommits(
     for (const change of await treeChanges(commit, cwd)) {
       if (change.status === 'D') continue;
       published.push(change);
+      publishedPaths.add(change.path);
       if (isMirrorOnlyPath(change.path)) {
         leaks.push(change.path);
         continue;
@@ -618,4 +623,5 @@ export async function assertPublishableCommits(
       }
     }
   }
+  return [...publishedPaths];
 }

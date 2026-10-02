@@ -335,8 +335,10 @@ interface PreparedStage {
   subjects: string[];
   /** Output of `mirrorDenyList`, reused for the PR title and body. */
   denyList: string[];
-  /** Added, modified or retyped paths in `upstream/<default>..head`. */
+  /** Paths some commit in `upstream/<default>..head` adds, modifies or retypes. */
   files: string[];
+  /** Paths in `files` that are absent at `head` but still in its history. */
+  removedLater: string[];
   /** Commits whose message mentions an issue or PR number (`#N`). */
   issueRefCommits: number;
 }
@@ -368,7 +370,7 @@ async function prepareStage(
     cwd
   );
   for (const warning of warnings) p.log.warn(warning);
-  await assertPublishableCommits({
+  const files = await assertPublishableCommits({
     branch: plan.branch,
     base,
     head: rebuilt.head,
@@ -384,18 +386,29 @@ async function prepareStage(
   const messages = await $({
     cwd,
   })`git log --format=%B%x00 ${base}..${rebuilt.head}`;
-  const changed = await $({
-    cwd,
-  })`git diff --name-only -z --no-renames --diff-filter=AMT ${base} ${rebuilt.head}`;
+  const atHead =
+    files.length === 0
+      ? ''
+      : (
+          await $({
+            cwd,
+          })`git --literal-pathspecs ls-tree -r -z --name-only ${rebuilt.head} -- ${files}`
+        ).stdout;
+  const present = new Set(atHead.split('\0').filter(Boolean));
   return {
     head: rebuilt.head,
     subjects: log.stdout.split('\n').filter(Boolean),
     denyList,
-    files: changed.stdout.split('\0').filter(Boolean),
-    issueRefCommits: messages.stdout
-      .split('\0')
-      .filter((message) => /#\d+\b/.test(message)).length,
+    files,
+    removedLater: files.filter((file) => !present.has(file)),
+    issueRefCommits: messages.stdout.split('\0').filter(mentionsIssueNumber)
+      .length,
   };
+}
+
+/** True when `text` contains a `#N` issue or PR reference. */
+function mentionsIssueNumber(text: string): boolean {
+  return /#\d+\b/.test(text);
 }
 
 /**
@@ -656,12 +669,26 @@ export async function stageCommand(
       `  Commits (${prepared.subjects.length}), rebuilt on upstream/${plan.upstreamDefaultBranch}:`,
       ...prepared.subjects.map((subject) => `    - ${subject}`),
       '',
-      `  Files (${prepared.files.length}) added or changed:`,
-      ...prepared.files.map((file) => `    - ${file}`)
+      `  Files (${prepared.files.length}) published in history:`,
+      ...prepared.files.map((file) =>
+        prepared.removedLater.includes(file)
+          ? `    - ${file} (removed later in the branch, still in history)`
+          : `    - ${file}`
+      )
     );
     if (prepared.issueRefCommits > 0) {
       p.log.warn(
         `${prepared.issueRefCommits} commit message(s) reference issue/PR numbers that will resolve against upstream`
+      );
+    }
+    if (createPr && mentionsIssueNumber(prTitle)) {
+      p.log.warn(
+        'The upstream PR title references issue/PR numbers that will resolve against upstream'
+      );
+    }
+    if (createPr && mentionsIssueNumber(translatedBody)) {
+      p.log.warn(
+        'The upstream PR body references issue/PR numbers that will resolve against upstream'
       );
     }
     if (createPr) {

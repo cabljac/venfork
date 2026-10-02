@@ -323,7 +323,7 @@ venfork stage feature-auth --pr --base develop
    - has an author, committer or message that contains origin's URL, origin's `owner/name`, origin's repo name (when it has at least six characters and differs from upstream's) or the word `venfork` (this includes `<!-- venfork:internal -->` markers).
 
    Path matching ignores case. A preserve entry that is a directory (possible in an old config) covers every file under it. The branch name goes through the same term check before anything is fetched.
-4. Shows the target, the branch, every commit subject and every added or changed file that will be published, then asks for confirmation. When commit messages contain `#N`, it warns that those numbers will resolve against upstream.
+4. Shows the target, the branch, every commit subject and every file that any published commit adds or changes, then asks for confirmation. A file that a later commit deletes is listed as "removed later in the branch, still in history", because the public history still holds it. When commit messages, or with `--pr` the upstream PR title or body, contain `#N`, it warns that those numbers will resolve against upstream.
 5. Pushes the rebuilt head with `--force-with-lease` and `--no-follow-tags`, so no local tag goes with it.
 6. Provides a compare URL so you can open the PR yourself.
 

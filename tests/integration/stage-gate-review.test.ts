@@ -267,3 +267,24 @@ describe('the config signature', () => {
     await expectRefused('notes/c.json');
   });
 });
+describe('the preview lists every file the history publishes', () => {
+  test('a file added then deleted is listed as still in history', async () => {
+    await featureFrom('upstream/main');
+    await commitFile('notes/plan.md', 'client plan\n', 'wip: add');
+    await git('rm', '--quiet', 'notes/plan.md');
+    await git('commit', '--quiet', '-m', 'wip: remove');
+    await commitFile('src/a.txt', 'a\n', 'feat: a');
+
+    await expectShipped();
+
+    const notes = (prompts.note as unknown as { mock: { calls: unknown[][] } })
+      .mock.calls;
+    const details = String(notes.find((c) => c[1] === 'Staging Details')?.[0]);
+    expect(details).toContain('Files (2) published in history:');
+    expect(details).toContain(
+      '    - notes/plan.md (removed later in the branch, still in history)'
+    );
+    expect(details).toContain('    - src/a.txt');
+    expect(details).not.toContain('src/a.txt (removed');
+  });
+});
