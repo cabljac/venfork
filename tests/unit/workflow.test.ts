@@ -112,4 +112,23 @@ describe('workflow helpers', () => {
     expect(step).toContain('gh issue create');
     expect(step).toContain('gh issue comment');
   });
+
+  test('serializes runs and caps their duration', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *');
+    expect(workflow).toContain(
+      'concurrency:\n  group: venfork-sync\n  cancel-in-progress: false\n'
+    );
+    expect(workflow).toContain(
+      '  sync:\n    runs-on: ubuntu-latest\n    timeout-minutes: 30\n'
+    );
+  });
+
+  test('failure step creates the label only when it is missing', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *');
+    const step = workflow.slice(workflow.indexOf('- name: Report failed sync'));
+    expect(step).toContain(
+      'gh label list --repo "$REPO" --search venfork-sync-blocked --json name --jq \'.[].name\' | grep -qx venfork-sync-blocked'
+    );
+    expect(step).not.toContain('--force');
+  });
 });

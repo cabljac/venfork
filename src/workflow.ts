@@ -71,9 +71,14 @@ permissions:
   contents: write
   issues: write
 
+concurrency:
+  group: venfork-sync
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout mirror
         uses: actions/checkout@v4
@@ -111,7 +116,9 @@ ${remotesScript}
         run: |
           set -euo pipefail
           REPO="$GITHUB_REPOSITORY"
-          gh label create venfork-sync-blocked --repo "$REPO" --color B60205 --description "Scheduled venfork sync is blocked" --force
+          if ! gh label list --repo "$REPO" --search venfork-sync-blocked --json name --jq '.[].name' | grep -qx venfork-sync-blocked; then
+            gh label create venfork-sync-blocked --repo "$REPO" --color B60205 --description "Scheduled venfork sync is blocked"
+          fi
           NUMBER="$(gh issue list --repo "$REPO" --label venfork-sync-blocked --state open --json number --limit 1 --jq '.[0].number // empty')"
           if [ -z "$NUMBER" ]; then
             gh issue create --repo "$REPO" --label venfork-sync-blocked --title "Scheduled sync failed" --body "Scheduled venfork sync failed. See $RUN_URL"
