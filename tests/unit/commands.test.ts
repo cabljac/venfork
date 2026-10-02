@@ -1469,9 +1469,7 @@ describe('stageCommand', () => {
     expect(execaCalls.some((cmd) => cmd.includes(' worktree add '))).toBe(
       false
     );
-    expect(execaCalls.some((cmd) => cmd.includes(' cherry-pick '))).toBe(
-      false
-    );
+    expect(execaCalls.some((cmd) => cmd.includes(' cherry-pick '))).toBe(false);
   });
 
   test('refuses to push when managed-commit detection cannot see upstream', async () => {
@@ -1661,9 +1659,7 @@ describe('stageCommand', () => {
     expect(
       execaCalls.some((cmd) => cmd.includes(' worktree add --detach'))
     ).toBe(false);
-    expect(execaCalls.some((cmd) => cmd.includes(' cherry-pick '))).toBe(
-      false
-    );
+    expect(execaCalls.some((cmd) => cmd.includes(' cherry-pick '))).toBe(false);
   });
 
   test('aborts when merge commit inspection fails', async () => {
@@ -1700,9 +1696,7 @@ describe('stageCommand', () => {
     expect(
       execaCalls.some((cmd) => cmd.includes(' worktree add --detach'))
     ).toBe(false);
-    expect(execaCalls.some((cmd) => cmd.includes(' cherry-pick '))).toBe(
-      false
-    );
+    expect(execaCalls.some((cmd) => cmd.includes(' cherry-pick '))).toBe(false);
   });
 
   test('allows merge commits whose evil files are all under .github/workflows', async () => {
