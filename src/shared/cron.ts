@@ -6,6 +6,39 @@ const FIELD_RANGES = [
   { min: 0, max: 7 },
 ] as const;
 
+const MONTH_NAMES = [
+  'JAN',
+  'FEB',
+  'MAR',
+  'APR',
+  'MAY',
+  'JUN',
+  'JUL',
+  'AUG',
+  'SEP',
+  'OCT',
+  'NOV',
+  'DEC',
+];
+const WEEKDAY_NAMES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+/** Splits into 5 fields and replaces month and weekday names with numbers. */
+function splitCron(cron: string): string[] {
+  const fields = cron.trim().split(/\s+/);
+  const names: Record<number, { list: string[]; offset: number }> = {
+    3: { list: MONTH_NAMES, offset: 1 },
+    4: { list: WEEKDAY_NAMES, offset: 0 },
+  };
+  return fields.map((field, index) => {
+    const table = names[index];
+    if (!table) return field;
+    return field.replace(/[A-Za-z]+/g, (name) => {
+      const at = table.list.indexOf(name.toUpperCase());
+      return at === -1 ? name : String(at + table.offset);
+    });
+  });
+}
+
 function isValidCronField(field: string, min: number, max: number): boolean {
   if (field === '*') {
     return true;
@@ -66,10 +99,10 @@ function isValidCronField(field: string, min: number, max: number): boolean {
 /**
  * True when `cron` is a 5-field cron expression GitHub Actions accepts:
  * numbers, ranges, lists and `/step` (step >= 1) within each field's
- * bounds. Macros such as `@hourly` are rejected.
+ * bounds, plus three-letter month and weekday names. Macros such as `@hourly` are rejected.
  */
 export function isValidCronExpression(cron: string): boolean {
-  const parts = cron.trim().split(/\s+/);
+  const parts = splitCron(cron);
   if (parts.length !== 5) {
     return false;
   }
@@ -110,7 +143,7 @@ export function cronMaxIntervalMinutes(
   from: Date = new Date()
 ): number | null {
   if (!isValidCronExpression(cron)) return null;
-  const fields = cron.trim().split(/\s+/);
+  const fields = splitCron(cron);
   const [minutes, hours, days, months, weekdays] = fields.map((field, i) =>
     expandField(field, FIELD_RANGES[i].min, FIELD_RANGES[i].max)
   );
