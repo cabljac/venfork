@@ -2,12 +2,11 @@ import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { readVenforkConfigFromRepo, updateVenforkConfig } from '../config.js';
 import {
-  AuthenticationError,
   BranchNotFoundError,
   GitError,
   RemoteNotFoundError,
 } from '../errors.js';
-import { checkGhAuth, getDefaultBranch } from '../git.js';
+import { getDefaultBranch } from '../git.js';
 import { confirmOrAutoYes } from '../shared/confirm.js';
 import { WORKFLOWS_DIR } from '../shared/constants.js';
 import { isManagedCommit } from '../shared/managed-commit.js';
@@ -489,11 +488,6 @@ export async function stageCommand(
   options: StageOptions = {}
 ): Promise<void> {
   p.intro('📤 Venfork Stage');
-
-  const isAuthenticated = await checkGhAuth();
-  if (!isAuthenticated) {
-    throw new AuthenticationError();
-  }
 
   if (!branch) {
     p.log.error('Branch name is required');

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parsePullRequestCliArgs } from '../src/pull-request-args.js';
+import { parsePullRequestCliArgs } from '../../src/pull-request-args.js';
 
 describe('parsePullRequestCliArgs', () => {
   test('parses positional pr number', () => {

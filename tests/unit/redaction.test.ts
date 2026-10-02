@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { stripInternalBlocks } from '../src/commands.js';
+import { stripInternalBlocks } from '../../src/commands.js';
 
 describe('stripInternalBlocks', () => {
   test('removes a single block', () => {

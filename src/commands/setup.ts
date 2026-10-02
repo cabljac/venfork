@@ -5,13 +5,7 @@ import path from 'node:path';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { createConfigBranch } from '../config.js';
-import { AuthenticationError } from '../errors.js';
-import {
-  checkGhAuth,
-  getGitHubUsername,
-  ghRepoExists,
-  ghRepoIsForkOf,
-} from '../git.js';
+import { getGitHubUsername, ghRepoExists, ghRepoIsForkOf } from '../git.js';
 import { pathExists } from '../shared/fs.js';
 import { netExec, runNetOp, seedMirrorInChunks } from '../shared/net.js';
 import {
@@ -75,12 +69,6 @@ export async function setupCommand(
     );
   }
   p.intro('🔧 Venfork Setup');
-
-  // Check GitHub CLI authentication
-  const isAuthenticated = await checkGhAuth();
-  if (!isAuthenticated) {
-    throw new AuthenticationError();
-  }
 
   // Get configuration from user or use provided arguments
   let finalUpstreamUrl = upstreamUrl;

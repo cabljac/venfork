@@ -19,9 +19,11 @@ Runtime is **Bun** (primary); Node.js 18+ is a supported target.
 ```bash
 bun install              # deps
 bun run dev <cmd> ...    # run CLI from src/ (e.g. bun run dev setup --help)
-bun test                 # all tests
-bun test tests/utils.test.ts          # single file
-bun test -t "parses owner"            # single test by name
+bun run test             # unit, then integration (two bun processes)
+bun run test:unit        # tests/unit: string-mocked execa, fast
+bun run test:integration # tests/integration: real git against local bare repos
+bun test ./tests/unit/utils.test.ts      # single file
+bun test -t "parses owner" ./tests/unit  # single test by name
 bun run test:watch                    # watch
 bun run test:coverage                 # coverage
 bun run check            # biome check + autofix (lint + format) — run before commit
@@ -30,6 +32,8 @@ bun run build            # bundle to dist/ (node target)
 bun run compile          # standalone binary -> dist/venfork
 bun link                 # symlink global `venfork` for manual testing
 ```
+
+Unit tests mock `execa` with `mock.module`, which leaks across files in one bun process, so integration tests run in a separate invocation. Integration tests build a throwaway upstream/origin/public layout of local bare repos with `tests/harness/mirror-fixture.ts` and run commands against it with only `@clack/prompts` mocked.
 
 E2E tests hit real GitHub and are gated behind env flags (slow, opt-in):
 

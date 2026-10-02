@@ -233,7 +233,8 @@ import {
   statusCommand,
   syncCommand,
   workflowsCommand,
-} from '../src/commands.js';
+} from '../../src/commands.js';
+import { SyncDivergenceError } from '../../src/errors.js';
 
 /**
  * Helper function to start setupCommand and wait for async operations to progress
@@ -372,21 +373,18 @@ describe('setupCommand - execution tests', () => {
     // Verify we have multiple commands
     expect(execaCalls.length).toBeGreaterThanOrEqual(4);
 
-    // Step 0: Auth check happens first
-    expect(execaCalls[0]).toContain('gh auth status');
-
     // Step 1: Get GitHub username
-    expect(execaCalls[1]).toContain('gh api user');
+    expect(execaCalls[0]).toContain('gh api user');
 
     // Step 2: Fork the upstream repo
-    expect(execaCalls[2]).toContain('gh repo fork');
-    expect(execaCalls[2]).toContain('test/repo');
-    expect(execaCalls[2]).toContain('--clone=false');
+    expect(execaCalls[1]).toContain('gh repo fork');
+    expect(execaCalls[1]).toContain('test/repo');
+    expect(execaCalls[1]).toContain('--clone=false');
 
     // Step 3: Create private vendor repo
-    expect(execaCalls[3]).toContain('gh repo create');
-    expect(execaCalls[3]).toContain('test-vendor');
-    expect(execaCalls[3]).toContain('--private');
+    expect(execaCalls[2]).toContain('gh repo create');
+    expect(execaCalls[2]).toContain('test-vendor');
+    expect(execaCalls[2]).toContain('--private');
 
     // Verify we called multiple git/gh commands
     const ghCommands = execaCalls.filter((cmd) => cmd.includes('gh '));
@@ -1114,15 +1112,9 @@ describe('syncCommand', () => {
       { exitCode: 0, stdout: 'agent.yml\n', stderr: '' }
     );
 
-    let aborted = false;
-    try {
-      await syncCommand('main');
-    } catch {
-      aborted = true;
-    }
-
-    // Sync must abort (process.exit(1) is mocked to throw).
-    expect(aborted).toBe(true);
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
     // The upstream→origin force-push must NOT have happened.
     expect(
       execaCalls.some((cmd) =>
@@ -2734,22 +2726,6 @@ describe('setupCommand - VENFORK_ORG environment variable', () => {
 });
 
 describe('setupCommand - error paths', () => {
-  test('throws AuthenticationError when not authenticated', async () => {
-    // Mock checkGhAuth to return false
-    mockResponses.set('gh auth status', {
-      exitCode: 1,
-      stdout: '',
-      stderr: 'not authenticated',
-    });
-
-    try {
-      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
-      expect(true).toBe(false); // Should not reach here
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
-  });
-
   test('handles error in catch block', async () => {
     // Make fork command fail instead of hanging
     mockResponses.set('gh repo fork', (_command: string) =>
@@ -2768,20 +2744,6 @@ describe('setupCommand - error paths', () => {
 });
 
 describe('cloneCommand', () => {
-  test('checks authentication first', async () => {
-    try {
-      await cloneCommand('git@github.com:acme/project-private.git');
-    } catch {
-      // Expected
-    }
-
-    // Should check authentication
-    const authCalls = execaCalls.filter((cmd) =>
-      cmd.includes('gh auth status')
-    );
-    expect(authCalls.length).toBeGreaterThan(0);
-  });
-
   test('clones the vendor repository', async () => {
     try {
       await cloneCommand('git@github.com:acme/project-private.git');
@@ -2843,21 +2805,6 @@ describe('cloneCommand', () => {
 });
 
 describe('cloneCommand - error paths', () => {
-  test('throws AuthenticationError when not authenticated', async () => {
-    mockResponses.set('gh auth status', {
-      exitCode: 1,
-      stdout: '',
-      stderr: 'not authenticated',
-    });
-
-    try {
-      await cloneCommand('git@github.com:acme/project-private.git');
-      expect(true).toBe(false); // Should not reach here
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
-  });
-
   test('requires vendor repo URL', async () => {
     try {
       await cloneCommand();
@@ -2878,13 +2825,10 @@ describe('syncCommand - error paths', () => {
       stderr: '',
     });
 
-    try {
-      await syncCommand('main');
-    } catch {
-      // Expected - process.exit(1) throws in tests
-    }
-
-    expect(process.exit).toHaveBeenCalledWith(1);
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+    expect(process.exit).not.toHaveBeenCalled();
   });
 
   test('aborts when public has divergent commits', async () => {
@@ -2895,13 +2839,10 @@ describe('syncCommand - error paths', () => {
       stderr: '',
     });
 
-    try {
-      await syncCommand('main');
-    } catch {
-      // Expected - process.exit(1) throws in tests
-    }
-
-    expect(process.exit).toHaveBeenCalledWith(1);
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+    expect(process.exit).not.toHaveBeenCalled();
   });
 
   test('treats commits touching only .github/workflows files as managed', async () => {
@@ -2956,13 +2897,10 @@ describe('syncCommand - error paths', () => {
       stderr: '',
     });
 
-    try {
-      await syncCommand('main');
-    } catch {
-      // Expected - process.exit(1) throws in tests
-    }
-
-    expect(process.exit).toHaveBeenCalledWith(1);
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+    expect(process.exit).not.toHaveBeenCalled();
     expect(
       execaCalls.some((cmd) =>
         cmd.includes('git push origin upstream/main:refs/heads/main')
@@ -2992,13 +2930,10 @@ describe('syncCommand - error paths', () => {
       stderr: '',
     });
 
-    try {
-      await syncCommand('main');
-    } catch {
-      // Expected - process.exit(1) throws in tests
-    }
-
-    expect(process.exit).toHaveBeenCalledWith(1);
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+    expect(process.exit).not.toHaveBeenCalled();
     expect(
       execaCalls.some((cmd) =>
         cmd.includes('git push origin upstream/main:refs/heads/main')
@@ -3036,21 +2971,6 @@ describe('syncCommand - error paths', () => {
 });
 
 describe('stageCommand - error paths', () => {
-  test('throws AuthenticationError when not authenticated', async () => {
-    mockResponses.set('gh auth status', {
-      exitCode: 1,
-      stdout: '',
-      stderr: 'not authenticated',
-    });
-
-    try {
-      await stageCommand('feature-branch');
-      expect(true).toBe(false); // Should not reach here
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
-  });
-
   test('throws BranchNotFoundError when branch does not exist', async () => {
     mockResponses.set('git rev-parse --verify', {
       exitCode: 1,

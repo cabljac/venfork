@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseStageCliArgs } from '../src/stage-args.js';
+import { parseStageCliArgs } from '../../src/stage-args.js';
 
 describe('parseStageCliArgs', () => {
   test('parses positional branch with no flags', () => {

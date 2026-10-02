@@ -33,8 +33,11 @@ jobs:
       - name: Run linter
         run: bun run lint
 
-      - name: Run tests
-        run: bun test
+      - name: Run unit tests
+        run: bun run test:unit
+
+      - name: Run integration tests
+        run: bun run test:integration
 
       - name: Build
         run: bun run build

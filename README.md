@@ -689,7 +689,7 @@ bun install
 # Run tests
 npm test
 # or
-bun test
+bun run test
 
 # Run tests in watch mode
 npm run test:watch
@@ -746,7 +746,7 @@ Key steps:
 1. Fork and clone the repository
 2. Install dependencies: `bun install`
 3. Make your changes and add tests
-4. Run checks: `bun run check && bun test`
+4. Run checks: `bun run check && bun run test`
 5. Use a conventional commit prefix (`feat:`, `fix:`, etc.) — release-please picks up the version bump from your commit message
 6. Submit a pull request
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parsePreserveCliArgs } from '../src/preserve-args.js';
+import { parsePreserveCliArgs } from '../../src/preserve-args.js';
 
 describe('parsePreserveCliArgs', () => {
   test('defaults to list', () => {

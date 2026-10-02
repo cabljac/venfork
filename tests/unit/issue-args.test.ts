@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseIssueCliArgs } from '../src/issue-args.js';
+import { parseIssueCliArgs } from '../../src/issue-args.js';
 
 describe('parseIssueCliArgs', () => {
   test('parses `stage <n>`', () => {

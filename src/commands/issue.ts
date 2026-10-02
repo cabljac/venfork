@@ -1,8 +1,7 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
-import { AuthenticationError, RemoteNotFoundError } from '../errors.js';
-import { checkGhAuth } from '../git.js';
+import { RemoteNotFoundError } from '../errors.js';
 import { confirmOrAutoYes } from '../shared/confirm.js';
 import { translateInternalBody } from '../shared/redaction.js';
 import { findMirrorRepoPath } from '../shared/repo.js';
@@ -125,11 +124,6 @@ export async function issueCommand(
   options: { title?: string } = {}
 ): Promise<void> {
   p.intro('🐛 Venfork Issue');
-
-  const isAuthenticated = await checkGhAuth();
-  if (!isAuthenticated) {
-    throw new AuthenticationError();
-  }
 
   if (!action || !target) {
     p.log.error(

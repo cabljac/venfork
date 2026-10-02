@@ -1,8 +1,7 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
-import { AuthenticationError, RemoteNotFoundError } from '../errors.js';
-import { checkGhAuth } from '../git.js';
+import { RemoteNotFoundError } from '../errors.js';
 import { parseRepoPath } from '../utils.js';
 
 export interface PullRequestOptions {
@@ -85,11 +84,6 @@ export async function pullRequestCommand(
   options: PullRequestOptions = {}
 ): Promise<void> {
   p.intro('🔀 Venfork Pull Request');
-
-  const isAuthenticated = await checkGhAuth();
-  if (!isAuthenticated) {
-    throw new AuthenticationError();
-  }
 
   if (!pr) {
     p.log.error('PR number or URL is required');

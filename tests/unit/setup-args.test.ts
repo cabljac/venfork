@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { parseSetupCliArgs } from '../src/setup-args.js';
+import { parseSetupCliArgs } from '../../src/setup-args.js';
 
 describe('parseSetupCliArgs', () => {
   afterEach(() => {

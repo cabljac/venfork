@@ -15,6 +15,7 @@ import {
   syncCommand,
   workflowsCommand,
 } from './commands.js';
+import { ensureGhAuth } from './git.js';
 import { parseIssueCliArgs } from './issue-args.js';
 import { parsePreserveCliArgs } from './preserve-args.js';
 import { parsePullRequestCliArgs } from './pull-request-args.js';
@@ -42,6 +43,7 @@ async function main(): Promise<void> {
   switch (command) {
     case 'setup': {
       const parsed = parseSetupCliArgs(args.slice(1));
+      await ensureGhAuth();
       await setupCommand(
         parsed.upstreamUrl,
         parsed.privateMirrorName,
@@ -53,6 +55,7 @@ async function main(): Promise<void> {
     }
     case 'clone': {
       const parsed = parseCloneCliArgs(args.slice(1));
+      await ensureGhAuth();
       await cloneCommand(parsed.vendorRepoUrl, {
         noPublic: parsed.noPublic,
         upstreamUrl: parsed.upstreamUrl,
@@ -67,6 +70,9 @@ async function main(): Promise<void> {
       break;
     case 'stage': {
       const parsed = parseStageCliArgs(args.slice(1));
+      if (parsed.createPr || parsed.draft) {
+        await ensureGhAuth();
+      }
       await stageCommand(parsed.branch, {
         createPr: parsed.createPr,
         draft: parsed.draft,
@@ -92,6 +98,7 @@ async function main(): Promise<void> {
     }
     case 'pull-request': {
       const parsed = parsePullRequestCliArgs(args.slice(1));
+      await ensureGhAuth();
       await pullRequestCommand(parsed.pr, {
         branchName: parsed.branchName,
         push: parsed.push,
@@ -100,6 +107,7 @@ async function main(): Promise<void> {
     }
     case 'issue': {
       const parsed = parseIssueCliArgs(args.slice(1));
+      await ensureGhAuth();
       await issueCommand(parsed.action, parsed.target, {
         title: parsed.title,
       });

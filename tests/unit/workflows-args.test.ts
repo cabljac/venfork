@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseWorkflowsCliArgs } from '../src/workflows-args.js';
+import { parseWorkflowsCliArgs } from '../../src/workflows-args.js';
 
 describe('parseWorkflowsCliArgs', () => {
   test('defaults to status', () => {

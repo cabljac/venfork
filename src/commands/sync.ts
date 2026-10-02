@@ -6,6 +6,7 @@ import {
   updateVenforkConfig,
   type VenforkConfig,
 } from '../config.js';
+import { SyncDivergenceError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { checkDivergence } from '../shared/divergence.js';
 import { applyMirrorPlusOneCommit } from '../shared/mirror-commit.js';
@@ -244,10 +245,11 @@ export async function syncCommand(
       p.log.warn('Divergent commits detected:');
       p.note(sections.join('\n\n'), '⚠️  Warning');
 
-      if (!quiet) {
-        p.outro('❌ Sync aborted to prevent data loss');
-      }
-      process.exit(1);
+      throw new SyncDivergenceError(
+        defaultBranch,
+        originDivergence,
+        publicDivergence
+      );
     }
 
     // Capture the previous mirror tip BEFORE the force-push so
@@ -314,6 +316,9 @@ export async function syncCommand(
       );
     }
   } catch (error) {
+    if (error instanceof SyncDivergenceError) {
+      throw error;
+    }
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     if (!quiet) {

@@ -5,7 +5,7 @@ import {
   parseOwner,
   parseRepoName,
   parseRepoPath,
-} from '../src/utils';
+} from '../../src/utils';
 
 describe('normalizeGitHubRepoInput', () => {
   test('converts owner/repo to SSH URL with .git', () => {
