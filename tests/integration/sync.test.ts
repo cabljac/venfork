@@ -150,4 +150,26 @@ describe('sync with the managed commit', () => {
       '100755'
     );
   });
+
+  test('a glob preserve entry is dropped and never reverts an upstream change', async () => {
+    await updateVenforkConfig(fx.work, { preserve: ['src/file-*.txt'] });
+    await sync();
+    await fx.commitOnUpstream({ 'src/file-1.txt': 'upstream new\n' });
+
+    await sync();
+
+    expect(await fx.fileAt(fx.origin, 'main', 'src/file-1.txt')).toBe(
+      'upstream new\n'
+    );
+  });
+
+  test('a pathspec-magic preserve entry is dropped and never rolls the tree back', async () => {
+    await updateVenforkConfig(fx.work, { preserve: [':!nothing'] });
+    await sync();
+    const upstreamTip = await fx.commitOnUpstream({ 'src/added.txt': 'x\n' });
+
+    await sync();
+
+    expect(await fx.sha(fx.origin, 'main')).toBe(upstreamTip);
+  });
 });

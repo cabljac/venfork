@@ -53,7 +53,7 @@ export async function preserveCommand(
       const cleaned = normalizePreservePath(candidate);
       if (!cleaned) {
         throw new Error(
-          `Invalid preserve path '${candidate}': must be a clean relative path (no leading '/' or '-', no '..' / '.' / empty segments, no backslashes, NUL bytes, Windows drive prefixes, or whitespace).`
+          `Invalid preserve path '${candidate}': must be a clean relative path (no leading '/' or '-', no '..' / '.' / empty segments, no backslashes, NUL bytes, Windows drive prefixes, whitespace, glob characters (* ? [ ]) or leading ':').`
         );
       }
       validated.push(cleaned);

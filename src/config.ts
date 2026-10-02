@@ -88,6 +88,8 @@ export interface VenforkConfig {
    *   - no `..`, `.`, or empty path segments
    *   - no backslashes, NUL bytes, Windows drive prefixes (e.g. `C:`)
    *   - no whitespace anywhere in the path
+   *   - no glob characters (`*`, `?`, `[`, `]`) and no leading `:` (git
+   *     pathspec magic); entries are single files, never patterns
    *
    * Whitespace is forbidden so the divergence-error hint
    * (`venfork preserve add <path>`) stays copy/paste-safe without quoting.
@@ -353,7 +355,8 @@ function normalizePulledIssue(value: unknown): PulledIssue | null {
 /**
  * Validates a single `preserve` entry. Rejects (returns null) anything that
  * isn't a clean repo-relative path: empty/whitespace-only, NUL bytes,
- * leading `/`, backslashes, Windows drive prefixes, leading `-`, or
+ * leading `/`, backslashes, Windows drive prefixes, leading `-`, glob
+ * characters (`*`, `?`, `[`, `]`), a leading `:` (pathspec magic), or
  * `..` / `.` / empty segments. Whitespace anywhere in the value is rejected
  * too — preserve paths surface verbatim in the divergence-error hint
  * (`venfork preserve add <path>`), so disallowing whitespace keeps that
@@ -367,7 +370,7 @@ function normalizePulledIssue(value: unknown): PulledIssue | null {
  *
  * IMPORTANT: if you change the rejection rules below, also update:
  *   - the JSDoc on `VenforkConfig.preserve` (above)
- *   - the user-facing error message in `preserveCommand` (src/commands.ts)
+ *   - the user-facing error message in `preserveCommand` (src/commands/preserve.ts)
  * All three must stay in sync — users see the JSDoc when editing config by
  * hand, and the error message when running `venfork preserve add`.
  */
@@ -381,6 +384,8 @@ export function normalizePreservePath(value: unknown): string | null {
   if (trimmed.startsWith('-')) return null;
   if (trimmed.includes('\\')) return null;
   if (/^[A-Za-z]:/.test(trimmed)) return null;
+  if (trimmed.startsWith(':')) return null;
+  if (/[*?[\]]/.test(trimmed)) return null;
   const segments = trimmed.split('/');
   for (const seg of segments) {
     if (seg === '' || seg === '.' || seg === '..') {
