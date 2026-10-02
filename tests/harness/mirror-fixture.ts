@@ -64,7 +64,8 @@ const FIXTURE_EPOCH = 1_700_000_000;
  * Builds a fresh {@link MirrorFixture} in a temp directory.
  *
  * Git is isolated from the developer's own config (no signing, hooks or
- * templates) through `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM`. Fixture
+ * templates) through `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM`, and
+ * `HOME` points at an empty directory inside the fixture. Fixture
  * commits use pinned, increasing dates so their SHAs are reproducible. The
  * commands under test run with the real clock unless a test pins
  * `GIT_COMMITTER_DATE` itself.
@@ -75,15 +76,19 @@ export async function createMirrorFixture(
   const mode = options.mode ?? 'standard';
   const defaultBranch = options.defaultBranch ?? 'main';
   const root = await mkdtemp(path.join(os.tmpdir(), 'venfork-fixture-'));
-  const envKeys = [
-    'GIT_CONFIG_GLOBAL',
-    'GIT_CONFIG_NOSYSTEM',
+  const clearedKeys = [
     'GIT_AUTHOR_NAME',
     'GIT_AUTHOR_EMAIL',
     'GIT_COMMITTER_NAME',
     'GIT_COMMITTER_EMAIL',
     'GIT_AUTHOR_DATE',
     'GIT_COMMITTER_DATE',
+  ] as const;
+  const envKeys = [
+    'HOME',
+    'GIT_CONFIG_GLOBAL',
+    'GIT_CONFIG_NOSYSTEM',
+    ...clearedKeys,
   ] as const;
   const savedEnv = new Map<string, string | undefined>(
     envKeys.map((key) => [key, process.env[key]])
@@ -105,9 +110,12 @@ export async function createMirrorFixture(
       '',
     ].join('\n')
   );
+  const home = path.join(root, 'home');
+  await mkdir(home);
+  process.env.HOME = home;
   process.env.GIT_CONFIG_GLOBAL = globalConfig;
   process.env.GIT_CONFIG_NOSYSTEM = '1';
-  for (const key of envKeys.slice(2)) {
+  for (const key of clearedKeys) {
     delete process.env[key];
   }
 
