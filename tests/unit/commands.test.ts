@@ -1349,7 +1349,7 @@ describe('stageCommand', () => {
     expect(
       execaCalls.some(
         (cmd) =>
-          cmd.includes('git worktree add --detach') &&
+          cmd.includes(' worktree add --detach') &&
           cmd.includes('upstream/main')
       )
     ).toBe(true);
@@ -1415,7 +1415,7 @@ describe('stageCommand', () => {
     }
 
     const pickCalls = execaCalls.filter((cmd) =>
-      cmd.includes('git cherry-pick --allow-empty')
+      cmd.includes(' cherry-pick --allow-empty')
     );
     expect(pickCalls.some((cmd) => cmd.includes('feat222'))).toBe(true);
     expect(pickCalls.some((cmd) => cmd.includes('mgd111'))).toBe(false);
@@ -1466,10 +1466,10 @@ describe('stageCommand', () => {
     expect(
       execaCalls.some((cmd) => /git push public feature-branch(\s|$)/.test(cmd))
     ).toBe(true);
-    expect(execaCalls.some((cmd) => cmd.includes('git worktree add'))).toBe(
+    expect(execaCalls.some((cmd) => cmd.includes(' worktree add '))).toBe(
       false
     );
-    expect(execaCalls.some((cmd) => cmd.includes('git cherry-pick'))).toBe(
+    expect(execaCalls.some((cmd) => cmd.includes(' cherry-pick '))).toBe(
       false
     );
   });
@@ -1571,7 +1571,7 @@ describe('stageCommand', () => {
     }
 
     const pickCalls = execaCalls.filter((cmd) =>
-      cmd.includes('git cherry-pick --allow-empty')
+      cmd.includes(' cherry-pick --allow-empty')
     );
     expect(pickCalls.some((cmd) => cmd.includes('feat111'))).toBe(true);
     expect(pickCalls.some((cmd) => cmd.includes('feat333'))).toBe(true);
@@ -1622,7 +1622,7 @@ describe('stageCommand', () => {
     }
 
     const pickCalls = execaCalls.filter((cmd) =>
-      cmd.includes('git cherry-pick --allow-empty')
+      cmd.includes(' cherry-pick --allow-empty')
     );
     expect(pickCalls.some((cmd) => cmd.includes('userci1'))).toBe(true);
   });
@@ -1659,9 +1659,9 @@ describe('stageCommand', () => {
     expect(process.exit).toHaveBeenCalledWith(1);
     // Guard must run before the worktree is created, so no cherry-picks happen.
     expect(
-      execaCalls.some((cmd) => cmd.includes('git worktree add --detach'))
+      execaCalls.some((cmd) => cmd.includes(' worktree add --detach'))
     ).toBe(false);
-    expect(execaCalls.some((cmd) => cmd.includes('git cherry-pick'))).toBe(
+    expect(execaCalls.some((cmd) => cmd.includes(' cherry-pick '))).toBe(
       false
     );
   });
@@ -1698,9 +1698,9 @@ describe('stageCommand', () => {
 
     expect(process.exit).toHaveBeenCalledWith(1);
     expect(
-      execaCalls.some((cmd) => cmd.includes('git worktree add --detach'))
+      execaCalls.some((cmd) => cmd.includes(' worktree add --detach'))
     ).toBe(false);
-    expect(execaCalls.some((cmd) => cmd.includes('git cherry-pick'))).toBe(
+    expect(execaCalls.some((cmd) => cmd.includes(' cherry-pick '))).toBe(
       false
     );
   });
@@ -1758,7 +1758,7 @@ describe('stageCommand', () => {
     // Stage should proceed past the guard and into the cherry-pick loop.
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git cherry-pick --allow-empty feat111')
+        cmd.includes(' cherry-pick --allow-empty feat111')
       )
     ).toBe(true);
   });
@@ -1817,7 +1817,7 @@ describe('stageCommand', () => {
       )
     ).toBe(true);
     const pickCalls = execaCalls.filter((cmd) =>
-      cmd.includes('git cherry-pick --allow-empty')
+      cmd.includes(' cherry-pick --allow-empty')
     );
     expect(pickCalls.some((cmd) => cmd.includes('feat111'))).toBe(true);
     expect(pickCalls.some((cmd) => cmd.includes('feat222'))).toBe(true);

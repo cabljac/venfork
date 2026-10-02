@@ -124,7 +124,7 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
     repoDir,
     `upstream/${defaultBranch}`,
     'venfork-stage-',
-    async (tempDir) => {
+    async (tempDir, hooksDir) => {
       // Skip merge commits: `git cherry-pick` on a merge fails without
       // `-m <parent>`, and merges are commonly used on venfork feature branches
       // to pull `origin/<default>` back in after a sync rewrite. `--no-merges`
@@ -155,7 +155,7 @@ async function buildPublicStageHeadWithoutWorkflowCommit(
         const pickResult = await $({
           cwd: tempDir,
           reject: false,
-        })`git cherry-pick --allow-empty ${commit}`;
+        })`git -c core.hooksPath=${hooksDir} cherry-pick --allow-empty ${commit}`;
         if (pickResult.exitCode !== 0) {
           await $({
             cwd: tempDir,
