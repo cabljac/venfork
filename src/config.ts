@@ -242,10 +242,10 @@ async function writeConfigBranch(
     const push = expectedSha
       ? await netExec(tempDir, {
           bufferOutput: true,
-        })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH} --force-with-lease=${CONFIG_BRANCH}:${expectedSha}`
+        })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH} --force-with-lease=${CONFIG_BRANCH}:${expectedSha} --no-follow-tags`
       : await netExec(tempDir, {
           bufferOutput: true,
-        })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH}`;
+        })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH} --no-follow-tags`;
     if (push.exitCode !== 0) {
       throw new GitError(
         `git push ${CONFIG_BRANCH} failed: ${netFailureReason(push)}`,

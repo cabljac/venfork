@@ -831,6 +831,16 @@ describe('syncCommand', () => {
     ).toBe(true);
   });
 
+  test('never follows tags when pushing the mirror and the public fork', async () => {
+    await syncCommand('main');
+
+    const pushCalls = execaCalls.filter((cmd) => cmd.includes('git push'));
+    expect(pushCalls.length).toBeGreaterThan(0);
+    expect(pushCalls.every((cmd) => cmd.endsWith(' --no-follow-tags'))).toBe(
+      true
+    );
+  });
+
   test('uses default branch when not specified', async () => {
     try {
       await syncCommand();
@@ -3626,7 +3636,7 @@ describe('syncCommand - pulled PR branches', () => {
     }
 
     expect(execaCalls).toContain(
-      'git push origin newsha:refs/heads/upstream-pr/7 --force-with-lease=refs/heads/upstream-pr/7:mirrorsha'
+      'git push origin newsha:refs/heads/upstream-pr/7 --force-with-lease=refs/heads/upstream-pr/7:mirrorsha --no-follow-tags'
     );
   });
 

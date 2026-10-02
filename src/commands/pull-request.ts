@@ -155,7 +155,7 @@ export async function pullRequestCommand(
       const pushResult = await $({
         cwd: repoDir,
         reject: false,
-      })`git push origin ${localBranch}`;
+      })`git push origin ${localBranch} --no-follow-tags`;
       if (pushResult.exitCode !== 0) {
         s.stop('Push failed');
         p.log.warn(
