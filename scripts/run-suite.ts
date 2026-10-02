@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
 const suite = process.argv[2];
@@ -11,13 +11,14 @@ const root = path.resolve(import.meta.dir, '..');
 const reports = path.join(root, '.test-reports');
 mkdirSync(reports, { recursive: true });
 const report = path.join(reports, `${suite}.xml`);
-const startedAt = Date.now();
+rmSync(report, { force: true });
 
-const run = (args: string[]) =>
+// exitCode is null when the child dies from a signal
+const run = (args: string[]): number =>
   Bun.spawnSync([process.execPath, ...args], {
     cwd: root,
     stdio: ['inherit', 'inherit', 'inherit'],
-  }).exitCode;
+  }).exitCode ?? 1;
 
 const tests = run([
   'run',
@@ -25,11 +26,5 @@ const tests = run([
   '--reporter=junit',
   `--reporter-outfile=${report}`,
 ]);
-const gate = run([
-  path.join(root, 'scripts', 'test-count.ts'),
-  suite,
-  report,
-  '--since',
-  String(startedAt),
-]);
+const gate = run([path.join(root, 'scripts', 'test-count.ts'), suite, report]);
 process.exit(tests !== 0 ? tests : gate);

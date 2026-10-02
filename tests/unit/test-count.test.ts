@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -8,8 +8,14 @@ import {
   executedTestCount,
 } from '../../scripts/test-count';
 
-const xml = (tests: number, skipped: number) =>
-  `<?xml version="1.0"?>\n<testsuites name="bun test" tests="${tests}" assertions="1" failures="0" skipped="${skipped}">\n  <testsuite name="a" tests="${tests}" skipped="${skipped}"></testsuite>\n</testsuites>`;
+const xml = (tests: number, skipped: number) => {
+  const cases = Array.from({ length: tests }, (_, i) =>
+    i < skipped
+      ? `    <testcase name="t${i}"><skipped /></testcase>`
+      : `    <testcase name="t${i}" />`
+  ).join('\n');
+  return `<?xml version="1.0"?>\n<testsuites name="bun test" tests="${tests}" assertions="1" failures="0" skipped="${skipped}">\n  <testsuite name="a" tests="${tests}" skipped="${skipped}">\n${cases}\n  </testsuite>\n</testsuites>\n`;
+};
 
 describe('executedTestCount', () => {
   test('subtracts skipped tests from the root total', () => {
@@ -17,8 +23,32 @@ describe('executedTestCount', () => {
   });
 
   test('throws when the report has no root totals', () => {
-    expect(() => executedTestCount('<testsuites></testsuites>')).toThrow(
+    expect(() => executedTestCount('<testsuites></testsuites>\n')).toThrow(
       'no <testsuites tests=...>'
+    );
+  });
+});
+
+describe('truncated reports', () => {
+  test('a report cut off after the totals header fails as truncated', () => {
+    const header = xml(5, 0).split('\n').slice(0, 2).join('\n');
+    expect(() => executedTestCount(header)).toThrow('report truncated');
+    expect(checkTestCount('unit', header, { unit: 5 })).toContain(
+      'report truncated'
+    );
+  });
+
+  test('a report cut off mid-suite fails as truncated', () => {
+    const cut = xml(5, 0).split('\n').slice(0, 4).join('\n');
+    expect(checkTestCount('unit', cut, { unit: 5 })).toContain(
+      'report truncated'
+    );
+  });
+
+  test('a report whose testcase elements disagree with the totals fails as truncated', () => {
+    const lying = xml(5, 0).replace('    <testcase name="t4" />\n', '');
+    expect(checkTestCount('unit', lying, { unit: 5 })).toContain(
+      'report truncated'
     );
   });
 });
@@ -50,31 +80,34 @@ describe('checkTestCount', () => {
 describe('checkReportFile', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'venfork-count-'));
   const report = path.join(dir, 'unit.xml');
-  const startedAt = 1_700_000_000_000;
 
   test('fails with "suite did not finish" when the report is missing', () => {
     expect(
-      checkReportFile('unit', path.join(dir, 'missing.xml'), { unit: 5 }, 0)
+      checkReportFile('unit', path.join(dir, 'missing.xml'), { unit: 5 })
     ).toContain('unit suite did not finish');
   });
 
-  test('fails with "suite did not finish" when the report predates the run', () => {
+  test('passes for a report with the expected count', () => {
     writeFileSync(report, xml(5, 0));
-    const old = new Date(startedAt - 60_000);
-    utimesSync(report, old, old);
-    expect(checkReportFile('unit', report, { unit: 5 }, startedAt)).toContain(
-      'unit suite did not finish'
-    );
-  });
-
-  test('passes for a fresh report with the expected count', () => {
-    writeFileSync(report, xml(5, 0));
-    const fresh = new Date(startedAt + 1000);
-    utimesSync(report, fresh, fresh);
-    expect(checkReportFile('unit', report, { unit: 5 }, startedAt)).toBeNull();
+    expect(checkReportFile('unit', report, { unit: 5 })).toBeNull();
   });
 
   afterAll(() => {
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('test-count CLI', () => {
+  const run = (...args: string[]) =>
+    Bun.spawnSync([process.execPath, 'scripts/test-count.ts', ...args], {
+      cwd: path.resolve(import.meta.dir, '..', '..'),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+  test('rejects the retired --since flag with exit 2', () => {
+    const result = run('unit', 'whatever.xml', '--since', 'abc');
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr.toString()).toContain('usage');
   });
 });
