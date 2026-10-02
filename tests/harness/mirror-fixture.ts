@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { $ } from 'execa';
 import { createConfigBranch } from '../../src/config.js';
+import { isolateGitEnv } from './env.js';
 
 /** Which remotes the fixture wires up, matching venfork's `mode`. */
 export type FixtureMode = 'standard' | 'no-public';
@@ -63,9 +64,11 @@ const FIXTURE_EPOCH = 1_700_000_000;
 /**
  * Builds a fresh {@link MirrorFixture} in a temp directory.
  *
- * Git is isolated from the developer's own config (no signing, hooks or
- * templates) through `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM`, and
- * `HOME` points at an empty directory inside the fixture. Fixture
+ * Git is isolated from the developer's environment: every `GIT_*`
+ * variable, HOME, XDG_CONFIG_HOME and the GitHub tokens are hidden (see
+ * {@link isolateGitEnv}), `GIT_CONFIG_GLOBAL` points at a fixture config
+ * and `HOME` at an empty fixture directory. Call `cleanup()` to restore
+ * them; nested fixtures must be cleaned up in reverse order. Fixture
  * commits use pinned, increasing dates so their SHAs are reproducible. The
  * commands under test run with the real clock unless a test pins
  * `GIT_COMMITTER_DATE` itself.
@@ -76,25 +79,8 @@ export async function createMirrorFixture(
   const mode = options.mode ?? 'standard';
   const defaultBranch = options.defaultBranch ?? 'main';
   const root = await mkdtemp(path.join(os.tmpdir(), 'venfork-fixture-'));
-  const clearedKeys = [
-    'GIT_AUTHOR_NAME',
-    'GIT_AUTHOR_EMAIL',
-    'GIT_COMMITTER_NAME',
-    'GIT_COMMITTER_EMAIL',
-    'GIT_AUTHOR_DATE',
-    'GIT_COMMITTER_DATE',
-  ] as const;
-  const envKeys = [
-    'HOME',
-    'GIT_CONFIG_GLOBAL',
-    'GIT_CONFIG_NOSYSTEM',
-    ...clearedKeys,
-  ] as const;
-  const savedEnv = new Map<string, string | undefined>(
-    envKeys.map((key) => [key, process.env[key]])
-  );
-
   const globalConfig = path.join(root, 'gitconfig');
+  const home = path.join(root, 'home');
   await writeFile(
     globalConfig,
     [
@@ -110,155 +96,153 @@ export async function createMirrorFixture(
       '',
     ].join('\n')
   );
-  const home = path.join(root, 'home');
   await mkdir(home);
-  process.env.HOME = home;
-  process.env.GIT_CONFIG_GLOBAL = globalConfig;
-  process.env.GIT_CONFIG_NOSYSTEM = '1';
-  for (const key of clearedKeys) {
-    delete process.env[key];
-  }
+  const restoreEnv = isolateGitEnv({
+    HOME: home,
+    GIT_CONFIG_GLOBAL: globalConfig,
+    GIT_CONFIG_NOSYSTEM: '1',
+  });
 
-  let tick = 0;
-  const pinnedEnv = (): Record<string, string> => {
-    tick += 1;
-    const date = `@${FIXTURE_EPOCH + tick * 60} +0000`;
-    return { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date };
-  };
+  try {
+    let tick = 0;
+    const pinnedEnv = (): Record<string, string> => {
+      tick += 1;
+      const date = `@${FIXTURE_EPOCH + tick * 60} +0000`;
+      return { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date };
+    };
 
-  const git = async (cwd: string, ...args: string[]): Promise<string> => {
-    const result = await $({ cwd })`git ${args}`;
-    return result.stdout.trim();
-  };
+    const git = async (cwd: string, ...args: string[]): Promise<string> => {
+      const result = await $({ cwd })`git ${args}`;
+      return result.stdout.trim();
+    };
 
-  const commitFiles = async (
-    cwd: string,
-    files: FileMap,
-    message: string
-  ): Promise<string> => {
-    for (const [filePath, spec] of Object.entries(files)) {
-      const full = path.join(cwd, filePath);
-      await mkdir(path.dirname(full), { recursive: true });
-      await writeFile(full, typeof spec === 'string' ? spec : spec.content);
-      await git(cwd, 'add', '--', filePath);
-      if (typeof spec !== 'string') {
-        await git(cwd, 'update-index', '--chmod=+x', '--', filePath);
-      }
-    }
-    await $({ cwd, env: pinnedEnv() })`git commit --quiet -m ${message}`;
-    return git(cwd, 'rev-parse', 'HEAD');
-  };
-
-  const initBare = async (name: string): Promise<string> => {
-    const dir = path.join(root, `${name}.git`);
-    await $`git init --quiet --bare -b ${defaultBranch} ${dir}`;
-    await git(dir, 'config', 'core.logAllRefUpdates', 'true');
-    return dir;
-  };
-
-  const upstream = await initBare('upstream');
-  const origin = await initBare('origin');
-  const publicFork = mode === 'standard' ? await initBare('public') : null;
-
-  const upstreamDev = path.join(root, 'upstream-dev');
-  await $`git clone --quiet ${upstream} ${upstreamDev}`;
-  const seedCount = Math.max(1, options.upstreamCommits ?? 2);
-  for (let i = 1; i <= seedCount; i++) {
-    await commitFiles(
-      upstreamDev,
-      { [`src/file-${i}.txt`]: `upstream content ${i}\n` },
-      `feat: upstream commit ${i}`
-    );
-  }
-  await git(upstreamDev, 'push', '--quiet', 'origin', defaultBranch);
-
-  await git(upstreamDev, 'push', '--quiet', origin, defaultBranch);
-  if (publicFork) {
-    await git(upstreamDev, 'push', '--quiet', publicFork, defaultBranch);
-  }
-
-  const work = path.join(root, 'work');
-  await $`git clone --quiet ${origin} ${work}`;
-  if (publicFork) {
-    await git(work, 'remote', 'add', 'public', publicFork);
-  }
-  await git(work, 'remote', 'add', 'upstream', upstream);
-  await git(work, 'remote', 'set-url', '--push', 'upstream', 'DISABLE');
-  await git(work, 'fetch', '--quiet', 'upstream');
-  if (publicFork) {
-    await git(work, 'fetch', '--quiet', 'public');
-  }
-  await createConfigBranch(work, publicFork, upstream, mode);
-
-  const originDev = path.join(root, 'origin-dev');
-  await $`git clone --quiet ${origin} ${originDev}`;
-
-  const fixture: MirrorFixture = {
-    root,
-    mode,
-    defaultBranch,
-    upstream,
-    origin,
-    publicFork,
-    work,
-    git,
-    async commitOnUpstream(files, message = 'feat: upstream change') {
-      await git(upstreamDev, 'pull', '--quiet', '--ff-only');
-      const sha = await commitFiles(upstreamDev, files, message);
-      await git(upstreamDev, 'push', '--quiet', 'origin', defaultBranch);
-      return sha;
-    },
-    async commitOnOrigin(files, message = 'chore: mirror-only change') {
-      await git(originDev, 'fetch', '--quiet', 'origin');
-      await git(originDev, 'checkout', '--quiet', defaultBranch);
-      await git(
-        originDev,
-        'reset',
-        '--quiet',
-        '--hard',
-        `origin/${defaultBranch}`
-      );
-      const sha = await commitFiles(originDev, files, message);
-      await git(originDev, 'push', '--quiet', 'origin', defaultBranch);
-      return sha;
-    },
-    sha(repo, ref) {
-      return git(repo, 'rev-parse', '--verify', `${ref}^{commit}`);
-    },
-    async subjects(repo, ref, range) {
-      const out = await git(repo, 'log', '--format=%s', range ?? ref);
-      return out ? out.split('\n') : [];
-    },
-    async pushCount(repo, ref) {
-      const result = await $({
-        cwd: repo,
-        reject: false,
-      })`git reflog show --format=%H ${ref}`;
-      if (result.exitCode !== 0) return 0;
-      return result.stdout.split('\n').filter(Boolean).length;
-    },
-    async fileAt(repo, ref, filePath) {
-      const result = await $({
-        cwd: repo,
-        reject: false,
-        stripFinalNewline: false,
-      })`git show ${`${ref}:${filePath}`}`;
-      return result.exitCode === 0 ? result.stdout : null;
-    },
-    async modeAt(repo, ref, filePath) {
-      const out = await git(repo, 'ls-tree', ref, '--', filePath);
-      return out.match(/^(\d+) /)?.[1] ?? null;
-    },
-    async cleanup() {
-      for (const [key, value] of savedEnv) {
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
+    const commitFiles = async (
+      cwd: string,
+      files: FileMap,
+      message: string
+    ): Promise<string> => {
+      for (const [filePath, spec] of Object.entries(files)) {
+        const full = path.join(cwd, filePath);
+        await mkdir(path.dirname(full), { recursive: true });
+        await writeFile(full, typeof spec === 'string' ? spec : spec.content);
+        await git(cwd, 'add', '--', filePath);
+        if (typeof spec !== 'string') {
+          await git(cwd, 'update-index', '--chmod=+x', '--', filePath);
         }
       }
-      await rm(root, { recursive: true, force: true });
-    },
-  };
-  return fixture;
+      await $({ cwd, env: pinnedEnv() })`git commit --quiet -m ${message}`;
+      return git(cwd, 'rev-parse', 'HEAD');
+    };
+
+    const initBare = async (name: string): Promise<string> => {
+      const dir = path.join(root, `${name}.git`);
+      await $`git init --quiet --bare -b ${defaultBranch} ${dir}`;
+      await git(dir, 'config', 'core.logAllRefUpdates', 'true');
+      return dir;
+    };
+
+    const upstream = await initBare('upstream');
+    const origin = await initBare('origin');
+    const publicFork = mode === 'standard' ? await initBare('public') : null;
+
+    const upstreamDev = path.join(root, 'upstream-dev');
+    await $`git clone --quiet ${upstream} ${upstreamDev}`;
+    const seedCount = Math.max(1, options.upstreamCommits ?? 2);
+    for (let i = 1; i <= seedCount; i++) {
+      await commitFiles(
+        upstreamDev,
+        { [`src/file-${i}.txt`]: `upstream content ${i}\n` },
+        `feat: upstream commit ${i}`
+      );
+    }
+    await git(upstreamDev, 'push', '--quiet', 'origin', defaultBranch);
+
+    await git(upstreamDev, 'push', '--quiet', origin, defaultBranch);
+    if (publicFork) {
+      await git(upstreamDev, 'push', '--quiet', publicFork, defaultBranch);
+    }
+
+    const work = path.join(root, 'work');
+    await $`git clone --quiet ${origin} ${work}`;
+    if (publicFork) {
+      await git(work, 'remote', 'add', 'public', publicFork);
+    }
+    await git(work, 'remote', 'add', 'upstream', upstream);
+    await git(work, 'remote', 'set-url', '--push', 'upstream', 'DISABLE');
+    await git(work, 'fetch', '--quiet', 'upstream');
+    if (publicFork) {
+      await git(work, 'fetch', '--quiet', 'public');
+    }
+    await createConfigBranch(work, publicFork, upstream, mode);
+
+    const originDev = path.join(root, 'origin-dev');
+    await $`git clone --quiet ${origin} ${originDev}`;
+
+    const fixture: MirrorFixture = {
+      root,
+      mode,
+      defaultBranch,
+      upstream,
+      origin,
+      publicFork,
+      work,
+      git,
+      async commitOnUpstream(files, message = 'feat: upstream change') {
+        await git(upstreamDev, 'pull', '--quiet', '--ff-only');
+        const sha = await commitFiles(upstreamDev, files, message);
+        await git(upstreamDev, 'push', '--quiet', 'origin', defaultBranch);
+        return sha;
+      },
+      async commitOnOrigin(files, message = 'chore: mirror-only change') {
+        await git(originDev, 'fetch', '--quiet', 'origin');
+        await git(originDev, 'checkout', '--quiet', defaultBranch);
+        await git(
+          originDev,
+          'reset',
+          '--quiet',
+          '--hard',
+          `origin/${defaultBranch}`
+        );
+        const sha = await commitFiles(originDev, files, message);
+        await git(originDev, 'push', '--quiet', 'origin', defaultBranch);
+        return sha;
+      },
+      sha(repo, ref) {
+        return git(repo, 'rev-parse', '--verify', `${ref}^{commit}`);
+      },
+      async subjects(repo, ref, range) {
+        const out = await git(repo, 'log', '--format=%s', range ?? ref);
+        return out ? out.split('\n') : [];
+      },
+      async pushCount(repo, ref) {
+        const result = await $({
+          cwd: repo,
+          reject: false,
+        })`git reflog show --format=%H ${ref}`;
+        if (result.exitCode !== 0) return 0;
+        return result.stdout.split('\n').filter(Boolean).length;
+      },
+      async fileAt(repo, ref, filePath) {
+        const result = await $({
+          cwd: repo,
+          reject: false,
+          stripFinalNewline: false,
+        })`git show ${`${ref}:${filePath}`}`;
+        return result.exitCode === 0 ? result.stdout : null;
+      },
+      async modeAt(repo, ref, filePath) {
+        const out = await git(repo, 'ls-tree', ref, '--', filePath);
+        return out.match(/^(\d+) /)?.[1] ?? null;
+      },
+      async cleanup() {
+        restoreEnv();
+        await rm(root, { recursive: true, force: true });
+      },
+    };
+    return fixture;
+  } catch (err) {
+    restoreEnv();
+    await rm(root, { recursive: true, force: true });
+    throw err;
+  }
 }

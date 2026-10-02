@@ -15,16 +15,19 @@ import {
 } from '../harness/mirror-fixture.js';
 
 let fx: MirrorFixture;
+let active: MirrorFixture | undefined;
 const originalCwd = process.cwd();
 
 beforeEach(async () => {
   fx = await createMirrorFixture();
+  active = fx;
   process.chdir(fx.work);
 });
 
 afterEach(async () => {
   process.chdir(originalCwd);
-  await fx.cleanup();
+  await active?.cleanup();
+  active = undefined;
 });
 
 describe('schedule against real repos', () => {

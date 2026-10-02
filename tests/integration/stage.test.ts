@@ -16,11 +16,13 @@ import {
 const CALLER = '.github/workflows/caller.yml';
 
 let fx: MirrorFixture;
+let active: MirrorFixture | undefined;
 const originalCwd = process.cwd();
 const originalExit = process.exit;
 
 beforeEach(async () => {
   fx = await createMirrorFixture();
+  active = fx;
   process.exit = mock((code?: number) => {
     throw new Error(`process.exit(${code})`);
   }) as typeof process.exit;
@@ -30,7 +32,8 @@ beforeEach(async () => {
 afterEach(async () => {
   process.exit = originalExit;
   process.chdir(originalCwd);
-  await fx.cleanup();
+  await active?.cleanup();
+  active = undefined;
 });
 
 async function cutFeatureBranch(base: string): Promise<string> {
