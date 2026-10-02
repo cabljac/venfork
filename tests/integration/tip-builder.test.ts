@@ -6,12 +6,13 @@ import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
-import { preserveCommand, syncCommand } from '../../src/commands.js';
+import { syncCommand } from '../../src/commands.js';
 import { updateVenforkConfig } from '../../src/config.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
+import { seedPreserve } from '../harness/preserve.js';
 
 let fx: MirrorFixture;
 let active: MirrorFixture | undefined;
@@ -141,7 +142,7 @@ describe('workflow filtering by exact name', () => {
 
 describe('preserved paths read from trees', () => {
   test('a dangling upstream symlink at a preserved path wins', async () => {
-    await preserveCommand('add', ['tools/cfg']);
+    await seedPreserve(fx, ['tools/cfg']);
     await fx.commitOnOrigin({ 'tools/cfg': 'mirror cfg\n' });
     await sync();
     await commitRawOnUpstream(async (dir) => {
@@ -158,7 +159,7 @@ describe('preserved paths read from trees', () => {
   });
 
   test('a case-only clash keeps both the preserved and the upstream file', async () => {
-    await preserveCommand('add', ['docs/Notes.md']);
+    await seedPreserve(fx, ['docs/Notes.md']);
     await fx.commitOnOrigin({ 'docs/Notes.md': 'mirror notes\n' });
     await sync();
     await fx.commitOnUpstream({ 'docs/notes.md': 'upstream notes\n' });
@@ -174,7 +175,7 @@ describe('preserved paths read from trees', () => {
   });
 
   test('a non-ASCII preserved path is carried across sync', async () => {
-    await preserveCommand('add', ['docs/café.md']);
+    await seedPreserve(fx, ['docs/café.md']);
     await fx.commitOnOrigin({ 'docs/café.md': 'mirror\n' });
 
     await sync();
@@ -185,7 +186,7 @@ describe('preserved paths read from trees', () => {
   });
 
   test('when upstream deletes a path it had taken over, sync restores the last upstream version', async () => {
-    await preserveCommand('add', ['docs/p.md']);
+    await seedPreserve(fx, ['docs/p.md']);
     await fx.commitOnOrigin({ 'docs/p.md': 'mirror p\n' });
     await sync();
     await fx.commitOnUpstream({ 'docs/p.md': 'upstream p\n' });

@@ -78,6 +78,7 @@ async function writeRemoval(
     );
   }
 }
+import { assertPreserveEntriesAreFiles } from '../shared/preserve-entries.js';
 
 /**
  * Preserve command: manage the `preserve` allowlist of mirror-only file paths
@@ -168,7 +169,7 @@ export async function preserveCommand(
       validated.push(cleaned);
     }
 
-    // action === 'add'
+    await assertPreserveEntriesAreFiles(validated, repoDir);
     const merged = Array.from(new Set([...current, ...validated]));
     await updateVenforkConfig(repoDir, { preserve: merged });
     p.note(
@@ -176,7 +177,7 @@ export async function preserveCommand(
       'Added to preserve list'
     );
     p.outro(
-      '✨ Preserve list updated. Commit the file(s) to the mirror default branch (if not already), then run `venfork sync`.'
+      '✨ Preserve list updated. Run `venfork sync` to apply on the private mirror default branch.'
     );
   } catch (error) {
     p.log.error(error instanceof Error ? error.message : String(error));

@@ -4,7 +4,7 @@ import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
-import { preserveCommand, syncCommand } from '../../src/commands.js';
+import { syncCommand } from '../../src/commands.js';
 import { updateVenforkConfig } from '../../src/config.js';
 import { ConfigError, SyncDivergenceError } from '../../src/errors.js';
 import { getDefaultBranch } from '../../src/git.js';
@@ -16,6 +16,7 @@ import {
   createMirrorFixture,
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
+import { seedPreserve } from '../harness/preserve.js';
 
 const MANAGED_SUBJECT = 'chore: venfork-managed mirror commit';
 const CALLER = '.github/workflows/caller.yml';
@@ -263,7 +264,7 @@ describe('sync with the managed commit', () => {
 
   test('preserve-only with all files now upstream yields +0', async () => {
     process.chdir(fx.work);
-    await preserveCommand('add', [CALLER]);
+    await seedPreserve(fx, [CALLER]);
     await fx.commitOnOrigin({ [CALLER]: 'mirror version\n' });
     await sync();
     const upstreamTip = await fx.commitOnUpstream({
@@ -293,7 +294,7 @@ describe('sync with the managed commit', () => {
 
   test('preserve carries a file across sync; upstream version wins when it appears upstream', async () => {
     process.chdir(fx.work);
-    await preserveCommand('add', [CALLER]);
+    await seedPreserve(fx, [CALLER]);
     await fx.commitOnOrigin({ [CALLER]: 'mirror version\n' });
 
     await fx.commitOnUpstream({ 'src/a.txt': 'a\n' });
@@ -316,7 +317,7 @@ describe('sync with the managed commit', () => {
 
   test('preserve keeps the executable bit of a preserved script', async () => {
     process.chdir(fx.work);
-    await preserveCommand('add', ['scripts/release.sh']);
+    await seedPreserve(fx, ['scripts/release.sh']);
     await fx.commitOnOrigin({
       'scripts/release.sh': { content: '#!/bin/sh\n', executable: true },
     });
@@ -350,7 +351,7 @@ describe('sync with the managed commit', () => {
 
   test('a preserved file whose parent becomes an upstream file fails and names both paths', async () => {
     process.chdir(fx.work);
-    await preserveCommand('add', ['config/x.yml']);
+    await seedPreserve(fx, ['config/x.yml']);
     await fx.commitOnOrigin({ 'config/x.yml': 'mirror\n' });
     await sync();
     const originBefore = await fx.sha(fx.origin, 'main');
@@ -368,7 +369,7 @@ describe('sync with the managed commit', () => {
 
   test('a preserve entry that is a directory on the mirror is rejected', async () => {
     process.chdir(fx.work);
-    await preserveCommand('add', ['tools/a.sh', 'tools/b.sh']);
+    await seedPreserve(fx, ['tools/a.sh', 'tools/b.sh']);
     await fx.commitOnOrigin({ 'tools/a.sh': 'a\n', 'tools/b.sh': 'b\n' });
     await sync();
     await updateVenforkConfig(fx.work, {

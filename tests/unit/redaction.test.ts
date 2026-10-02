@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { stripInternalBlocks } from '../../src/commands.js';
 import { RedactionError } from '../../src/errors.js';
 import { translateInternalTitle } from '../../src/shared/redaction.js';
@@ -147,5 +147,24 @@ describe('translateInternalTitle', () => {
         'Fix parser <!-- venfork:internal -->for ACME-123<!-- /venfork:internal -->'
       )
     ).toBe('Fix parser');
+  });
+});
+
+describe('VENFORK_ALLOW_SELF_REFERENCE', () => {
+  const saved = process.env.VENFORK_ALLOW_SELF_REFERENCE;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.VENFORK_ALLOW_SELF_REFERENCE;
+    else process.env.VENFORK_ALLOW_SELF_REFERENCE = saved;
+  });
+
+  test('lets a plain mention through but not an unmatched marker', () => {
+    process.env.VENFORK_ALLOW_SELF_REFERENCE = '1';
+
+    expect(stripInternalBlocks('We sync with venfork.')).toBe(
+      'We sync with venfork.'
+    );
+    expect(() => stripInternalBlocks('<!-- /venfork:internal -->')).toThrow(
+      RedactionError
+    );
   });
 });
