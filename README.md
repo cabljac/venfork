@@ -463,6 +463,15 @@ gh secret set VENFORK_PUSH_TOKEN --repo <owner>/<mirror> --body "$(gh auth token
 
 A fine-grained PAT scoped to just those two repos is also fine. If `VENFORK_PUSH_TOKEN` is unset, the generated workflow falls back to the default `GITHUB_TOKEN` — sync to the public fork will fail in that case (same behavior as before this token was wired in).
 
+### How scheduled sync behaves
+
+- **Cron is best-effort.** GitHub runs scheduled workflows only from the default branch, at most every 5 minutes, and may delay or skip runs when Actions is busy. Do not rely on exact timing. `venfork doctor` flags a last run older than twice the cron interval.
+- **Idle repositories.** GitHub disables scheduled workflows in a public repository after 60 days without activity. A private mirror is not affected by that rule, but if you make a mirror public, re-enable the workflow from the Actions tab when it stops.
+- **The workflow file must stay on the default branch.** It lives in the venfork-managed commit. Sync builds the new tip first and moves the default branch in a single leased push, so the file is never missing between runs.
+- **Token.** In standard mode the run pushes to the public fork, which needs the `VENFORK_PUSH_TOKEN` secret (see above). Sync skips the public push when the fork already matches upstream, so a missing token only fails runs that have something to push. `venfork doctor` checks that the secret exists.
+- **Failures open an issue.** Blocked or failed runs open or update a `venfork-sync-blocked` issue on the mirror; the next successful run closes it.
+- **Upgrades.** The workflow pins the venfork version that wrote it. Install a newer venfork locally and run `venfork sync` to move the mirror to it.
+
 ### `venfork workflows <status|allow|block|clear> [workflow-file ...]`
 
 Manage which upstream workflow files should remain active in the private mirror when managed sync commit logic runs.
