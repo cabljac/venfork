@@ -445,7 +445,9 @@ venfork schedule disable
 
 **When a scheduled sync fails**
 
-The workflow runs `venfork sync --report-issues` with the job's `GITHUB_TOKEN` (the workflow asks for `issues: write`). If sync is blocked by divergent commits, it opens an issue on the mirror labelled `venfork-sync-blocked`, or refreshes the body of the open one, with the changed files and the exact `venfork preserve add ...` or rebase steps. A final `if: failure()` step covers every other failure (install errors, a missing token, timeouts) by opening the same labelled issue or commenting on it with the run URL. The next successful sync comments "Resolved by <run>" and closes the issue.
+The workflow runs `venfork sync --report-issues` with the job's `GITHUB_TOKEN` (the workflow asks for `issues: write`). If sync is blocked by divergent commits, it opens an issue on the mirror labelled `venfork-sync-blocked`, or refreshes the body of the open one, with the changed files and the exact `venfork preserve add ...` or rebase steps. A final `if: failure()` step covers every other failure (install errors, a missing token, timeouts) by opening the same labelled issue or commenting on it with the run URL. The next successful sync comments "Resolved by <run>" and closes the issue. If you close the issue by hand while the divergence is still there, the next blocked run opens a new one. Outside GitHub Actions, `--report-issues` only files the issue when gh confirms the mirror is a private repository.
+
+The workflow runs one sync at a time (`concurrency: venfork-sync`, queued, not cancelled) and stops a run after 30 minutes.
 
 **Pinned venfork version**
 

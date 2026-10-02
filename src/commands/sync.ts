@@ -218,7 +218,7 @@ export async function syncCommand(
       p.log.warn('Divergent commits detected:');
       p.note(report, '⚠️  Warning');
       if (options?.reportIssues) {
-        await reportSyncBlocked({ cwd: repoDir, defaultBranch, report });
+        await reportSyncBlocked({ cwd: repoDir, error: divergence });
       }
       throw divergence;
     }

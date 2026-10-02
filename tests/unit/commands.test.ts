@@ -282,6 +282,30 @@ async function startSetupCommand(
   promise.catch(() => {});
 }
 
+/** Gives origin, upstream and public different GitHub URLs; origin is private. */
+function useDistinctRemotes(): void {
+  mockResponses.set('git remote get-url origin', {
+    exitCode: 0,
+    stdout: 'git@github.com:acme/widget-private.git',
+    stderr: '',
+  });
+  mockResponses.set('git remote get-url upstream', {
+    exitCode: 0,
+    stdout: 'git@github.com:upstream-org/widget.git',
+    stderr: '',
+  });
+  mockResponses.set('git remote get-url public', {
+    exitCode: 0,
+    stdout: 'git@github.com:acme/widget.git',
+    stderr: '',
+  });
+  mockResponses.set('gh repo view acme/widget-private --json isPrivate', {
+    exitCode: 0,
+    stdout: 'true',
+    stderr: '',
+  });
+}
+
 /** Makes the staged branch appear to carry one venfork-managed commit. */
 function mockManagedCommitOnBranch(
   branch = 'feature-branch',
@@ -2993,45 +3017,64 @@ describe('syncCommand - error paths', () => {
     );
   });
 
-  test('--report-issues opens the sync-blocked issue on divergence', async () => {
-    mockResponses.set('git rev-list upstream/main..origin/main', {
-      exitCode: 0,
-      stdout: 'abc123\n',
-      stderr: '',
-    });
-    mockResponses.set('gh issue list', {
-      exitCode: 0,
-      stdout: '[]',
-      stderr: '',
-    });
+  test('--report-issues opens the sync-blocked issue on the origin repo', async () => {
+    const savedRepo = process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REPOSITORY;
+    try {
+      useDistinctRemotes();
+      mockResponses.set('git rev-list upstream/main..origin/main', {
+        exitCode: 0,
+        stdout: 'abc123\n',
+        stderr: '',
+      });
+      mockResponses.set('gh issue list', {
+        exitCode: 0,
+        stdout: '[]',
+        stderr: '',
+      });
 
-    await expect(
-      syncCommand('main', { reportIssues: true })
-    ).rejects.toBeInstanceOf(SyncDivergenceError);
+      await expect(
+        syncCommand('main', { reportIssues: true })
+      ).rejects.toBeInstanceOf(SyncDivergenceError);
 
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.startsWith(
-          'gh issue create --repo test/repo --title Scheduled sync blocked: divergent commits on origin/main --label venfork-sync-blocked'
+      expect(
+        execaCalls.some((cmd) =>
+          cmd.startsWith(
+            'gh issue create --repo acme/widget-private --title Scheduled sync blocked: divergent commits on origin/main --label venfork-sync-blocked'
+          )
         )
-      )
-    ).toBe(true);
+      ).toBe(true);
+      expect(
+        execaCalls
+          .filter((cmd) => cmd.startsWith('gh '))
+          .every((cmd) => cmd.includes('acme/widget-private'))
+      ).toBe(true);
+    } finally {
+      if (savedRepo !== undefined) process.env.GITHUB_REPOSITORY = savedRepo;
+    }
   });
 
   test('--report-issues closes the sync-blocked issue after a successful sync', async () => {
-    mockResponses.set('gh issue list', {
-      exitCode: 0,
-      stdout: '[{"number":9}]',
-      stderr: '',
-    });
+    const savedRepo = process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REPOSITORY;
+    try {
+      useDistinctRemotes();
+      mockResponses.set('gh issue list', {
+        exitCode: 0,
+        stdout: '[{"number":9}]',
+        stderr: '',
+      });
 
-    await syncCommand('main', { reportIssues: true });
+      await syncCommand('main', { reportIssues: true });
 
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.startsWith('gh issue close 9 --repo test/repo')
-      )
-    ).toBe(true);
+      expect(
+        execaCalls.some((cmd) =>
+          cmd.startsWith('gh issue close 9 --repo acme/widget-private')
+        )
+      ).toBe(true);
+    } finally {
+      if (savedRepo !== undefined) process.env.GITHUB_REPOSITORY = savedRepo;
+    }
   });
 
   test('without --report-issues sync never calls gh', async () => {

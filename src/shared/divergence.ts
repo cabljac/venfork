@@ -112,10 +112,17 @@ export async function checkDivergence(args: {
 
 /**
  * Human-readable explanation of a {@link SyncDivergenceError}: which remotes
- * diverged, the files involved, and how to unblock sync.
+ * diverged, the files involved, and how to unblock sync. `maxFiles` caps
+ * each file list and appends "...and N more".
  */
-export function formatDivergenceReport(error: SyncDivergenceError): string {
+export function formatDivergenceReport(
+  error: SyncDivergenceError,
+  options: { maxFiles?: number } = {}
+): string {
   const { defaultBranch, origin, publicFork } = error;
+  const maxFiles = options.maxFiles ?? Number.POSITIVE_INFINITY;
+  const more = (total: number): string =>
+    total > maxFiles ? `\n  ...and ${total - maxFiles} more` : '';
   const warnings: string[] = [];
   if (origin.count > 0) {
     warnings.push(
@@ -138,8 +145,9 @@ export function formatDivergenceReport(error: SyncDivergenceError): string {
   if (origin.files.length > 0) {
     sections.push(
       `Files changed by divergent commits on origin/${defaultBranch}:\n${origin.files
+        .slice(0, maxFiles)
         .map((f) => `  • ${f}`)
-        .join('\n')}`
+        .join('\n')}${more(origin.files.length)}`
     );
     // Only suggest preserve for paths the validator would actually
     // accept — otherwise the copy/paste command line would fail.
@@ -156,7 +164,7 @@ export function formatDivergenceReport(error: SyncDivergenceError): string {
     }
     if (validForPreserve.length > 0) {
       sections.push(
-        `If these are mirror-only files you want to keep across sync, add them to preserve:\n  venfork preserve add ${validForPreserve.join(' ')}`
+        `If these are mirror-only files you want to keep across sync, add them to preserve:\n  venfork preserve add ${validForPreserve.slice(0, maxFiles).join(' ')}${more(validForPreserve.length)}`
       );
       if (invalidForPreserve.length > 0) {
         sections.push(
