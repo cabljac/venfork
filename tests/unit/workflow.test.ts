@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test';
+import pkg from '../../package.json' with { type: 'json' };
+import { VENFORK_VERSION } from '../../src/version.js';
 import {
   generateSyncWorkflow,
   getSyncWorkflowPath,
@@ -65,5 +67,18 @@ describe('workflow helpers', () => {
     const explicit = generateSyncWorkflow('0 */6 * * *', 'standard');
     const implicit = generateSyncWorkflow('0 */6 * * *');
     expect(implicit).toBe(explicit);
+  });
+
+  test('pins the venfork version in the install step', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *', 'standard', '1.2.3');
+    expect(workflow).toContain('run: npm install -g venfork@1.2.3');
+    expect(workflow).toMatchSnapshot();
+  });
+
+  test('defaults the pin to the running CLI version from package.json', () => {
+    expect(VENFORK_VERSION).toBe(pkg.version);
+    expect(generateSyncWorkflow('0 */6 * * *')).toContain(
+      `run: npm install -g venfork@${pkg.version}`
+    );
   });
 });

@@ -72,6 +72,8 @@ jobs:
 
       - name: Build CLI for all platforms
         run: bun run scripts/release.ts
+        env:
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
 
       - name: Upload binaries to GitHub release
         env:

@@ -424,6 +424,10 @@ venfork schedule disable
 1. Stores schedule state (`enabled`, `cron`) in `.venfork/config.json` on `venfork-config`
 2. `set` and `disable` re-stamp the private mirror default branch the same way `venfork sync` does: upstream plus at most one managed commit, with `.github/workflows/venfork-sync.yml` added (`set`) or removed (`disable`). Like sync, they refuse when origin has commits that upstream does not have.
 
+**Pinned venfork version**
+
+The generated workflow installs exactly the venfork version that wrote it (`npm install -g venfork@<version>`). The runner therefore regenerates byte-identical YAML and the managed commit stays stable. To upgrade a mirror, install the new venfork locally and run `venfork sync` (or `venfork schedule set` again). That rewrites the workflow with the new pin in one managed-commit update. Check the installed version with `venfork --version`.
+
 **Authenticating cross-repo pushes**
 
 A scheduled run pushes to two different repos: the private mirror (`origin`) and the public fork (`public`). The default `GITHUB_TOKEN` available inside the workflow is scoped only to the mirror, so it cannot authenticate the push to the public fork. To enable the workflow to push cross-repo, set a `VENFORK_PUSH_TOKEN` secret on the **private mirror** repo using a token that has `contents:write` on both the mirror and the public fork:
