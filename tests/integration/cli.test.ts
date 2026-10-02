@@ -112,6 +112,14 @@ describe('per-command help', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Unknown command: frobnicate');
   });
+
+  test('the removed status command is an unknown command', async () => {
+    const result = await runCli('status');
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Unknown command: status');
+    expect(result.stdout).not.toContain('Venfork Status');
+  });
 });
 
 describe('doctor --json output', () => {
@@ -133,23 +141,22 @@ describe('doctor --json output', () => {
       await fx.writeRawConfig(
         JSON.stringify({ ...raw, schedule: { enabled: true, cron: '@hourly' } })
       );
-      const invalidCron = await runCliIn(
-        fx.work,
-        'status',
-        '--check',
-        '--json'
-      );
+      const invalidCron = await runCliIn(fx.work, 'doctor', '--json');
       outputs.push(invalidCron.stdout);
       expect(invalidCron.exitCode).toBe(1);
 
       for (const stdout of outputs) {
-        const parsed = JSON.parse(stdout) as Array<{ id: string; ok: unknown }>;
-        expect(parsed[0].id).toBe('repo');
-        expect(parsed).toHaveLength(10);
+        const { checks } = JSON.parse(stdout) as {
+          checks: Array<{ id: string; ok: unknown }>;
+        };
+        expect(checks[0].id).toBe('repo');
+        expect(checks).toHaveLength(10);
       }
       const cronAge = (
-        JSON.parse(invalidCron.stdout) as Array<{ id: string; ok: unknown }>
-      ).find((check) => check.id === 'cron-age');
+        JSON.parse(invalidCron.stdout) as {
+          checks: Array<{ id: string; ok: unknown }>;
+        }
+      ).checks.find((check) => check.id === 'cron-age');
       expect(cronAge?.ok).toBe('skipped');
     } finally {
       await fx.cleanup();

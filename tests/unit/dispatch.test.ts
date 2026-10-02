@@ -13,7 +13,6 @@ describe('requiresGhAuth', () => {
     ['stage', ['feature', '--title', 'x', '--base', 'main'], false],
     ['sync', [], false],
     ['schedule', ['set', '0 * * * *'], false],
-    ['status', [], false],
     ['workflows', ['status'], false],
     ['preserve', ['list'], false],
     ['doctor', [], false],

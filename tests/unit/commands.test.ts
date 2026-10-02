@@ -278,7 +278,6 @@ import {
   setupCommand,
   showHelp,
   stageCommand,
-  statusCommand,
   syncCommand,
   workflowsCommand,
 } from '../../src/commands.js';
@@ -2537,32 +2536,6 @@ describe('scheduleCommand', () => {
   });
 });
 
-describe('statusCommand', () => {
-  test('checks if in git repository', async () => {
-    try {
-      await statusCommand();
-    } catch {
-      // Expected
-    }
-
-    // isGitRepository mock should have been called
-    // The function should check repository status
-    expect(execaCalls.length).toBeGreaterThanOrEqual(0);
-  });
-
-  test('gets current branch and remotes', async () => {
-    try {
-      await statusCommand();
-    } catch {
-      // Expected
-    }
-
-    // Should call getCurrentBranch and getRemotes (via mocks)
-    // These are mocked so we just verify the command ran
-    expect(true).toBe(true);
-  });
-});
-
 describe('showHelp', () => {
   test('displays help information', () => {
     // showHelp is synchronous and just displays info
@@ -3464,55 +3437,6 @@ describe('stageCommand - error paths', () => {
   });
 });
 
-describe('statusCommand - error paths', () => {
-  test('throws NotInRepositoryError when not in git repo', async () => {
-    mockResponses.set('git rev-parse --git-dir', {
-      exitCode: 128,
-      stdout: '',
-      stderr: 'not a git repository',
-    });
-
-    try {
-      await statusCommand();
-      expect(true).toBe(false); // Should not reach here
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
-  });
-
-  test('shows message when no remotes configured', async () => {
-    mockResponses.set('git remote', { exitCode: 0, stdout: '', stderr: '' });
-
-    try {
-      await statusCommand();
-    } catch {
-      // Expected - may exit
-    }
-
-    expect(execaCalls).toContain('git remote');
-  });
-
-  test('shows incomplete setup message when missing remotes', async () => {
-    // Mock hasRemote to return false for public
-    mockResponses.set('git remote get-url public', {
-      exitCode: 1,
-      stdout: '',
-      stderr: 'not found',
-    });
-
-    try {
-      await statusCommand();
-    } catch {
-      // Expected
-    }
-
-    // Should check for remotes
-    expect(execaCalls.some((cmd) => cmd.includes('git remote get-url'))).toBe(
-      true
-    );
-  });
-});
-
 describe('pullRequestCommand', () => {
   function setupPrCommonMocks() {
     mockResponses.set('git remote get-url upstream', {
@@ -4107,7 +4031,7 @@ describe('issueCommand', () => {
 /**
  * `--no-public` mode collapses the 3-remote layout (origin/public/upstream)
  * to 2 remotes (origin/upstream) for users whose upstream lives in their own
- * org. These tests cover the behaviour fan-out across setup/sync/stage/status.
+ * org. These tests cover the behaviour fan-out across setup/sync/stage.
  */
 describe('no-public mode', () => {
   /** Convenience: returns a venfork-config JSON for the given mode. */
@@ -4410,29 +4334,6 @@ describe('no-public mode', () => {
       expect(
         execaCalls.some((c) => c.includes('git remote add upstream'))
       ).toBe(true);
-    });
-  });
-
-  describe('statusCommand in no-public mode', () => {
-    test('completes without error when public remote is absent', async () => {
-      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
-        exitCode: 0,
-        stdout: noPublicConfig(),
-        stderr: '',
-      });
-      // hasRemote uses `git remote get-url <name>` — make `public` look missing
-      // while origin/upstream remain present (default success mock).
-      mockResponses.set('git remote get-url public', {
-        exitCode: 1,
-        stdout: '',
-        stderr: 'No such remote',
-      });
-
-      // The sentinel: in standard mode, missing `public` would produce an
-      // "incomplete" path that still does not throw, but importantly
-      // statusCommand should not raise on the noPublic branch. A clean
-      // completion (no thrown error) is the assertion.
-      await expect(statusCommand()).resolves.toBeUndefined();
     });
   });
 });

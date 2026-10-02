@@ -79,6 +79,23 @@ function formatAge(minutes: number): string {
 export async function runDoctorChecks(
   options: DoctorOptions = {}
 ): Promise<DoctorCheck[]> {
+  return (await runDoctor(options)).checks;
+}
+
+async function runDoctor(
+  options: DoctorOptions
+): Promise<{ checks: DoctorCheck[]; config: VenforkConfig | null }> {
+  let config: VenforkConfig | null = null;
+  const checks = await collectChecks(options, (read) => {
+    config = read;
+  });
+  return { checks, config };
+}
+
+async function collectChecks(
+  options: DoctorOptions,
+  onConfig: (config: VenforkConfig) => void
+): Promise<DoctorCheck[]> {
   const cwd = options.cwd ?? process.cwd();
   const now = options.now ?? new Date();
   const git = (strict: boolean) => $({ cwd, reject: strict });
@@ -125,6 +142,7 @@ export async function runDoctorChecks(
       }
     }
   }
+  if (config) onConfig(config);
   if (!config) {
     checks.push({
       id: 'repo',
@@ -638,17 +656,83 @@ export async function runDoctorChecks(
   return checks;
 }
 
+/** Link maps recorded in venfork-config, as printed by doctor. */
+export interface DoctorLinks {
+  shippedBranches: NonNullable<VenforkConfig['shippedBranches']>;
+  pulledPrs: NonNullable<VenforkConfig['pulledPrs']>;
+  shippedIssues: NonNullable<VenforkConfig['shippedIssues']>;
+  pulledIssues: NonNullable<VenforkConfig['pulledIssues']>;
+}
+
+/** Collects the four link maps from a config, defaulting each to empty. */
+export function doctorLinks(config: VenforkConfig): DoctorLinks {
+  return {
+    shippedBranches: config.shippedBranches ?? {},
+    pulledPrs: config.pulledPrs ?? {},
+    shippedIssues: config.shippedIssues ?? {},
+    pulledIssues: config.pulledIssues ?? {},
+  };
+}
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toISOString().slice(0, 10);
+  } catch {
+    return iso;
+  }
+}
+
+/** Renders the non-empty link maps as text blocks; empty when there are none. */
+export function formatLinks(links: DoctorLinks): string {
+  const blocks: string[] = [];
+  const add = (title: string, lines: string[]): void => {
+    if (lines.length > 0) blocks.push(`${title}:\n${lines.join('\n')}`);
+  };
+  add(
+    'Shipped branches',
+    Object.entries(links.shippedBranches).map(
+      ([branch, entry]) =>
+        `  ${branch} -> ${entry.upstreamPrUrl} (${formatDate(entry.shippedAt)})`
+    )
+  );
+  add(
+    'Pulled PRs',
+    Object.entries(links.pulledPrs).map(
+      ([branch, entry]) =>
+        `  ${branch} -> ${entry.upstreamPrUrl} (last sync ${formatDate(entry.lastSyncedAt)})`
+    )
+  );
+  add(
+    'Shipped issues',
+    Object.values(links.shippedIssues).map(
+      (entry) =>
+        `  #${entry.internalIssueNumber} -> ${entry.upstreamIssueUrl} (${formatDate(entry.shippedAt)})`
+    )
+  );
+  add(
+    'Pulled issues',
+    Object.values(links.pulledIssues).map(
+      (entry) =>
+        `  #${entry.internalIssueNumber} <- ${entry.upstreamIssueUrl} (${formatDate(entry.pulledAt)})`
+    )
+  );
+  return blocks.join('\n\n');
+}
+
 /**
- * Doctor command: prints the health checks as a table (or JSON with
- * `json`). Returns false when any check failed so the caller can exit 1.
+ * Doctor command: prints the health checks as a table, then the link maps
+ * (or JSON `{ checks, links }` with `json`; `links` is null when the config
+ * is unreadable). Returns false when any check failed so the caller can
+ * exit 1.
  */
 export async function doctorCommand(
   options: { json?: boolean; cwd?: string } = {}
 ): Promise<boolean> {
-  const checks = await runDoctorChecks({ cwd: options.cwd });
+  const { checks, config } = await runDoctor({ cwd: options.cwd });
   const healthy = checks.every((check) => check.ok !== false);
+  const links = config ? doctorLinks(config) : null;
   if (options.json) {
-    console.log(JSON.stringify(checks, null, 2));
+    console.log(JSON.stringify({ checks, links }, null, 2));
     return healthy;
   }
 
@@ -662,6 +746,8 @@ export async function doctorCommand(
       : row;
   });
   p.note(lines.join('\n'), 'Checks');
+  const linkText = links ? formatLinks(links) : '';
+  if (linkText) p.note(linkText, 'Links');
   p.outro(`${healthy ? '✨' : '❌'} ${doctorSummary(checks)}`);
   return healthy;
 }

@@ -256,29 +256,6 @@ venfork sync develop   # Sync develop branch with upstream/develop
 - Workflow allow/block entries match file basenames exactly (no glob patterns)
 - A preserved file that upstream adds is replaced by upstream's version. If upstream later deletes that path again, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork preserve remove <path>` to let it go
 
-### `venfork status [--check] [--json]`
-
-Check the current repository setup and configuration. `--check` runs the `venfork doctor` health checks instead and exits 1 when one fails; add `--json` for machine-readable output.
-
-**What it shows:**
-- Current branch
-- All configured git remotes (fetch and push URLs)
-- Setup completion status (✓/✗ for origin, public, upstream)
-- Next steps if setup is incomplete
-
-**Examples:**
-```bash
-venfork status
-venfork status --check
-venfork status --check --json
-```
-
-**Use this command to:**
-- Verify your venfork setup is complete
-- Debug remote configuration issues
-- Check which remotes are configured
-- See your current branch
-
 ### `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing]`
 
 Push a branch to the public fork, making it visible and ready for PR to upstream. With `--pr`, also opens the upstream PR for you using your internal review PR's body.
@@ -429,7 +406,7 @@ This is **only the linkage** — there is no *live* sync. `pull` snapshots the u
 
 ### `venfork doctor [--json]`
 
-Check that a mirror is healthy. Also available as `venfork status --check`. It only reads, apart from fetching the remotes and the `venfork-config` branch.
+Check that a mirror is healthy, then list the links recorded in `venfork-config` (shipped branches, pulled PRs, shipped and pulled issues, with dates). `--json` prints `{ "checks": [...], "links": {...} }`; `links` is `null` when the config cannot be read. It only reads, apart from fetching the remotes and the `venfork-config` branch.
 
 | Check | What it verifies |
 |---|---|
@@ -641,8 +618,8 @@ venfork setup git@github.com:client/awesome-project.git --org acme-corp
 # Navigate to private mirror
 cd awesome-project-private
 
-# Check setup status
-venfork status
+# Check the mirror
+venfork doctor
 
 # Or verify remotes manually
 git remote -v
@@ -760,7 +737,7 @@ After `venfork setup`, your local repository has three remotes:
 
 ### Check Your Setup
 
-If you encounter issues, run `venfork doctor` first. It checks the remotes, the layout mode, the managed-commit invariant, divergence, preserved files, the sync workflow, the push token and the last scheduled run, and prints a fix for each failing check. `venfork status` shows the current branch and the configured remotes.
+If you encounter issues, run `venfork doctor` first. It checks the remotes, the layout mode, the managed-commit invariant, divergence, preserved files, the sync workflow, the push token and the last scheduled run, and prints a fix for each failing check.
 
 ### "GitHub CLI is not authenticated"
 
@@ -768,12 +745,12 @@ Run `gh auth login` and follow the prompts to authenticate.
 
 ### "Not in a git repository"
 
-Make sure you're inside the cloned vendor repository directory. Run `venfork status` to verify.
+Make sure you're inside the cloned vendor repository directory. Run `venfork doctor` to verify.
 
 ### "Remote not found" (origin/public/upstream)
 
 This usually means setup never finished for this clone, or the clone is not the private mirror.
-- Run `venfork status` to see which remotes are missing
+- Run `venfork doctor` to see which remotes are missing
 - Re-run **`venfork setup <same-upstream-url>`** from an empty parent directory (or a directory where the private mirror folder doesn’t conflict) so remotes and config can be repaired, or use **`venfork clone`** on the private mirror URL instead
 
 ### Divergent Commits Warning
