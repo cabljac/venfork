@@ -45,10 +45,12 @@ function enableSchedule(): Promise<unknown> {
   });
 }
 
-function setClock(epochSeconds: number): void {
-  const date = `@${epochSeconds} +0000`;
-  process.env.GIT_AUTHOR_DATE = date;
-  process.env.GIT_COMMITTER_DATE = date;
+/** Waits until the wall clock enters the next whole second. */
+async function nextSecond(): Promise<void> {
+  const start = Math.floor(Date.now() / 1000);
+  while (Math.floor(Date.now() / 1000) === start) {
+    await Bun.sleep(50);
+  }
 }
 
 describe('harness', () => {
@@ -75,14 +77,16 @@ describe('sync with the managed commit', () => {
   test('sync twice with no upstream change yields the same origin SHA', async () => {
     await enableSchedule();
 
-    setClock(1_800_000_000);
+    const firstAt = Math.floor(Date.now() / 1000);
     await sync();
     const first = await fx.sha(fx.origin, 'main');
     const pushesAfterFirst = await fx.pushCount(fx.origin, 'refs/heads/main');
 
-    setClock(1_800_003_600);
+    await nextSecond();
+    const secondAt = Math.floor(Date.now() / 1000);
     await sync();
 
+    expect(secondAt).toBeGreaterThan(firstAt);
     expect(await fx.sha(fx.origin, 'main')).toBe(first);
     expect(await fx.pushCount(fx.origin, 'refs/heads/main')).toBe(
       pushesAfterFirst
@@ -192,7 +196,6 @@ describe('sync with the managed commit', () => {
 
   test('the managed commit SHA ignores i18n.commitEncoding', async () => {
     await enableSchedule();
-    setClock(1_800_000_000);
     process.env.GIT_CONFIG_COUNT = '1';
     process.env.GIT_CONFIG_KEY_0 = 'i18n.commitEncoding';
     process.env.GIT_CONFIG_VALUE_0 = 'ISO-8859-1';
