@@ -875,14 +875,6 @@ describe('syncCommand', () => {
       stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
       stderr: '',
     });
-    mockResponses.set(
-      'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/caller.yml',
-      {
-        exitCode: 0,
-        stdout: 'name: caller\non: workflow_dispatch\n',
-        stderr: '',
-      }
-    );
 
     try {
       await syncCommand('main');
@@ -894,18 +886,12 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some((cmd) => cmd.includes('git worktree add --detach'))
     ).toBe(true);
-    // git show is called against the captured previous mirror tip.
+    // The preserved file is checked out from the captured previous mirror tip.
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/caller.yml'
+          'git checkout aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/caller.yml'
         )
-      )
-    ).toBe(true);
-    // The preserved file is added in the temp worktree.
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.includes('git add -- .github/workflows/caller.yml')
       )
     ).toBe(true);
     // The deterministic commit + force-push happen.
@@ -941,19 +927,13 @@ describe('syncCommand', () => {
       // Expected in mocked environment
     }
 
-    // git show against the previous mirror tip should NOT be called for the
-    // colliding path — upstream's version wins, and the carry-forward is skipped.
+    // Upstream's version wins for the colliding path: nothing is checked out
+    // from the previous mirror tip.
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/ci.yml'
+          'git checkout aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/ci.yml'
         )
-      )
-    ).toBe(false);
-    // git add for the preserved path should NOT be called either.
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.includes('git add -- .github/workflows/ci.yml')
       )
     ).toBe(false);
   });
@@ -975,8 +955,12 @@ describe('syncCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/missing.yml',
-      { exitCode: 128, stdout: '', stderr: 'fatal: path ... does not exist' }
+      'git checkout aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/missing.yml',
+      {
+        exitCode: 1,
+        stdout: '',
+        stderr: "error: pathspec '.github/workflows/missing.yml' did not match",
+      }
     );
 
     let caught = false;
@@ -1021,16 +1005,6 @@ describe('syncCommand', () => {
       stdout: 'v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2',
       stderr: '',
     });
-    // Reading agent.yml from the v2 SHA returns the user's v2 content.
-    mockResponses.set(
-      'git show v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2:agent.yml',
-      { exitCode: 0, stdout: 'agent: v2', stderr: '' }
-    );
-    mockResponses.set('git ls-tree v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2', {
-      exitCode: 0,
-      stdout: '100644 blob deadbeef\tagent.yml\n',
-      stderr: '',
-    });
     // Divergence check: the v2 commit is on origin (the user's commit).
     mockResponses.set('git rev-list upstream/main..origin/main', {
       exitCode: 0,
@@ -1058,15 +1032,14 @@ describe('syncCommand', () => {
       // Expected in mocked environment
     }
 
-    // The write that feeds the deterministic +1 commit must contain v2.
-    const agentWrite = writeFileCalls.find((w) => w.path.endsWith('agent.yml'));
-    expect(agentWrite).toBeDefined();
-    expect(String(agentWrite?.content)).toBe('agent: v2');
-
-    // And: agent.yml is `git add`ed, then committed and force-pushed back.
-    expect(execaCalls.some((cmd) => cmd.includes('git add -- agent.yml'))).toBe(
-      true
-    );
+    // The +1 commit takes agent.yml from the v2 commit.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git checkout v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2 -- agent.yml'
+        )
+      )
+    ).toBe(true);
     expect(
       execaCalls.some((cmd) =>
         cmd.includes('git push origin HEAD:main --force-with-lease')
@@ -1223,10 +1196,6 @@ describe('syncCommand', () => {
       stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
       stderr: '',
     });
-    mockResponses.set(
-      'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/caller.yml',
-      { exitCode: 0, stdout: 'name: caller\n', stderr: '' }
-    );
 
     try {
       await syncCommand('main');

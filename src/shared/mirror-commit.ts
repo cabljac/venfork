@@ -1,4 +1,4 @@
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
@@ -128,36 +128,17 @@ export async function applyMirrorPlusOneCommit(args: {
             );
             continue;
           }
-          const showResult = await $({
-            cwd: repoDir,
+          const checkoutResult = await $({
+            cwd: tempDir,
             reject: false,
-            encoding: 'buffer',
-            stripFinalNewline: false,
-          })`git show ${previousMirrorTip}:${preservePath}`;
-          if (showResult.exitCode !== 0) {
+          })`git checkout ${previousMirrorTip} -- ${preservePath}`;
+          if (checkoutResult.exitCode !== 0) {
             throw new Error(
               `Preserved file '${preservePath}' not found on origin/${defaultBranch}.\n` +
                 'Either commit it to the mirror first, or remove the entry with:\n' +
                 `  venfork preserve remove ${preservePath}`
             );
           }
-          // Preserve the executable bit by reading the tree entry's mode.
-          // `git show <ref>:<path>` only emits content; mode lives on the tree.
-          // Symlinks (120000) and submodules (160000) are out of scope — those
-          // would need plumbing-level handling. Plain files and `+x` files cover
-          // the realistic mirror-only cases (caller workflows, release scripts).
-          const lsTreeResult = await $({
-            cwd: repoDir,
-            reject: false,
-          })`git ls-tree ${previousMirrorTip} -- ${preservePath}`;
-          const treeMode = lsTreeResult.stdout.match(/^(\d+) /)?.[1];
-          const targetPath = path.join(tempDir, preservePath);
-          await mkdir(path.dirname(targetPath), { recursive: true });
-          await writeFile(targetPath, showResult.stdout);
-          if (treeMode === '100755') {
-            await chmod(targetPath, 0o755);
-          }
-          await $({ cwd: tempDir })`git add -- ${preservePath}`;
         }
       }
 

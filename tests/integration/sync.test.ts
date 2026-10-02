@@ -3,7 +3,7 @@ import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
-import { syncCommand } from '../../src/commands.js';
+import { preserveCommand, syncCommand } from '../../src/commands.js';
 import { updateVenforkConfig } from '../../src/config.js';
 import { SyncDivergenceError } from '../../src/errors.js';
 import { getDefaultBranch } from '../../src/git.js';
@@ -11,6 +11,9 @@ import {
   createMirrorFixture,
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
+
+const MANAGED_SUBJECT = 'chore: venfork-managed mirror commit';
+const CALLER = '.github/workflows/caller.yml';
 
 let fx: MirrorFixture;
 const originalCwd = process.cwd();
@@ -109,5 +112,42 @@ describe('sync with the managed commit', () => {
     expect(divergence.origin).toEqual({ count: 1, files: ['src/hotfix.ts'] });
     expect(divergence.publicFork).toEqual({ count: 0, files: [] });
     expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
+  });
+
+  test('preserve carries a file across sync; upstream version wins when it appears upstream', async () => {
+    process.chdir(fx.work);
+    await preserveCommand('add', [CALLER]);
+    await fx.commitOnOrigin({ [CALLER]: 'mirror version\n' });
+
+    await fx.commitOnUpstream({ 'src/a.txt': 'a\n' });
+    await sync();
+
+    const upstreamTip = await fx.sha(fx.upstream, 'main');
+    expect(await fx.subjects(fx.origin, 'main', 'main~1..main')).toEqual([
+      MANAGED_SUBJECT,
+    ]);
+    expect(await fx.sha(fx.origin, 'main~1')).toBe(upstreamTip);
+    expect(await fx.fileAt(fx.origin, 'main', CALLER)).toBe('mirror version\n');
+
+    await fx.commitOnUpstream({ [CALLER]: 'upstream version\n' });
+    await sync();
+
+    expect(await fx.fileAt(fx.origin, 'main', CALLER)).toBe(
+      'upstream version\n'
+    );
+  });
+
+  test('preserve keeps the executable bit of a preserved script', async () => {
+    process.chdir(fx.work);
+    await preserveCommand('add', ['scripts/release.sh']);
+    await fx.commitOnOrigin({
+      'scripts/release.sh': { content: '#!/bin/sh\n', executable: true },
+    });
+
+    await sync();
+
+    expect(await fx.modeAt(fx.origin, 'main', 'scripts/release.sh')).toBe(
+      '100755'
+    );
   });
 });
