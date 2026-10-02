@@ -1,5 +1,14 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test';
 import { rename } from 'node:fs/promises';
+import * as prompts from '@clack/prompts';
 import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
@@ -84,7 +93,8 @@ describe('doctor against real repos', () => {
     }
 
     expect(healthy).toBe(false);
-    const parsed = JSON.parse(printed.join('\n')) as DoctorCheck[];
+    const parsed = (JSON.parse(printed.join('\n')) as { checks: DoctorCheck[] })
+      .checks;
     expect(parsed.map((check) => check.id)).toEqual([
       'repo',
       'remotes',
@@ -101,6 +111,61 @@ describe('doctor against real repos', () => {
       expect([true, false, 'skipped']).toContain(check.ok);
       expect(typeof check.detail).toBe('string');
     }
+  });
+
+  test('prints the link maps after the checks and includes them in --json', async () => {
+    await updateVenforkConfig(fx.work, {
+      shippedBranches: {
+        'feat/x': {
+          upstreamPrUrl: 'https://github.com/up/repo/pull/9',
+          head: 'a'.repeat(40),
+          shippedAt: '2025-03-04T10:00:00.000Z',
+        },
+      },
+    });
+    const notes: Array<[string, string]> = [];
+    const noteSpy = spyOn(prompts, 'note').mockImplementation(
+      (message?: string, title?: string) => {
+        notes.push([title ?? '', message ?? '']);
+      }
+    );
+    const printed: string[] = [];
+    const originalLog = console.log;
+    try {
+      await doctorCommand({ cwd: fx.work });
+      console.log = (line: string) => {
+        printed.push(line);
+      };
+      await doctorCommand({ json: true, cwd: fx.work });
+    } finally {
+      console.log = originalLog;
+      noteSpy.mockRestore();
+    }
+
+    const links = notes.find(([title]) => title === 'Links');
+    expect(links?.[1]).toContain(
+      'feat/x -> https://github.com/up/repo/pull/9 (2025-03-04)'
+    );
+    expect(notes[0][0]).toBe('Checks');
+    const json = JSON.parse(printed.join('\n')) as {
+      links: { shippedBranches: Record<string, unknown> };
+    };
+    expect(Object.keys(json.links.shippedBranches)).toEqual(['feat/x']);
+  });
+
+  test('omits the Links note when no links are recorded and --json links is empty', async () => {
+    const notes: string[] = [];
+    const noteSpy = spyOn(prompts, 'note').mockImplementation(
+      (_message?: string, title?: string) => {
+        notes.push(title ?? '');
+      }
+    );
+    try {
+      await doctorCommand({ cwd: fx.work });
+    } finally {
+      noteSpy.mockRestore();
+    }
+    expect(notes).not.toContain('Links');
   });
 
   test('flags a user commit on origin as divergence and a broken invariant', async () => {

@@ -5,7 +5,10 @@ import {
 } from '../../scripts/smoke-checks';
 
 const mk = (ids: string[], okAt = -1) =>
-  JSON.stringify(ids.map((id, i) => ({ id, ok: i !== okAt, detail: 'x' })));
+  JSON.stringify({
+    checks: ids.map((id, i) => ({ id, ok: i !== okAt, detail: 'x' })),
+    links: null,
+  });
 
 test('accepts exit 0 with every expected check passing in order', () => {
   expect(verifyDoctorOutput(0, mk(EXPECTED_DOCTOR_IDS))).toBeNull();

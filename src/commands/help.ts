@@ -44,18 +44,12 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   Print the installed venfork version`,
   ],
   [
-    'status',
-    `venfork status [--check] [--json]
-  Show current repository setup and configuration
-  Check which remotes are configured and setup completion
-  --check runs the same health checks as \`venfork doctor\``,
-  ],
-  [
     'doctor',
     `venfork doctor [--json]
   Check mirror health: remotes, the managed-commit invariant, divergence,
   preserved files, the sync workflow, VENFORK_PUSH_TOKEN and the last scheduled run
-  Exits 1 when any check fails; --json prints machine-readable results for CI`,
+  Also lists the shipped and pulled branch, PR and issue links from venfork-config
+  Exits 1 when any check fails; --json prints { checks, links } for CI`,
   ],
   [
     'sync',

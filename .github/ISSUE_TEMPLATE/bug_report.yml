@@ -116,7 +116,7 @@ body:
       options:
         - label: I have checked that this issue hasn't already been reported
           required: true
-        - label: I have run `venfork status` to verify my setup
+        - label: I have run `venfork doctor` to verify my setup
           required: false
         - label: I have verified that `gh auth status` shows I'm authenticated
           required: false

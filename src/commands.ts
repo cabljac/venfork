@@ -18,7 +18,6 @@ export {
   type StagingPlan,
   stageCommand,
 } from './commands/stage.js';
-export { statusCommand } from './commands/status.js';
 export { syncCommand } from './commands/sync.js';
 export { workflowsCommand } from './commands/workflows.js';
 export { stripInternalBlocks } from './shared/redaction.js';

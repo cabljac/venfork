@@ -22,12 +22,13 @@ export function verifyDoctorOutput(
 ): string | null {
   let checks: Array<{ id?: string; ok?: unknown }>;
   try {
-    checks = JSON.parse(stdout);
+    checks = JSON.parse(stdout)?.checks;
   } catch {
     return `doctor --json did not print JSON:\n${stdout}`;
   }
   if (exitCode !== 0) return `doctor exited with exit code ${exitCode}`;
-  if (!Array.isArray(checks)) return `doctor output is not an array: ${stdout}`;
+  if (!Array.isArray(checks))
+    return `doctor output has no checks array: ${stdout}`;
   const ids = checks.map((c) => c.id);
   if (JSON.stringify(ids) !== JSON.stringify(EXPECTED_DOCTOR_IDS)) {
     return `unexpected check ids: ${ids.join(',')}; want ${EXPECTED_DOCTOR_IDS.join(',')}`;

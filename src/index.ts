@@ -12,12 +12,11 @@ import {
   setupCommand,
   showHelp,
   stageCommand,
-  statusCommand,
   syncCommand,
   workflowsCommand,
 } from './commands.js';
 import { requiresGhAuth } from './dispatch.js';
-import { parseDoctorCliArgs, parseStatusCliArgs } from './doctor-args.js';
+import { parseDoctorCliArgs } from './doctor-args.js';
 import { ensureGhAuth } from './git.js';
 import { parseIssueCliArgs } from './issue-args.js';
 import { parsePreserveCliArgs } from './preserve-args.js';
@@ -98,17 +97,6 @@ async function main(): Promise<void> {
         internalPrNumber: parsed.internalPrNumber,
         noUpdateExisting: parsed.noUpdateExisting,
       });
-      break;
-    }
-    case 'status': {
-      const parsed = parseStatusCliArgs(args.slice(1));
-      if (parsed.check) {
-        if (!(await doctorCommand({ json: parsed.json }))) {
-          process.exitCode = 1;
-        }
-      } else {
-        await statusCommand();
-      }
       break;
     }
     case 'doctor': {
