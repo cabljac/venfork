@@ -22,7 +22,11 @@ const MONTH_NAMES = [
 ];
 const WEEKDAY_NAMES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
-/** Splits into 5 fields and replaces month and weekday names with numbers. */
+/**
+ * Splits into 5 fields and replaces month and weekday names with numbers.
+ * Names are replaced only in list items and range ends, never in the step or
+ * as the lone base of a step, and are matched case-insensitively.
+ */
 function splitCron(cron: string): string[] {
   const fields = cron.trim().split(/\s+/);
   const names: Record<number, { list: string[]; offset: number }> = {
@@ -32,10 +36,18 @@ function splitCron(cron: string): string[] {
   return fields.map((field, index) => {
     const table = names[index];
     if (!table) return field;
-    return field.replace(/[A-Za-z]+/g, (name) => {
+    const toNumber = (name: string) => {
       const at = table.list.indexOf(name.toUpperCase());
       return at === -1 ? name : String(at + table.offset);
+    };
+    const [base, ...step] = field.split('/');
+    const items = base.split(',').map((item) => {
+      if (item.includes('-')) {
+        return item.split('-').map(toNumber).join('-');
+      }
+      return step.length > 0 ? item : toNumber(item);
     });
+    return [items.join(','), ...step].join('/');
   });
 }
 
@@ -99,7 +111,8 @@ function isValidCronField(field: string, min: number, max: number): boolean {
 /**
  * True when `cron` is a 5-field cron expression GitHub Actions accepts:
  * numbers, ranges, lists and `/step` (step >= 1) within each field's
- * bounds, plus three-letter month and weekday names. Macros such as `@hourly` are rejected.
+ * bounds, plus three-letter month and weekday names in lists and ranges.
+ * Macros such as `@hourly` are rejected.
  */
 export function isValidCronExpression(cron: string): boolean {
   const parts = splitCron(cron);
