@@ -482,9 +482,11 @@ export interface StageOptions {
 
 /**
  * Synthetic upstream PR body for when no internal review PR was found: one
- * bullet per published commit subject, with every `#N` reference dropped (it
- * would resolve against an unrelated upstream issue or PR). No SHAs, so
- * nothing points back at the mirror.
+ * bullet per published commit subject, with `#N` references dropped (they
+ * would resolve against an unrelated upstream issue or PR): `(#N)` groups,
+ * and `#N` after the start or whitespace and before the end, whitespace or
+ * punctuation. `#N` inside a word or URL is kept. No SHAs, so nothing
+ * points back at the mirror.
  *
  * @internal Exported for unit testing; not part of the public API.
  */
@@ -492,8 +494,8 @@ export function syntheticBody(subjects: readonly string[]): string {
   const lines = subjects
     .map((subject) =>
       subject
-        .replace(/#\d+\b/g, '')
-        .replace(/\(\s*\)/g, '')
+        .replace(/\s*\(#\d+\)/g, '')
+        .replace(/(^|\s+)#\d+(?=$|\s|[.,;:!?)\]}"'])/g, '')
         .replace(/\s+/g, ' ')
         .trim()
     )
