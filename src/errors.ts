@@ -96,3 +96,23 @@ export class SyncDivergenceError extends VenforkError {
     this.name = 'SyncDivergenceError';
   }
 }
+
+/**
+ * Thrown when the `venfork-config` branch exists but cannot be fetched,
+ * parsed or validated. Commands must stop rather than treat the mirror as
+ * having no config.
+ */
+export class ConfigError extends VenforkError {
+  /** `'fetch'` when origin could not be read; `'invalid'` for bad content. */
+  public readonly reason: 'fetch' | 'invalid';
+
+  constructor(
+    message: string,
+    options?: { cause?: unknown; reason?: 'fetch' | 'invalid' }
+  ) {
+    super(message);
+    this.name = 'ConfigError';
+    this.reason = options?.reason ?? 'invalid';
+    if (options?.cause !== undefined) this.cause = options.cause;
+  }
+}

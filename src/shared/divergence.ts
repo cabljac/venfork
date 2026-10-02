@@ -1,7 +1,11 @@
 import { $ } from 'execa';
 import { normalizePreservePath } from '../config.js';
 import type { SyncDivergenceError } from '../errors.js';
-import { isManagedCommit } from './managed-commit.js';
+import {
+  classifyManagedCommit,
+  isWeakManagedKind,
+  type ManagedCommitKind,
+} from './managed-commit.js';
 
 /**
  * Lists the file paths changed by a single commit. Returns an empty array on
@@ -54,10 +58,18 @@ export function isPreservedCommit(
   return changedFiles.every((file) => allowed.has(file));
 }
 
+/** A commit skipped as venfork-managed on a weak signal (not the trailer). */
+export interface DroppedManagedCommit {
+  commit: string;
+  kind: ManagedCommitKind;
+}
+
 /** Commits on `<remote>/<defaultBranch>` that upstream does not have. */
 export interface DivergenceResult {
   count: number;
   files: string[];
+  /** Commits skipped as managed on a signal other than the trailer. */
+  weakManaged: DroppedManagedCommit[];
 }
 
 /**
@@ -81,7 +93,7 @@ export async function checkDivergence(args: {
   })`git rev-parse --verify ${`${remote}/${defaultBranch}`}`;
   if (remoteRef.exitCode !== 0) {
     // First sync: the remote has no default branch yet.
-    return { count: 0, files: [] };
+    return { count: 0, files: [], weakManaged: [] };
   }
   const result = await $({
     ...cwdOpt,
@@ -93,8 +105,13 @@ export async function checkDivergence(args: {
 
   let count = 0;
   const files = new Set<string>();
+  const weakManaged: DroppedManagedCommit[] = [];
   for (const commit of divergentCommits) {
-    if (await isManagedCommit(commit, cwd)) continue;
+    const kind = await classifyManagedCommit(commit, cwd);
+    if (kind !== null) {
+      if (isWeakManagedKind(kind)) weakManaged.push({ commit, kind });
+      continue;
+    }
     // Compute the changed files once - both the preserve check and the
     // divergence-error file aggregation want the same list, and
     // `git diff-tree` isn't free.
@@ -107,7 +124,7 @@ export async function checkDivergence(args: {
       files.add(file);
     }
   }
-  return { count, files: Array.from(files).sort() };
+  return { count, files: Array.from(files).sort(), weakManaged };
 }
 
 /**

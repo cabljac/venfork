@@ -1,14 +1,16 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import {
+  assertNoInvalidPreserve,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
   type VenforkConfig,
 } from '../config.js';
-import { SyncDivergenceError } from '../errors.js';
+import { ConfigError, SyncDivergenceError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import {
   checkDivergence,
+  type DroppedManagedCommit,
   formatDivergenceReport,
 } from '../shared/divergence.js';
 import {
@@ -16,7 +18,7 @@ import {
   resolveCommit,
   updateOriginTip,
 } from '../shared/mirror-commit.js';
-import { netFetch } from '../shared/net.js';
+import { netExec, netFailureReason, netFetch } from '../shared/net.js';
 import {
   reportSyncBlocked,
   resolveSyncBlocked,
@@ -50,20 +52,18 @@ async function syncPulledPr(
   s: ReturnType<typeof p.spinner>
 ): Promise<void> {
   s.start(`Fetching pull/${prNumber}/head from upstream`);
-  const fetchResult = await $({
-    cwd,
-    reject: false,
+  const fetchResult = await netExec(cwd, {
+    bufferOutput: true,
   })`git fetch upstream pull/${prNumber}/head:${branch}`;
   if (fetchResult.exitCode !== 0) {
     // git fetch refuses to clobber a divergent local branch; force into the
     // local ref since the source of truth for pulled PRs is upstream.
-    const forceResult = await $({
-      cwd,
-      reject: false,
+    const forceResult = await netExec(cwd, {
+      bufferOutput: true,
     })`git fetch upstream +pull/${prNumber}/head:${branch}`;
     if (forceResult.exitCode !== 0) {
       throw new Error(
-        `git fetch upstream pull/${prNumber}/head failed:\n${(forceResult.stderr || fetchResult.stderr).trim()}`
+        `git fetch upstream pull/${prNumber}/head failed: ${netFailureReason(forceResult)}`
       );
     }
   }
@@ -71,14 +71,18 @@ async function syncPulledPr(
   s.stop(`Fetched ${headSha.slice(0, 9)} → ${branch}`);
 
   s.start(`Pushing ${branch} to origin`);
-  const pushResult = await $({
-    cwd,
-    reject: false,
-  })`git push origin ${branch} --force-with-lease`;
-  if (pushResult.exitCode !== 0) {
+  try {
+    await pushBranchWithLease({
+      remote: 'origin',
+      branch,
+      target: headSha,
+      expected: await resolveCommit(`origin/${branch}`, cwd),
+      cwd,
+    });
+  } catch (err) {
     s.stop('Push failed');
     p.log.warn(
-      `Could not push ${branch} to origin: ${pushResult.stderr.trim()}`
+      `Could not push ${branch} to origin: ${err instanceof Error ? err.message : String(err)}`
     );
     p.log.warn(
       'Local branch is updated; the mirror copy was not. Skipping pulledPrs config update — the recorded head/lastSyncedAt would not match the mirror.'
@@ -109,6 +113,19 @@ async function syncPulledPr(
     const msg = err instanceof Error ? err.message : String(err);
     p.log.warn(`Could not update pulledPrs entry: ${msg}`);
   }
+}
+
+/**
+ * Warns, before anything is pushed, about commits that sync will replace
+ * because they look venfork-managed without carrying the trailer.
+ */
+function warnWeakManaged(commits: DroppedManagedCommit[]): void {
+  if (commits.length === 0) return;
+  p.log.warn(
+    `Treating ${commits.length} commit(s) as venfork-managed without the Venfork-Managed trailer; sync replaces them:\n${commits
+      .map(({ commit, kind }) => `  - ${commit.slice(0, 12)} (${kind})`)
+      .join('\n')}`
+  );
 }
 
 /**
@@ -151,6 +168,7 @@ export async function syncCommand(
     }
 
     const config = await readVenforkConfigFromRepo(repoDir);
+    assertNoInvalidPreserve(config);
     const noPublic = config?.mode === 'no-public';
 
     // Step 1: Fetch from upstream
@@ -196,7 +214,7 @@ export async function syncCommand(
       cwd: options?.cwd,
     });
     const publicDivergence = noPublic
-      ? { count: 0, files: [] as string[] }
+      ? { count: 0, files: [] as string[], weakManaged: [] }
       : await checkDivergence({
           remote: 'public',
           defaultBranch,
@@ -211,8 +229,8 @@ export async function syncCommand(
     if (originDivergence.count > 0 || publicDivergence.count > 0) {
       const divergence = new SyncDivergenceError(
         defaultBranch,
-        originDivergence,
-        publicDivergence
+        { count: originDivergence.count, files: originDivergence.files },
+        { count: publicDivergence.count, files: publicDivergence.files }
       );
       const report = formatDivergenceReport(divergence);
       p.log.warn('Divergent commits detected:');
@@ -222,6 +240,11 @@ export async function syncCommand(
       }
       throw divergence;
     }
+
+    warnWeakManaged([
+      ...originDivergence.weakManaged,
+      ...publicDivergence.weakManaged,
+    ]);
 
     // Read before anything is pushed: preserved files come from this tip, and
     // it is the lease for the origin push.
@@ -272,7 +295,8 @@ export async function syncCommand(
       );
     }
   } catch (error) {
-    if (error instanceof SyncDivergenceError) {
+    if (error instanceof SyncDivergenceError || error instanceof ConfigError) {
+      if (error instanceof ConfigError) s.stop('Config error');
       throw error;
     }
     s.stop('Error occurred');

@@ -1,5 +1,6 @@
 import { $ } from 'execa';
 import { AuthenticationError } from './errors.js';
+import { netExec } from './shared/net.js';
 
 /**
  * Checks if GitHub CLI is authenticated
@@ -162,7 +163,9 @@ export async function getDefaultBranch(
   const cwdOpt = cwd ? { cwd } : {};
   try {
     // First, try to update the remote HEAD to detect the default branch
-    await $({ ...cwdOpt, reject: false })`git remote set-head ${remote} -a`;
+    await netExec(cwd, {
+      bufferOutput: true,
+    })`git remote set-head ${remote} -a`;
 
     // Get the symbolic ref for the remote HEAD
     const result = await $({

@@ -58,6 +58,13 @@ export interface MirrorFixture {
   /** Runs git in `cwd` and returns trimmed stdout. */
   git(cwd: string, ...args: string[]): Promise<string>;
   /**
+   * Force-pushes a new `venfork-config` commit to origin whose
+   * `.venfork/config.json` holds `raw` verbatim, bypassing validation.
+   */
+  writeRawConfig(raw: string): Promise<void>;
+  /** The parsed config currently on origin's `venfork-config` branch. */
+  readRawConfig(): Promise<Record<string, unknown>>;
+  /**
    * Restores process env and deletes every fixture directory. Throws when a
    * fixture created later has not been cleaned up yet.
    */
@@ -207,6 +214,51 @@ export async function createMirrorFixture(
       publicFork,
       work,
       git,
+      async writeRawConfig(raw) {
+        const blob = (
+          await $({
+            cwd: work,
+            input: raw,
+          })`git hash-object -w --stdin`
+        ).stdout.trim();
+        const dir = (
+          await $({
+            cwd: work,
+            input: `100644 blob ${blob}\tconfig.json\n`,
+          })`git mktree`
+        ).stdout.trim();
+        const tree = (
+          await $({
+            cwd: work,
+            input: `040000 tree ${dir}\t.venfork\n`,
+          })`git mktree`
+        ).stdout.trim();
+        await git(work, 'fetch', '--quiet', 'origin');
+        const parent = await git(work, 'rev-parse', 'origin/venfork-config');
+        const commit = (
+          await $({
+            cwd: work,
+            env: pinnedEnv(),
+          })`git commit-tree ${tree} -p ${parent} -m ${'test: raw config'}`
+        ).stdout.trim();
+        await git(
+          work,
+          'push',
+          '--quiet',
+          '--force',
+          'origin',
+          `${commit}:refs/heads/venfork-config`
+        );
+        await git(work, 'fetch', '--quiet', 'origin');
+      },
+      async readRawConfig() {
+        const raw = await git(
+          origin,
+          'show',
+          'venfork-config:.venfork/config.json'
+        );
+        return JSON.parse(raw) as Record<string, unknown>;
+      },
       async commitOnUpstream(files, message = 'feat: upstream change') {
         await git(upstreamDev, 'pull', '--quiet', '--ff-only');
         const sha = await commitFiles(upstreamDev, files, message);
