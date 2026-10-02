@@ -99,6 +99,31 @@ describe('parseRepoName', () => {
 });
 
 describe('parseRepoPath', () => {
+  test.each([
+    ['trailing slash', 'https://github.com/acme/w-private/', 'acme/w-private'],
+    ['.git with trailing slash', 'https://github.com/acme/w.git/', 'acme/w'],
+    ['ssh URL with port', 'ssh://git@github.com:22/acme/w', 'acme/w'],
+    ['ssh URL without port', 'ssh://git@github.com/acme/w.git', 'acme/w'],
+    [
+      'https with credentials',
+      'https://x-access-token:t@github.com/acme/w',
+      'acme/w',
+    ],
+  ])('normalizes %s', (_label, input, expected) => {
+    expect(parseRepoPath(input)).toBe(expected);
+  });
+
+  test.each([
+    ['look-alike host', 'https://evilgithub.com/acme/w'],
+    ['github.com as a subpath', 'https://evil.example/github.com/acme/w'],
+    ['other host', 'git@gitlab.com:acme/w.git'],
+    ['owner only', 'https://github.com/acme'],
+    ['extra path segments', 'https://github.com/acme/w/tree/main'],
+    ['local path', '/tmp/fixture/origin.git'],
+  ])('rejects %s', (_label, input) => {
+    expect(parseRepoPath(input)).toBe('');
+  });
+
   test('accepts owner/repo shorthand directly', () => {
     expect(parseRepoPath('firebase/extensions')).toBe('firebase/extensions');
   });
