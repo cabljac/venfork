@@ -1,6 +1,6 @@
 import * as p from '@clack/prompts';
-import { readVenforkConfigFromRepo } from '../config.js';
-import { NotInRepositoryError } from '../errors.js';
+import { readVenforkConfigFromRepo, type VenforkConfig } from '../config.js';
+import { ConfigError, NotInRepositoryError } from '../errors.js';
 import {
   getCurrentBranch,
   getRemotes,
@@ -29,17 +29,16 @@ export async function statusCommand(): Promise<void> {
   const hasPublic = await hasRemote('public');
   const hasUpstream = await hasRemote('upstream');
 
-  // Mode is read from venfork-config; absent ⇒ standard. Use a best-effort
-  // read so a missing/unreadable config doesn't break `status`.
-  let mode: 'standard' | 'no-public' = 'standard';
+  let config: VenforkConfig | null = null;
   try {
-    const cfgForMode = await readVenforkConfigFromRepo(process.cwd());
-    if (cfgForMode?.mode === 'no-public') {
-      mode = 'no-public';
+    config = await readVenforkConfigFromRepo(process.cwd());
+  } catch (err) {
+    if (err instanceof ConfigError) {
+      p.log.warn(`Could not read venfork-config: ${err.message}`);
     }
-  } catch {
-    // Fall through to 'standard'.
   }
+  const mode: 'standard' | 'no-public' =
+    config?.mode === 'no-public' ? 'no-public' : 'standard';
   const noPublic = mode === 'no-public';
 
   // Check if setup is complete
@@ -75,70 +74,63 @@ export async function statusCommand(): Promise<void> {
 
   p.note(statusLines.join('\n'), 'Repository Status');
 
-  // Surface PR/issue linkages from venfork-config (best-effort — quietly skip
-  // if the branch is missing or the read fails).
-  if (isSetupComplete) {
-    try {
-      const cfg = await readVenforkConfigFromRepo(process.cwd());
-      const linkageBlocks: string[] = [];
+  if (isSetupComplete && config) {
+    const linkageBlocks: string[] = [];
 
-      const formatDate = (iso: string): string => {
-        try {
-          return new Date(iso).toISOString().slice(0, 10);
-        } catch {
-          return iso;
-        }
-      };
-
-      const ship = cfg?.shippedBranches ?? {};
-      if (Object.keys(ship).length > 0) {
-        const lines = Object.entries(ship)
-          .map(
-            ([branch, entry]) =>
-              `  ${branch} → ${entry.upstreamPrUrl} (${formatDate(entry.shippedAt)})`
-          )
-          .join('\n');
-        linkageBlocks.push(`Shipped branches:\n${lines}`);
+    const formatDate = (iso: string): string => {
+      try {
+        return new Date(iso).toISOString().slice(0, 10);
+      } catch {
+        return iso;
       }
+    };
 
-      const pulled = cfg?.pulledPrs ?? {};
-      if (Object.keys(pulled).length > 0) {
-        const lines = Object.entries(pulled)
-          .map(
-            ([branch, entry]) =>
-              `  ${branch} → ${entry.upstreamPrUrl} (last sync ${formatDate(entry.lastSyncedAt)})`
-          )
-          .join('\n');
-        linkageBlocks.push(`Pulled PRs:\n${lines}`);
-      }
+    const ship = config.shippedBranches ?? {};
+    if (Object.keys(ship).length > 0) {
+      const lines = Object.entries(ship)
+        .map(
+          ([branch, entry]) =>
+            `  ${branch} → ${entry.upstreamPrUrl} (${formatDate(entry.shippedAt)})`
+        )
+        .join('\n');
+      linkageBlocks.push(`Shipped branches:\n${lines}`);
+    }
 
-      const shippedIssues = cfg?.shippedIssues ?? {};
-      if (Object.keys(shippedIssues).length > 0) {
-        const lines = Object.entries(shippedIssues)
-          .map(
-            ([, entry]) =>
-              `  #${entry.internalIssueNumber} → ${entry.upstreamIssueUrl} (${formatDate(entry.shippedAt)})`
-          )
-          .join('\n');
-        linkageBlocks.push(`Shipped issues:\n${lines}`);
-      }
+    const pulled = config.pulledPrs ?? {};
+    if (Object.keys(pulled).length > 0) {
+      const lines = Object.entries(pulled)
+        .map(
+          ([branch, entry]) =>
+            `  ${branch} → ${entry.upstreamPrUrl} (last sync ${formatDate(entry.lastSyncedAt)})`
+        )
+        .join('\n');
+      linkageBlocks.push(`Pulled PRs:\n${lines}`);
+    }
 
-      const pulledIssues = cfg?.pulledIssues ?? {};
-      if (Object.keys(pulledIssues).length > 0) {
-        const lines = Object.entries(pulledIssues)
-          .map(
-            ([, entry]) =>
-              `  #${entry.internalIssueNumber} ← ${entry.upstreamIssueUrl} (${formatDate(entry.pulledAt)})`
-          )
-          .join('\n');
-        linkageBlocks.push(`Pulled issues:\n${lines}`);
-      }
+    const shippedIssues = config.shippedIssues ?? {};
+    if (Object.keys(shippedIssues).length > 0) {
+      const lines = Object.entries(shippedIssues)
+        .map(
+          ([, entry]) =>
+            `  #${entry.internalIssueNumber} → ${entry.upstreamIssueUrl} (${formatDate(entry.shippedAt)})`
+        )
+        .join('\n');
+      linkageBlocks.push(`Shipped issues:\n${lines}`);
+    }
 
-      if (linkageBlocks.length > 0) {
-        p.note(linkageBlocks.join('\n\n'), 'Linkages');
-      }
-    } catch {
-      // Best-effort; status should never fail because of a config read.
+    const pulledIssues = config.pulledIssues ?? {};
+    if (Object.keys(pulledIssues).length > 0) {
+      const lines = Object.entries(pulledIssues)
+        .map(
+          ([, entry]) =>
+            `  #${entry.internalIssueNumber} ← ${entry.upstreamIssueUrl} (${formatDate(entry.pulledAt)})`
+        )
+        .join('\n');
+      linkageBlocks.push(`Pulled issues:\n${lines}`);
+    }
+
+    if (linkageBlocks.length > 0) {
+      p.note(linkageBlocks.join('\n\n'), 'Linkages');
     }
   }
 
