@@ -288,3 +288,14 @@ describe('the preview lists every file the history publishes', () => {
     expect(details).not.toContain('src/a.txt (removed');
   });
 });
+describe('stage refuses invalid preserve entries', () => {
+  test('a trailing-slash entry from an old config is refused with the fix', async () => {
+    await fx.commitOnOrigin({ 'docs/x.md': 'client plan\n' });
+    const config = await fx.readRawConfig();
+    await fx.writeRawConfig(JSON.stringify({ ...config, preserve: ['docs/'] }));
+    await featureFrom('upstream/main');
+    await commitFile('docs/x.md', 'client plan, edited\n', 'docs: x');
+
+    await expectRefused('venfork preserve remove docs/');
+  });
+});

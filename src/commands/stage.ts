@@ -1,6 +1,10 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
-import { readVenforkConfigFromRepo, updateVenforkConfig } from '../config.js';
+import {
+  assertNoInvalidPreserve,
+  readVenforkConfigFromRepo,
+  updateVenforkConfig,
+} from '../config.js';
 import {
   BranchNotFoundError,
   GitError,
@@ -224,9 +228,10 @@ export interface StagingPlan {
  * Resolves remotes and the default branch for a staging push, fetches
  * upstream and origin, and refuses branches that are not upstream work:
  * `venfork-config`, anything that is not a local branch, upstream's default
- * branch, and a branch with no history in common with upstream. Throws
- * `BranchNotFoundError` / `RemoteNotFoundError` so callers can render a
- * single failure path.
+ * branch, and a branch with no history in common with upstream. Also
+ * refuses while the config holds invalid preserve entries, as sync does.
+ * Throws `BranchNotFoundError` / `RemoteNotFoundError` so callers can render
+ * a single failure path.
  */
 async function planStaging(
   requested: string,
@@ -257,6 +262,7 @@ async function planStaging(
   }
 
   const config = await readVenforkConfigFromRepo(cwd);
+  assertNoInvalidPreserve(config);
   const noPublic = config?.mode === 'no-public';
 
   const upstreamUrlResult = await $({
@@ -323,7 +329,7 @@ async function planStaging(
     upstreamUrl,
     upstreamRepoPath,
     upstreamDefaultBranch,
-    preserve: [...(config?.preserve ?? []), ...(config?.invalidPreserve ?? [])],
+    preserve: config?.preserve ?? [],
     noPublic,
   };
 }
