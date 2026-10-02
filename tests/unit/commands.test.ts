@@ -3437,6 +3437,29 @@ describe('pullRequestCommand', () => {
 });
 
 describe('syncCommand - pulled PR branches', () => {
+  test('pushes a pulled PR branch with an explicit lease on the mirror copy', async () => {
+    mockResponses.set('git rev-parse upstream-pr/7', {
+      exitCode: 0,
+      stdout: 'newsha\n',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify origin/upstream-pr/7^{commit}', {
+      exitCode: 0,
+      stdout: 'mirrorsha\n',
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('upstream-pr/7');
+    } catch {
+      // updateVenforkConfig may fail under mocks
+    }
+
+    expect(execaCalls).toContain(
+      'git push origin newsha:refs/heads/upstream-pr/7 --force-with-lease=refs/heads/upstream-pr/7:mirrorsha'
+    );
+  });
+
   test('refreshes upstream-pr/<n> via pull/<n>/head and updates origin', async () => {
     mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,
@@ -3465,11 +3488,14 @@ describe('syncCommand - pulled PR branches', () => {
       stdout: 'newsha\n',
       stderr: '',
     });
-    mockResponses.set('git push origin upstream-pr/42 --force-with-lease', {
-      exitCode: 0,
-      stdout: '',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git push origin newsha:refs/heads/upstream-pr/42 --force-with-lease',
+      {
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+      }
+    );
 
     try {
       await syncCommand('upstream-pr/42');
@@ -3484,7 +3510,9 @@ describe('syncCommand - pulled PR branches', () => {
     ).toBe(true);
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git push origin upstream-pr/42 --force-with-lease')
+        cmd.includes(
+          'git push origin newsha:refs/heads/upstream-pr/42 --force-with-lease'
+        )
       )
     ).toBe(true);
     // Should NOT run the default-branch divergence flow.
@@ -3586,11 +3614,14 @@ describe('syncCommand - pulled PR branches', () => {
     });
     // Mirror push fails — config write must NOT happen, otherwise pulledPrs
     // would record a head/lastSyncedAt that doesn't match the mirror.
-    mockResponses.set('git push origin upstream-pr/42 --force-with-lease', {
-      exitCode: 1,
-      stdout: '',
-      stderr: 'fatal: remote rejected',
-    });
+    mockResponses.set(
+      'git push origin newsha:refs/heads/upstream-pr/42 --force-with-lease',
+      {
+        exitCode: 1,
+        stdout: '',
+        stderr: 'fatal: remote rejected',
+      }
+    );
 
     try {
       await syncCommand('upstream-pr/42');

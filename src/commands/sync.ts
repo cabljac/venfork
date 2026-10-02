@@ -18,7 +18,7 @@ import {
   resolveCommit,
   updateOriginTip,
 } from '../shared/mirror-commit.js';
-import { netFetch } from '../shared/net.js';
+import { netExec, netFailureReason, netFetch } from '../shared/net.js';
 import {
   reportSyncBlocked,
   resolveSyncBlocked,
@@ -52,20 +52,18 @@ async function syncPulledPr(
   s: ReturnType<typeof p.spinner>
 ): Promise<void> {
   s.start(`Fetching pull/${prNumber}/head from upstream`);
-  const fetchResult = await $({
-    cwd,
-    reject: false,
+  const fetchResult = await netExec(cwd, {
+    bufferOutput: true,
   })`git fetch upstream pull/${prNumber}/head:${branch}`;
   if (fetchResult.exitCode !== 0) {
     // git fetch refuses to clobber a divergent local branch; force into the
     // local ref since the source of truth for pulled PRs is upstream.
-    const forceResult = await $({
-      cwd,
-      reject: false,
+    const forceResult = await netExec(cwd, {
+      bufferOutput: true,
     })`git fetch upstream +pull/${prNumber}/head:${branch}`;
     if (forceResult.exitCode !== 0) {
       throw new Error(
-        `git fetch upstream pull/${prNumber}/head failed:\n${(forceResult.stderr || fetchResult.stderr).trim()}`
+        `git fetch upstream pull/${prNumber}/head failed: ${netFailureReason(forceResult)}`
       );
     }
   }
@@ -73,14 +71,18 @@ async function syncPulledPr(
   s.stop(`Fetched ${headSha.slice(0, 9)} → ${branch}`);
 
   s.start(`Pushing ${branch} to origin`);
-  const pushResult = await $({
-    cwd,
-    reject: false,
-  })`git push origin ${branch} --force-with-lease`;
-  if (pushResult.exitCode !== 0) {
+  try {
+    await pushBranchWithLease({
+      remote: 'origin',
+      branch,
+      target: headSha,
+      expected: await resolveCommit(`origin/${branch}`, cwd),
+      cwd,
+    });
+  } catch (err) {
     s.stop('Push failed');
     p.log.warn(
-      `Could not push ${branch} to origin: ${pushResult.stderr.trim()}`
+      `Could not push ${branch} to origin: ${err instanceof Error ? err.message : String(err)}`
     );
     p.log.warn(
       'Local branch is updated; the mirror copy was not. Skipping pulledPrs config update — the recorded head/lastSyncedAt would not match the mirror.'
