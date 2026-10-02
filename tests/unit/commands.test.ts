@@ -727,6 +727,62 @@ describe('setupCommand - idempotent recovery', () => {
     expect(execaCalls.some((c) => c.includes('git fetch upstream'))).toBe(true);
   });
 
+  test('refuses an existing venfork-config that disagrees, before rewiring remotes', async () => {
+    mockResponses.set('gh repo create', {
+      exitCode: 1,
+      stderr: 'name already exists on this account',
+      stdout: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        upstreamUrl: 'git@github.com:other/project.git',
+        mode: 'no-public',
+      }),
+      stderr: '',
+    });
+
+    await expect(
+      setupCommand('git@github.com:test/repo.git', 'test-vendor')
+    ).rejects.toThrow('process.exit(1)');
+
+    expect(clack.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'existing venfork-config disagrees with this setup: mode is no-public (expected standard); upstreamUrl is git@github.com:other/project.git (expected git@github.com:test/repo.git); publicForkUrl is (none) (expected git@github.com:testuser/repo.git)'
+      )
+    );
+    expect(execaCalls.some((c) => c.includes('git remote set-url'))).toBe(
+      false
+    );
+    expect(execaCalls.some((c) => c.includes('git remote add'))).toBe(false);
+  });
+
+  test('keeps an existing venfork-config that agrees, in another URL form', async () => {
+    mockResponses.set('gh repo create', {
+      exitCode: 1,
+      stderr: 'name already exists on this account',
+      stdout: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        upstreamUrl: 'https://github.com/test/repo',
+        publicForkUrl: 'git@github.com:testuser/repo.git',
+      }),
+      stderr: '',
+    });
+
+    await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+
+    expect(
+      execaCalls.some((c) =>
+        c.includes('git remote set-url --push upstream DISABLE')
+      )
+    ).toBe(true);
+  });
+
   test('still seeds new private mirror and runs sync when public fork already exists', async () => {
     mockResponses.set('gh repo fork', {
       exitCode: 1,
@@ -1555,11 +1611,20 @@ describe('stageCommand', () => {
       stdout: 'chore(venfork): hourly sync public fork via dedicated PAT',
       stderr: '',
     });
-    mockResponses.set('git log -1 --format=%ae wf222', {
+    mockResponses.set('git log -1 --format=%ae%n%ce wf222', {
       exitCode: 0,
-      stdout: 'venfork-bot@users.noreply.github.com',
+      stdout:
+        'venfork-bot@users.noreply.github.com\nvenfork-bot@users.noreply.github.com',
       stderr: '',
     });
+    mockResponses.set(
+      'git diff-tree -r -z --no-renames --root --no-commit-id --name-status wf222',
+      {
+        exitCode: 0,
+        stdout: 'M\0.github/workflows/venfork-sync.yml\0',
+        stderr: '',
+      }
+    );
     mockResponses.set('git show -z --name-only --pretty=format: wf222', {
       exitCode: 0,
       stdout: '.github/workflows/venfork-sync.yml',
@@ -2951,11 +3016,7 @@ describe('syncCommand - error paths', () => {
     expect(process.exit).not.toHaveBeenCalled();
   });
 
-  test('treats commits touching only .github/workflows files as managed', async () => {
-    // Divergent commit that touches both sync.yml and venfork-sync.yml (e.g. a
-    // historical venfork rollout commit). All changed files are under
-    // .github/workflows, so the commit should be filtered out and sync should
-    // proceed past the divergence guard.
+  test('a bot commit that also adds another workflow file is divergence', async () => {
     mockResponses.set('git rev-list upstream/main..origin/main', {
       exitCode: 0,
       stdout: 'abc123\n',
@@ -2966,9 +3027,10 @@ describe('syncCommand - error paths', () => {
       stdout: 'chore(workflows): Add workflows for venfork sync',
       stderr: '',
     });
-    mockResponses.set('git log -1 --format=%ae abc123', {
+    mockResponses.set('git log -1 --format=%ae%n%ce abc123', {
       exitCode: 0,
-      stdout: 'venfork-bot@users.noreply.github.com',
+      stdout:
+        'venfork-bot@users.noreply.github.com\nvenfork-bot@users.noreply.github.com',
       stderr: '',
     });
     mockResponses.set('git show -z --name-only --pretty=format: abc123', {
@@ -2976,19 +3038,23 @@ describe('syncCommand - error paths', () => {
       stdout: '.github/workflows/sync.yml\0.github/workflows/venfork-sync.yml',
       stderr: '',
     });
+    mockResponses.set(
+      'git diff-tree -r -z --no-renames --root --no-commit-id --name-status abc123',
+      {
+        exitCode: 0,
+        stdout:
+          'A\0.github/workflows/sync.yml\0A\0.github/workflows/venfork-sync.yml\0',
+        stderr: '',
+      }
+    );
 
-    try {
-      await syncCommand('main');
-    } catch {
-      // Expected in mocked environment
-    }
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
 
-    // Sync should have proceeded to the push step, not aborted.
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.includes('git push origin upstream0tip:refs/heads/main')
-      )
-    ).toBe(true);
+    expect(execaCalls.some((cmd) => cmd.includes('git push origin'))).toBe(
+      false
+    );
   });
 
   test('still aborts when divergent commit touches files outside .github/workflows', async () => {
@@ -3385,7 +3451,7 @@ describe('statusCommand - error paths', () => {
   });
 
   test('shows message when no remotes configured', async () => {
-    mockResponses.set('git remote -v', { exitCode: 0, stdout: '', stderr: '' });
+    mockResponses.set('git remote', { exitCode: 0, stdout: '', stderr: '' });
 
     try {
       await statusCommand();
@@ -3393,8 +3459,7 @@ describe('statusCommand - error paths', () => {
       // Expected - may exit
     }
 
-    // Command should run successfully
-    expect(execaCalls.some((cmd) => cmd.includes('git remote -v'))).toBe(true);
+    expect(execaCalls).toContain('git remote');
   });
 
   test('shows incomplete setup message when missing remotes', async () => {

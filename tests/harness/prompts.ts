@@ -2,16 +2,18 @@ import { mock } from 'bun:test';
 
 const noop = () => {};
 const logError = mock(noop);
+const logWarn = mock(noop);
 
 /** Clears recorded prompt calls; the test preload runs it before each test. */
 export function resetQuietPrompts(): void {
   logError.mockClear();
+  logWarn.mockClear();
 }
 
 /**
  * Silent stand-in for `@clack/prompts` so commands run without a TTY.
- * Every confirm answers yes; `log.error` is a mock, cleared before each
- * test by the preload, so tests can read errors.
+ * Every confirm answers yes; `log.error` and `log.warn` are mocks, cleared
+ * before each test by the preload, so tests can read them.
  */
 export function quietPrompts() {
   return {
@@ -22,7 +24,7 @@ export function quietPrompts() {
     spinner: () => ({ start: noop, stop: noop, message: noop }),
     log: {
       error: logError,
-      warn: noop,
+      warn: logWarn,
       info: noop,
       success: noop,
       step: noop,

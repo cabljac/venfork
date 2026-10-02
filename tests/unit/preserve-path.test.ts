@@ -23,6 +23,10 @@ describe('normalizePreservePath', () => {
     ['leading dash', '--all'],
     ['parent segment', 'a/../b'],
     ['whitespace', 'a b'],
+    ['the sync workflow', '.github/workflows/venfork-sync.yml'],
+    ['a path below the sync workflow', '.github/workflows/venfork-sync.yml/x'],
+    ['the venfork config', '.venfork/config.json'],
+    ['the venfork directory', '.venfork'],
   ])('rejects %s (%s)', (_label, value) => {
     expect(normalizePreservePath(value)).toBeNull();
   });

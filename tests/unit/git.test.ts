@@ -289,96 +289,68 @@ describe('isGitRepository', () => {
 });
 
 describe('getRemotes', () => {
-  test('parses single remote with fetch and push', async () => {
-    mockResponses.set('git remote -v', {
+  /** Mocks `git remote` and `git remote get-url [--push]` for `remotes`. */
+  function mockRemotes(
+    remotes: Record<string, { fetch: string; push: string }>
+  ): void {
+    for (const [name, urls] of Object.entries(remotes)) {
+      mockResponses.set(`git remote get-url --push ${name}`, {
+        exitCode: 0,
+        stdout: urls.push,
+        stderr: '',
+      });
+      mockResponses.set(`git remote get-url ${name}`, {
+        exitCode: 0,
+        stdout: urls.fetch,
+        stderr: '',
+      });
+    }
+    mockResponses.set('git remote', {
       exitCode: 0,
-      stdout:
-        'origin\tgit@github.com:user/repo.git (fetch)\norigin\tgit@github.com:user/repo.git (push)',
+      stdout: Object.keys(remotes).join('\n'),
       stderr: '',
     });
+  }
 
-    const result = await getRemotes();
-
-    expect(result).toEqual({
+  test('reads fetch and push URLs for every remote', async () => {
+    const remotes = {
       origin: {
         fetch: 'git@github.com:user/repo.git',
         push: 'git@github.com:user/repo.git',
       },
-    });
+      upstream: { fetch: 'git@github.com:org/repo.git', push: 'DISABLE' },
+    };
+    mockRemotes(remotes);
+
+    expect(await getRemotes()).toEqual(remotes);
   });
 
-  test('parses multiple remotes', async () => {
-    mockResponses.set('git remote -v', {
-      exitCode: 0,
-      stdout:
-        'origin\tgit@github.com:user/repo.git (fetch)\n' +
-        'origin\tgit@github.com:user/repo.git (push)\n' +
-        'upstream\tgit@github.com:org/repo.git (fetch)\n' +
-        'upstream\tgit@github.com:org/repo.git (push)\n' +
-        'public\thttps://github.com:user/fork.git (fetch)\n' +
-        'public\thttps://github.com:user/fork.git (push)',
-      stderr: '',
-    });
-
-    const result = await getRemotes();
-
-    expect(result).toEqual({
+  test('keeps a URL that contains spaces', async () => {
+    const remotes = {
       origin: {
-        fetch: 'git@github.com:user/repo.git',
-        push: 'git@github.com:user/repo.git',
+        fetch: '/tmp/with space/origin.git',
+        push: '/tmp/with space/origin.git',
       },
-      upstream: {
-        fetch: 'git@github.com:org/repo.git',
-        push: 'git@github.com:org/repo.git',
-      },
-      public: {
-        fetch: 'https://github.com:user/fork.git',
-        push: 'https://github.com:user/fork.git',
-      },
-    });
-  });
+    };
+    mockRemotes(remotes);
 
-  test('handles DISABLE push URL', async () => {
-    mockResponses.set('git remote -v', {
-      exitCode: 0,
-      stdout:
-        'upstream\tgit@github.com:org/repo.git (fetch)\n' +
-        'upstream\tDISABLE (push)',
-      stderr: '',
-    });
-
-    const result = await getRemotes();
-
-    expect(result).toEqual({
-      upstream: {
-        fetch: 'git@github.com:org/repo.git',
-        push: 'DISABLE',
-      },
-    });
+    expect(await getRemotes()).toEqual(remotes);
   });
 
   test('returns empty object when no remotes', async () => {
-    mockResponses.set('git remote -v', {
-      exitCode: 0,
-      stdout: '',
-      stderr: '',
-    });
+    mockRemotes({});
 
-    const result = await getRemotes();
-
-    expect(result).toEqual({});
+    expect(await getRemotes()).toEqual({});
   });
 
   test('returns empty object on non-zero exit code', async () => {
-    mockResponses.set('git remote -v', {
+    mockResponses.set('git remote', {
       exitCode: 1,
       stdout: '',
       stderr: 'error',
     });
 
-    const result = await getRemotes();
-
-    expect(result).toEqual({});
+    expect(await getRemotes()).toEqual({});
   });
 
   test('returns empty object on command error', async () => {
@@ -386,29 +358,7 @@ describe('getRemotes', () => {
       Promise.reject(new Error('command failed'))
     );
 
-    const result = await getRemotes();
-
-    expect(result).toEqual({});
-  });
-
-  test('ignores malformed lines', async () => {
-    mockResponses.set('git remote -v', {
-      exitCode: 0,
-      stdout:
-        'origin\tgit@github.com:user/repo.git (fetch)\n' +
-        'malformed line here\n' +
-        'origin\tgit@github.com:user/repo.git (push)',
-      stderr: '',
-    });
-
-    const result = await getRemotes();
-
-    expect(result).toEqual({
-      origin: {
-        fetch: 'git@github.com:user/repo.git',
-        push: 'git@github.com:user/repo.git',
-      },
-    });
+    expect(await getRemotes()).toEqual({});
   });
 });
 

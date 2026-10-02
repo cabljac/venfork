@@ -14,6 +14,10 @@ import {
   formatDivergenceReport,
 } from '../shared/divergence.js';
 import {
+  hasManagedTrailer,
+  isManagedCommit,
+} from '../shared/managed-commit.js';
+import {
   pushBranchWithLease,
   resolveCommit,
   updateOriginTip,
@@ -192,6 +196,23 @@ export async function syncCommand(
       throw new Error(
         `upstream/${defaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
       );
+    }
+
+    if (config === null) {
+      const originTip = await resolveCommit(
+        `origin/${defaultBranch}`,
+        options?.cwd
+      );
+      if (
+        originTip &&
+        originTip !== upstreamTip &&
+        ((await hasManagedTrailer(originTip, options?.cwd)) ||
+          (await isManagedCommit(originTip, options?.cwd)))
+      ) {
+        throw new Error(
+          `The venfork-config branch is missing but origin/${defaultBranch} carries venfork state (a managed commit). Restore the venfork-config branch, or run \`venfork setup\` only on a fresh mirror.`
+        );
+      }
     }
 
     // Step 3: Check for divergence

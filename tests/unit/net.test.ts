@@ -1,12 +1,17 @@
 import { describe, expect, test } from 'bun:test';
-import { GIT_NET_TIMEOUT_MS } from '../../src/shared/constants.js';
 import { netFailureReason } from '../../src/shared/net.js';
 
 describe('netFailureReason', () => {
   test('prefers the timeout', () => {
-    expect(netFailureReason({ timedOut: true, stderr: 'x', exitCode: 1 })).toBe(
-      `timed out after ${GIT_NET_TIMEOUT_MS / 1000}s`
-    );
+    const saved = process.env.VENFORK_GIT_TIMEOUT;
+    delete process.env.VENFORK_GIT_TIMEOUT;
+    try {
+      expect(
+        netFailureReason({ timedOut: true, stderr: 'x', exitCode: 1 })
+      ).toBe('timed out after 600s');
+    } finally {
+      if (saved !== undefined) process.env.VENFORK_GIT_TIMEOUT = saved;
+    }
   });
 
   test('falls back from stderr to the exit code', () => {

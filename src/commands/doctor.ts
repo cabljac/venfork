@@ -2,7 +2,7 @@ import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { readVenforkConfigFromRepo, type VenforkConfig } from '../config.js';
 import { ConfigError } from '../errors.js';
-import { checkGhAuth, getDefaultBranch } from '../git.js';
+import { checkGhAuth, getDefaultBranch, getRemotes } from '../git.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
 import {
   cronMaxIntervalMinutes,
@@ -146,15 +146,7 @@ export async function runDoctorChecks(
   );
 
   const noPublic = config.mode === 'no-public';
-  const remotes: Record<string, Remote> = {};
-  const remoteList = await git(false)`git remote -v`;
-  for (const line of remoteList.stdout.split('\n')) {
-    const match = line.match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/);
-    if (!match) continue;
-    const [, name, url, kind] = match;
-    remotes[name] ??= { fetch: '', push: '' };
-    remotes[name][kind as 'fetch' | 'push'] = url;
-  }
+  const remotes: Record<string, Remote> = await getRemotes(cwd);
 
   const remoteProblems: string[] = [];
   const remoteFixes: string[] = [];
@@ -300,7 +292,7 @@ export async function runDoctorChecks(
       }
     }
 
-    const managed = await isManagedCommit(originTip, cwd);
+    const managed = await isManagedCommit(originTip, cwd, preserveAllowed);
     const base = managed ? await revParse(`${originTip}^`) : originTip;
     const onUpstream =
       base !== '' &&

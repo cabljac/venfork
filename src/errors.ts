@@ -97,18 +97,25 @@ export class SyncDivergenceError extends VenforkError {
   }
 }
 
+/** Why a {@link ConfigError} was thrown. */
+export type ConfigErrorReason = 'fetch' | 'invalid' | 'exists' | 'conflict';
+
 /**
  * Thrown when the `venfork-config` branch exists but cannot be fetched,
  * parsed or validated. Commands must stop rather than treat the mirror as
  * having no config.
  */
 export class ConfigError extends VenforkError {
-  /** `'fetch'` when origin could not be read; `'invalid'` for bad content. */
-  public readonly reason: 'fetch' | 'invalid';
+  /**
+   * `'fetch'` when origin could not be read, `'invalid'` for bad content,
+   * `'exists'` when a create found the branch already there, `'conflict'`
+   * when a leased write found the branch moved since it was read.
+   */
+  public readonly reason: ConfigErrorReason;
 
   constructor(
     message: string,
-    options?: { cause?: unknown; reason?: 'fetch' | 'invalid' }
+    options?: { cause?: unknown; reason?: ConfigErrorReason }
   ) {
     super(message);
     this.name = 'ConfigError';

@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
-import { createConfigBranch } from '../config.js';
+import { createConfigBranch, readVenforkConfigFromRepo } from '../config.js';
+import { ConfigError } from '../errors.js';
 import { getGitHubUsername, ghRepoExists, ghRepoIsForkOf } from '../git.js';
 import { pathExists } from '../shared/fs.js';
 import { netExec, runNetOp, seedMirrorInChunks } from '../shared/net.js';
@@ -47,6 +48,52 @@ async function ensureVenforkRemotes(
   }
   await setOrAdd('upstream', upstreamUrl);
   await $({ cwd })`git remote set-url --push upstream DISABLE`;
+}
+
+/**
+ * Throws when the `venfork-config` already on origin records a different
+ * layout than this setup run asks for. URLs compare by `owner/repo`.
+ */
+async function assertExistingConfigAgrees(
+  repoDir: string,
+  wanted: {
+    mode: 'standard' | 'no-public';
+    upstreamUrl: string;
+    publicForkUrl: string | null;
+  }
+): Promise<void> {
+  const existing = await readVenforkConfigFromRepo(repoDir);
+  if (!existing) {
+    throw new ConfigError(
+      'venfork-config disappeared from origin while setup was running; re-run setup.',
+      { reason: 'fetch' }
+    );
+  }
+  const sameRepo = (a: string | null, b: string | null) =>
+    (a ? (parseRepoPath(a) ?? a) : null) ===
+    (b ? (parseRepoPath(b) ?? b) : null);
+  const recordedMode = existing.mode === 'no-public' ? 'no-public' : 'standard';
+  const recordedPublic = existing.publicForkUrl ?? null;
+  const mismatches: string[] = [];
+  if (recordedMode !== wanted.mode) {
+    mismatches.push(`mode is ${recordedMode} (expected ${wanted.mode})`);
+  }
+  if (!sameRepo(existing.upstreamUrl, wanted.upstreamUrl)) {
+    mismatches.push(
+      `upstreamUrl is ${existing.upstreamUrl} (expected ${wanted.upstreamUrl})`
+    );
+  }
+  if (!sameRepo(recordedPublic, wanted.publicForkUrl)) {
+    mismatches.push(
+      `publicForkUrl is ${recordedPublic ?? '(none)'} (expected ${wanted.publicForkUrl ?? '(none)'})`
+    );
+  }
+  if (mismatches.length > 0) {
+    throw new ConfigError(
+      `The existing venfork-config disagrees with this setup: ${mismatches.join('; ')}. Use the recorded values, or create a fresh mirror.`,
+      { reason: 'exists' }
+    );
+  }
 }
 
 /**
@@ -369,26 +416,37 @@ export async function setupCommand(
       );
     }
 
-    // Step 7: Configure remotes
-    s.start('Configuring git remotes');
-    await ensureVenforkRemotes(repoDir, publicForkUrl, config.upstreamUrl);
-    s.stop('Git remotes configured');
-
     // Set gh default repository to the private mirror so `gh pr create` etc.
     // resolve to origin without prompting.
     s.start('Setting gh default repository');
     await $({ cwd: repoDir })`gh repo set-default ${privateMirrorGhPath}`;
     s.stop('Default repository set');
 
-    // Step 8: Venfork config branch
+    // Step 7: Venfork config branch, checked before any remote is rewired
     s.start('Creating venfork configuration');
-    await createConfigBranch(
-      repoDir,
-      noPublic ? null : (publicForkUrl ?? null),
-      config.upstreamUrl,
-      noPublic ? 'no-public' : 'standard'
-    );
-    s.stop('Venfork configuration created');
+    const mode = noPublic ? 'no-public' : 'standard';
+    try {
+      await createConfigBranch(
+        repoDir,
+        noPublic ? null : (publicForkUrl ?? null),
+        config.upstreamUrl,
+        mode
+      );
+      s.stop('Venfork configuration created');
+    } catch (err) {
+      if (!(err instanceof ConfigError && err.reason === 'exists')) throw err;
+      await assertExistingConfigAgrees(repoDir, {
+        mode,
+        upstreamUrl: config.upstreamUrl,
+        publicForkUrl: publicForkUrl ?? null,
+      });
+      s.stop('Keeping the existing venfork configuration');
+    }
+
+    // Step 8: Configure remotes
+    s.start('Configuring git remotes');
+    await ensureVenforkRemotes(repoDir, publicForkUrl, config.upstreamUrl);
+    s.stop('Git remotes configured');
 
     const recovered = forkPreexisted || mirrorPreexisted;
     if (recovered) {

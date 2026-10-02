@@ -52,22 +52,31 @@ function useMirror(mode: 'standard' | 'no-public'): void {
       : { mode: 'no-public' }),
     schedule: { enabled: true, cron: CRON },
   };
-  const remoteLines = [
-    'origin\tgit@github.com:acme/widget-private.git (fetch)',
-    'origin\tgit@github.com:acme/widget-private.git (push)',
-    'upstream\tgit@github.com:acme/widget.git (fetch)',
-    'upstream\tDISABLE (push)',
+  const remotes: Array<[string, string, string]> = [
+    [
+      'origin',
+      'git@github.com:acme/widget-private.git',
+      'git@github.com:acme/widget-private.git',
+    ],
+    ['upstream', 'git@github.com:acme/widget.git', 'DISABLE'],
   ];
   if (mode === 'standard') {
-    remoteLines.push(
-      'public\tgit@github.com:vendor/widget.git (fetch)',
-      'public\tgit@github.com:vendor/widget.git (push)'
-    );
+    remotes.push([
+      'public',
+      'git@github.com:vendor/widget.git',
+      'git@github.com:vendor/widget.git',
+    ]);
   }
   responses.push(
     ['git show FETCH_HEAD:.venfork/config.json', ok(JSON.stringify(config))],
     ['git rev-parse FETCH_HEAD', ok('configsha')],
-    ['git remote -v', ok(remoteLines.join('\n'))],
+    ...remotes.flatMap(
+      ([name, fetch, push]): Array<[string, MockResponse]> => [
+        [`git remote get-url --push ${name}`, ok(push)],
+        [`git remote get-url ${name}`, ok(fetch)],
+      ]
+    ),
+    ['git remote', ok(remotes.map(([name]) => name).join('\n'))],
     ['git symbolic-ref', ok('refs/remotes/upstream/main')],
     ['git rev-parse --verify origin/main^{commit}', ok('origintip')],
     ['git rev-parse --verify upstream/main^{commit}', ok('upstreamtip')],
