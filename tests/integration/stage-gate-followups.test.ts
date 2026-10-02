@@ -220,11 +220,23 @@ describe('the gate scans published files for mirror references', () => {
     await expectShipped('docs/tools.md', 'We sync with venfork.\n');
   });
 
-  test('a binary file is not scanned', async () => {
+  test('a binary file holding the mirror URL is refused', async () => {
     await featureFrom('upstream/main');
     await Bun.write(
       `${fx.work}/bin.dat`,
       Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(fx.origin)])
+    );
+    await fx.git(fx.work, 'add', 'bin.dat');
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'chore: bin');
+
+    await expectRefused('bin.dat');
+  });
+
+  test('a binary file is searched only for URL-derived terms', async () => {
+    await featureFrom('upstream/main');
+    await Bun.write(
+      `${fx.work}/bin.dat`,
+      Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from('origin venfork')])
     );
     await fx.git(fx.work, 'add', 'bin.dat');
     await fx.git(fx.work, 'commit', '--quiet', '-m', 'chore: bin');

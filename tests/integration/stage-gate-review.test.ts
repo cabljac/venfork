@@ -168,3 +168,67 @@ describe('upstream history is not mirror content', () => {
     await expectRefused('examples/app.yml (content of config/app.yml)');
   });
 });
+describe('the gate reads every text encoding', () => {
+  test('a UTF-16LE file naming the mirror is refused', async () => {
+    await featureFrom('upstream/main');
+    await commitFile(
+      'docs/remote.txt',
+      Buffer.concat([
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from(`clone ${fx.origin}\n`, 'utf16le'),
+      ]),
+      'docs: remote'
+    );
+
+    await expectRefused('docs/remote.txt', fx.origin);
+  });
+
+  test('a UTF-16BE file naming the mirror is refused', async () => {
+    const le = Buffer.from(`clone ${fx.origin}\n`, 'utf16le');
+    const be = Buffer.alloc(le.length);
+    for (let i = 0; i + 1 < le.length; i += 2) {
+      be[i] = le[i + 1] ?? 0;
+      be[i + 1] = le[i] ?? 0;
+    }
+    await featureFrom('upstream/main');
+    await commitFile(
+      'docs/remote.txt',
+      Buffer.concat([Buffer.from([0xfe, 0xff]), be]),
+      'docs: remote'
+    );
+
+    await expectRefused('docs/remote.txt', fx.origin);
+  });
+
+  test('text after a leading NUL naming the mirror is refused', async () => {
+    await featureFrom('upstream/main');
+    await commitFile('docs/x.md', `\0\nclone ${fx.origin}\n`, 'docs: x');
+
+    await expectRefused('docs/x.md', fx.origin);
+  });
+
+  test('a binary file holding the mirror URL as UTF-16LE is refused', async () => {
+    await featureFrom('upstream/main');
+    await commitFile(
+      'bin.dat',
+      Buffer.concat([
+        Buffer.from([0, 1, 2]),
+        Buffer.from(fx.origin, 'utf16le'),
+      ]),
+      'chore: bin'
+    );
+
+    await expectRefused('bin.dat', fx.origin);
+  });
+
+  test('a blob over the buffer limit is refused with a message naming it', async () => {
+    await featureFrom('upstream/main');
+    await commitFile(
+      'data/big.txt',
+      Buffer.alloc(110_000_000, 0x61),
+      'data: big'
+    );
+
+    await expectRefused('data/big.txt', 'too large to check');
+  }, 120000);
+});

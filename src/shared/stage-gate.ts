@@ -1,5 +1,10 @@
 import { $ } from 'execa';
-import { GitError, MirrorReferenceError, StageLeakError } from '../errors.js';
+import {
+  GitError,
+  MirrorReferenceError,
+  StageLeakError,
+  VenforkError,
+} from '../errors.js';
 import { SYNC_WORKFLOW_PATH, VENFORK_BOT_EMAIL } from './constants.js';
 import {
   canonicalText,
@@ -389,14 +394,72 @@ export interface StageGateInput {
   cwd: string;
 }
 
-/** Reads a blob as text, or null when it looks binary. */
-async function textOf(oid: string, cwd: string): Promise<string | null> {
-  const result = await $({
-    cwd,
-    encoding: 'latin1',
-  })`git cat-file blob ${oid}`;
-  if (result.stdout.slice(0, BINARY_SNIFF_BYTES).includes('\0')) return null;
-  return Buffer.from(result.stdout, 'latin1').toString('utf8');
+function isMaxBufferError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'isMaxBuffer' in err &&
+    err.isMaxBuffer === true
+  );
+}
+
+/** Reads a blob's bytes; a blob over execa's buffer limit is refused. */
+async function bytesOf(
+  oid: string,
+  where: string,
+  cwd: string
+): Promise<Buffer> {
+  try {
+    const result = await $({
+      cwd,
+      // `encoding: 'buffer'` throws "Unknown encoding" under Bun.
+      encoding: 'latin1',
+    })`git cat-file blob ${oid}`;
+    return Buffer.from(result.stdout, 'latin1');
+  } catch (err) {
+    if (isMaxBufferError(err)) {
+      throw new VenforkError(
+        `Refusing to publish: ${where} is too large to check for mirror references (over 100 MB). Remove it from the branch and retry.`
+      );
+    }
+    throw err;
+  }
+}
+
+/**
+ * Decodes UTF-16 (with a byte order mark) and UTF-8 text; null when the
+ * bytes look binary (a NUL in the first 8000 bytes).
+ */
+function decodeText(bytes: Buffer): string | null {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return bytes.subarray(2).toString('utf16le');
+  }
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    const body = Buffer.from(bytes.subarray(2, 2 + ((bytes.length - 2) & ~1)));
+    return body.swap16().toString('utf16le');
+  }
+  if (bytes.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return null;
+  return bytes.toString('utf8');
+}
+
+/**
+ * The first URL-derived term (one with a `/` or `:`) found in binary bytes
+ * as UTF-8 or UTF-16LE, ignoring ASCII case. A bare repo name is not
+ * searched: it matches too much binary data.
+ */
+function findTermInBytes(
+  bytes: Buffer,
+  terms: readonly string[]
+): string | null {
+  const haystack = bytes.toString('latin1').toLowerCase();
+  for (const term of terms) {
+    if (!/[/:]/.test(term)) continue;
+    for (const encoding of ['utf8', 'utf16le'] as const) {
+      const needle = Buffer.from(term, encoding).toString('latin1');
+      if (haystack.includes(needle.toLowerCase())) return term;
+    }
+  }
+  return null;
 }
 
 /**
@@ -411,7 +474,10 @@ async function textOf(oid: string, cwd: string): Promise<string | null> {
  *    any file name, contains a mirror deny-list term (never the bare word
  *    `venfork`) or looks like a venfork `config.json`; or when the venfork
  *    bot authored or committed the commit, or its author, committer or
- *    message contains a deny-list term. Binary files are not scanned.
+ *    message contains a deny-list term. Text is read as UTF-8, or UTF-16
+ *    when it starts with a byte order mark; a binary file is searched only
+ *    for the URL-derived terms, as UTF-8 and UTF-16LE bytes.
+ *  - {@link VenforkError} when a file is too large to read.
  *
  * Deleting a preserved path is allowed: no content leaves.
  */
@@ -467,14 +533,23 @@ export async function assertPublishableCommits(
         );
       }
       if (change.newMode === GITLINK_MODE) continue;
-      if (!scanned.has(change.newOid)) {
-        scanned.set(change.newOid, await textOf(change.newOid, cwd));
+      let hit = scanned.get(change.newOid);
+      if (hit === undefined) {
+        const bytes = await bytesOf(
+          change.newOid,
+          `commit ${label} file ${change.path}`,
+          cwd
+        );
+        const text = decodeText(bytes);
+        if (text === null) {
+          hit = findTermInBytes(bytes, locationTerms);
+        } else {
+          hit = looksLikeVenforkConfig(text)
+            ? CONFIG_SIGNATURE
+            : findDeniedText(text, locationTerms);
+        }
+        scanned.set(change.newOid, hit);
       }
-      const text = scanned.get(change.newOid);
-      if (text === null || text === undefined) continue;
-      const hit = looksLikeVenforkConfig(text)
-        ? CONFIG_SIGNATURE
-        : findDeniedText(text, locationTerms);
       if (hit !== null) {
         throw new MirrorReferenceError(
           `commit ${label} file ${change.path}`,
