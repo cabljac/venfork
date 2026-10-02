@@ -82,9 +82,27 @@ export function mirrorLocationTerms(terms: readonly string[]): string[] {
   return terms.filter((term) => term !== SELF_REFERENCE_TERM);
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
- * Returns the first deny-list term found in `text` (case-insensitive, after
- * {@link canonicalText}), or null when the text is clean.
+ * True when `name` appears as the repo segment of an `owner/name` or URL:
+ * after a `/` or `:` and an owner, optionally with `.git`, and not followed
+ * by more of a path. `src/backend/` and `src/backend.ts` do not match.
+ */
+function hasRepoName(folded: string, name: string): boolean {
+  const pattern = new RegExp(
+    `[a-z0-9_.-]+[/:]${escapeRegExp(name)}(?:\\.git)?(?![a-z0-9_./-])`
+  );
+  return pattern.test(folded);
+}
+
+/**
+ * Returns the first deny-list term found in `text` (case-insensitive, with
+ * text and terms both passed through {@link canonicalText}), or null when
+ * the text is clean. A term with no `/`, `:` or `@` other than `venfork` is
+ * a bare repo name and matches only as the repo of an `owner/name` or URL.
  *
  * @param text Text bound for the public side.
  * @param terms Output of {@link mirrorDenyList}.
@@ -95,7 +113,12 @@ export function findDeniedText(
 ): string | null {
   const folded = canonicalText(text).toLowerCase();
   for (const term of terms) {
-    if (folded.includes(term.toLowerCase())) return term;
+    const needle = canonicalText(term).toLowerCase();
+    if (!needle) continue;
+    const bareName = term !== SELF_REFERENCE_TERM && !/[/:@]/.test(term);
+    if (bareName ? hasRepoName(folded, needle) : folded.includes(needle)) {
+      return term;
+    }
   }
   return null;
 }

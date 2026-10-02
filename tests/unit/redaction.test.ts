@@ -167,4 +167,17 @@ describe('VENFORK_ALLOW_SELF_REFERENCE', () => {
       RedactionError
     );
   });
+
+  test.each([
+    [
+      'a malformed comment marker',
+      'public\n<!- venfork:internal -> budget 50k <!- /venfork:internal ->\nmore',
+    ],
+    ['a bracket marker', '[venfork:internal] secret [/venfork:internal]'],
+    ['a spaced marker', 'VENFORK : Internal notes'],
+  ])('still refuses %s left after stripping', (_label, body) => {
+    process.env.VENFORK_ALLOW_SELF_REFERENCE = '1';
+
+    expect(() => stripInternalBlocks(body)).toThrow(RedactionError);
+  });
 });

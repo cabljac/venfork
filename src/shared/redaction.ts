@@ -13,10 +13,13 @@ export interface InternalPrInfo {
 const HTML_COMMENT_RE = /<!--[\s\S]*?--!?>/g;
 const MARKER_RE = /^\s*(\/)?\s*venfork\s*:\s*internal\b/i;
 
-/** Text around the first canonical `venfork` mention, for error messages. */
-function venforkSnippet(text: string): string | null {
+/** Text shaped like a marker, whatever wraps it. */
+const MARKER_TEXT_RE = /venfork\s*:\s*internal/i;
+
+/** Text around the first canonical match of `pattern`, for error messages. */
+function snippetOf(text: string, pattern: RegExp): string | null {
   const folded = canonicalText(text);
-  const at = folded.toLowerCase().indexOf('venfork');
+  const at = folded.search(pattern);
   if (at === -1) return null;
   return folded.slice(Math.max(0, at - 20), at + 40);
 }
@@ -42,7 +45,9 @@ interface RedactionMarker {
  *  - an unmatched close marker,
  *  - a comment that mentions venfork but is not a marker (a misspelled
  *    marker such as `venfork:intenral`), or
- *  - any `venfork` mention left anywhere after stripping.
+ *  - any `venfork` mention left anywhere after stripping (with
+ *    `VENFORK_ALLOW_SELF_REFERENCE=1`, only text shaped like a marker,
+ *    such as `[venfork:internal]`).
  *
  * An unmatched open marker drops everything to end-of-input.
  *
@@ -90,7 +95,10 @@ export function stripInternalBlocks(body: string): string {
   if (depth === 0) {
     result += body.slice(cursor);
   }
-  const leftover = selfReferenceAllowed() ? null : venforkSnippet(result);
+  const leftover = snippetOf(
+    result,
+    selfReferenceAllowed() ? MARKER_TEXT_RE : /venfork/i
+  );
   if (leftover !== null) {
     throw new RedactionError(leftover);
   }
