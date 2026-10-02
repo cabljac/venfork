@@ -1,0 +1,708 @@
+import * as p from '@clack/prompts';
+import { $ } from 'execa';
+import { readVenforkConfigFromRepo, updateVenforkConfig } from '../config.js';
+import {
+  AuthenticationError,
+  BranchNotFoundError,
+  GitError,
+  RemoteNotFoundError,
+} from '../errors.js';
+import { checkGhAuth, getDefaultBranch } from '../git.js';
+import { confirmOrAutoYes } from '../shared/confirm.js';
+import { WORKFLOWS_DIR } from '../shared/constants.js';
+import { isManagedCommit } from '../shared/managed-commit.js';
+import {
+  findInternalPr,
+  type InternalPrInfo,
+  translateInternalBody,
+} from '../shared/redaction.js';
+import { findMirrorRepoPath } from '../shared/repo.js';
+import { withDetachedWorktree } from '../shared/worktree.js';
+import { parseRepoPath } from '../utils.js';
+
+async function branchHasManagedCommits(
+  branch: string,
+  defaultBranch: string,
+  cwd: string
+): Promise<boolean> {
+  const result = await $({
+    cwd,
+    reject: false,
+  })`git rev-list upstream/${defaultBranch}..${branch}`;
+  if (result.exitCode !== 0) {
+    throw new GitError(
+      `Cannot inspect '${branch}' for venfork-managed commits: upstream/${defaultBranch} is not available locally. Run \`git fetch upstream\` and retry.`,
+      `git rev-list upstream/${defaultBranch}..${branch}`
+    );
+  }
+  const commits = result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const commit of commits) {
+    if (await isManagedCommit(commit, cwd)) return true;
+  }
+  return false;
+}
+
+async function remoteBranchExists(
+  remote: string,
+  branch: string
+): Promise<boolean> {
+  const result = await $({
+    reject: false,
+  })`git ls-remote --exit-code --heads ${remote} ${branch}`;
+  return result.exitCode === 0;
+}
+
+/**
+ * Files a merge commit resolves *differently* from both parents.
+ *
+ * `git diff-tree --cc` omits hunks where the merge result matches either
+ * parent verbatim, so an empty list means the merge contains no human-authored
+ * conflict resolution we could lose by skipping the merge commit. A non-empty
+ * list whose entries are all under `.github/workflows/` is also safe: the
+ * public fork has no managed workflow file, so a workflow-file resolution is
+ * irrelevant there. Anything else indicates a real "evil merge" whose content
+ * would be lost if we dropped the merge during stage.
+ */
+async function mergeCommitEvilFiles(
+  ref: string,
+  cwd: string
+): Promise<string[]> {
+  const result = await $({
+    cwd,
+    reject: false,
+  })`git diff-tree --cc --name-only --no-commit-id ${ref}`;
+  if (result.exitCode !== 0) {
+    const gitError =
+      result.stderr.trim() || result.stdout.trim() || 'git diff-tree failed';
+    throw new Error(`Failed to inspect merge commit ${ref}: ${gitError}`);
+  }
+  return result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+async function assertNoEvilMerges(
+  branch: string,
+  defaultBranch: string,
+  cwd: string
+): Promise<void> {
+  const mergeListResult = await $({
+    cwd,
+  })`git rev-list --merges upstream/${defaultBranch}..${branch}`;
+  const mergeCommits = mergeListResult.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const mergeRef of mergeCommits) {
+    const evilFiles = await mergeCommitEvilFiles(mergeRef, cwd);
+    const hasNonWorkflowEvil = evilFiles.some(
+      (filePath) => !filePath.startsWith(`${WORKFLOWS_DIR}/`)
+    );
+    if (hasNonWorkflowEvil) {
+      const shortRef = mergeRef.slice(0, 9);
+      throw new Error(
+        `Failed to stage '${branch}': merge commit ${shortRef} contains manual conflict resolutions (${evilFiles.join(', ')}) that would be lost when linearizing history for the public fork. Rebase '${branch}' onto upstream/${defaultBranch} (dropping merges) and retry.`
+      );
+    }
+  }
+}
+
+async function buildPublicStageHeadWithoutWorkflowCommit(
+  branch: string,
+  defaultBranch: string,
+  cwd?: string
+): Promise<string> {
+  const repoDir = cwd ?? process.cwd();
+  // Abort before doing any work if the branch contains a merge commit with
+  // manual conflict resolutions outside `.github/workflows/`. `--no-merges`
+  // below would silently drop those resolutions, losing work.
+  await assertNoEvilMerges(branch, defaultBranch, repoDir);
+
+  // Start a detached worktree at upstream/<defaultBranch> and cherry-pick
+  // every branch commit that isn't an internal workflow commit. A
+  // content-based filter (rather than `rebase --onto origin`) keeps
+  // previously-rewritten managed commits from leaking into the public fork
+  // when they're still reachable from older feature branches whose base
+  // predates a `venfork sync` rewrite of origin's default branch.
+  return withDetachedWorktree(
+    repoDir,
+    `upstream/${defaultBranch}`,
+    'venfork-stage-',
+    async (tempDir) => {
+      // Skip merge commits: `git cherry-pick` on a merge fails without
+      // `-m <parent>`, and merges are commonly used on venfork feature branches
+      // to pull `origin/<default>` back in after a sync rewrite. `--no-merges`
+      // still walks *both* sides of any merge, so non-merge content from either
+      // side is cherry-picked as normal (workflow commits introduced via the
+      // merged-in side are then filtered by `isManagedCommit` below).
+      // `--topo-order` makes the parent-before-child guarantee explicit (with
+      // `--reverse`: ancestors first, descendants last). The default order is
+      // pseudo-chronological and can violate topology when commit timestamps
+      // are skewed (clock drift, rebases that re-set author dates, etc.),
+      // which would surface as cherry-pick conflicts.
+      const revListResult = await $({
+        cwd: repoDir,
+      })`git rev-list --reverse --topo-order --no-merges upstream/${defaultBranch}..${branch}`;
+      const branchCommits = revListResult.stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      const commitsToPick: string[] = [];
+      for (const commit of branchCommits) {
+        if (!(await isManagedCommit(commit, repoDir))) {
+          commitsToPick.push(commit);
+        }
+      }
+
+      for (const commit of commitsToPick) {
+        const pickResult = await $({
+          cwd: tempDir,
+          reject: false,
+        })`git cherry-pick --allow-empty ${commit}`;
+        if (pickResult.exitCode !== 0) {
+          await $({
+            cwd: tempDir,
+            reject: false,
+          })`git cherry-pick --abort`;
+          throw new Error(
+            `Failed to stage '${branch}' because cherry-picking ${commit} onto upstream/${defaultBranch} caused conflicts. Rebase '${branch}' on upstream/${defaultBranch} and retry.`
+          );
+        }
+      }
+
+      const headResult = await $({ cwd: tempDir })`git rev-parse HEAD`;
+      return headResult.stdout.trim();
+    }
+  );
+}
+
+/**
+ * Read-only snapshot of the state needed to stage a branch. Computed before
+ * any user confirmation so the caller can show a preview, and reused for the
+ * actual push (`executeStagingPush`) and any follow-on work (e.g. opening an
+ * upstream PR in `shipCommand`).
+ *
+ * `pushRemote` is the remote we push the staged branch to: `'public'` in the
+ * standard 3-remote layout, `'upstream'` in `--no-public` mode (where the
+ * branch lands directly on upstream as a same-repo PR head).
+ */
+export interface StagingPlan {
+  branch: string;
+  /** URL of the remote we push the staged branch to (`public` or `upstream`). */
+  pushUrl: string;
+  /** `owner/name` of the remote we push to. */
+  pushRepoPath: string;
+  /** Owner segment of `pushRepoPath` — used as the cross-repo head prefix when the PR head is in a different repo than the base. */
+  pushOwner: string;
+  /** `'public'` or `'upstream'` — which git remote name to push to. */
+  pushRemote: 'public' | 'upstream';
+  upstreamUrl: string;
+  upstreamRepoPath: string;
+  upstreamDefaultBranch: string;
+  /** True when the branch carries a venfork-managed commit that must not reach the push target. */
+  hasManagedCommits: boolean;
+  /** True when the head and base of the upstream PR live in the same repo (no-public mode). */
+  noPublic: boolean;
+}
+
+/**
+ * Resolves remotes, default branch, and managed-commit presence for a staging push.
+ * Pure read; no network writes. Throws `BranchNotFoundError` /
+ * `RemoteNotFoundError` so callers can render a single failure path.
+ */
+async function planStaging(branch: string, cwd: string): Promise<StagingPlan> {
+  const branchCheck = await $({
+    cwd,
+    reject: false,
+  })`git rev-parse --verify ${branch}`;
+  if (branchCheck.exitCode !== 0) {
+    throw new BranchNotFoundError(branch);
+  }
+
+  const config = await readVenforkConfigFromRepo(cwd);
+  const noPublic = config?.mode === 'no-public';
+
+  const upstreamUrlResult = await $({
+    cwd,
+    reject: false,
+  })`git remote get-url upstream`;
+  if (upstreamUrlResult.exitCode !== 0) {
+    throw new RemoteNotFoundError('upstream');
+  }
+  const upstreamUrl = upstreamUrlResult.stdout.trim();
+  const upstreamRepoPath = parseRepoPath(upstreamUrl);
+
+  let pushUrl: string;
+  let pushRepoPath: string;
+  let pushRemote: 'public' | 'upstream';
+  if (noPublic) {
+    pushUrl = upstreamUrl;
+    pushRepoPath = upstreamRepoPath;
+    pushRemote = 'upstream';
+  } else {
+    const publicUrlResult = await $({
+      cwd,
+      reject: false,
+    })`git remote get-url public`;
+    if (publicUrlResult.exitCode !== 0) {
+      throw new RemoteNotFoundError('public');
+    }
+    pushUrl = publicUrlResult.stdout.trim();
+    pushRepoPath = parseRepoPath(pushUrl);
+    pushRemote = 'public';
+  }
+  const pushOwner = pushRepoPath.split('/')[0] ?? '';
+
+  const upstreamDefaultBranch = await getDefaultBranch('upstream');
+  const hasManagedCommits = await branchHasManagedCommits(
+    branch,
+    upstreamDefaultBranch,
+    cwd
+  );
+
+  return {
+    branch,
+    pushUrl,
+    pushRepoPath,
+    pushOwner,
+    pushRemote,
+    upstreamUrl,
+    upstreamRepoPath,
+    upstreamDefaultBranch,
+    hasManagedCommits,
+    noPublic,
+  };
+}
+
+/**
+ * Pushes the branch to the public fork, stripping the internal workflow
+ * commit when the branch contains one. Returns the SHA pushed.
+ *
+ * The caller owns the spinner so consistent UI text appears in every
+ * command that stages (`stage`, `ship`).
+ */
+async function executeStagingPush(
+  plan: StagingPlan,
+  cwd: string,
+  s: ReturnType<typeof p.spinner>
+): Promise<string> {
+  // In no-public mode the `upstream` remote has its push URL set to DISABLE
+  // (so a stray `git push upstream main` from CLI/IDE can't ship the private
+  // mirror's history to upstream's default branch). Stage opts in explicitly
+  // by pushing to the URL, which bypasses the disabled push URL while
+  // leaving the safeguard in place for non-stage workflows.
+  const pushDest = plan.noPublic ? plan.pushUrl : plan.pushRemote;
+  const target = plan.noPublic ? 'upstream' : 'public fork';
+
+  if (plan.hasManagedCommits) {
+    await $({ cwd })`git fetch upstream`;
+    await $({ cwd })`git fetch origin`;
+    s.start(`Preparing sanitized branch for ${target} staging`);
+    const stageHead = await buildPublicStageHeadWithoutWorkflowCommit(
+      plan.branch,
+      plan.upstreamDefaultBranch,
+      cwd
+    );
+    s.stop('Prepared sanitized branch');
+
+    s.start(`Pushing sanitized branch to ${target}`);
+    if (plan.noPublic) {
+      // URL push: `--force-with-lease=<ref>` (no expect) relies on a
+      // remote-tracking ref that doesn't exist for URL pushes, so resolve
+      // the remote tip explicitly via ls-remote and pass it as the lease.
+      const ls = await $({
+        cwd,
+        reject: false,
+      })`git ls-remote --exit-code ${pushDest} refs/heads/${plan.branch}`;
+      if (ls.exitCode === 0) {
+        const expectedSha = ls.stdout.trim().split(/\s+/)[0] ?? '';
+        await $({
+          cwd,
+        })`git push ${pushDest} ${stageHead}:refs/heads/${plan.branch} --force-with-lease=refs/heads/${plan.branch}:${expectedSha}`;
+      } else {
+        await $({
+          cwd,
+        })`git push ${pushDest} ${stageHead}:refs/heads/${plan.branch}`;
+      }
+    } else {
+      // Standard mode: remote name with the implicit-lease form (lease
+      // value comes from refs/remotes/public/<branch>).
+      if (await remoteBranchExists(plan.pushRemote, plan.branch)) {
+        await $({
+          cwd,
+        })`git push ${plan.pushRemote} ${stageHead}:refs/heads/${plan.branch} --force-with-lease=refs/heads/${plan.branch}`;
+      } else {
+        await $({
+          cwd,
+        })`git push ${plan.pushRemote} ${stageHead}:refs/heads/${plan.branch}`;
+      }
+    }
+    s.stop('Push successful');
+    return stageHead;
+  }
+
+  s.start(`Pushing to ${target}`);
+  await $({ cwd })`git push ${pushDest} ${plan.branch}`;
+  s.stop('Push successful');
+  const headResult = await $({
+    cwd,
+  })`git rev-parse ${plan.branch}`;
+  return headResult.stdout.trim();
+}
+
+export interface StageOptions {
+  /** When true, also open an upstream PR after staging. */
+  createPr?: boolean;
+  /** When true, the upstream PR is opened as a draft. Implies createPr. */
+  draft?: boolean;
+  /** Override the upstream PR title; default is the internal PR title. */
+  title?: string;
+  /** Override the upstream base branch; default is upstream's default branch. */
+  base?: string;
+  /**
+   * Pin the internal review PR by number instead of letting `findInternalPr`
+   * pick the most recent one for the branch.
+   */
+  internalPrNumber?: number;
+  /**
+   * When true, *don't* update an existing upstream PR's body if one is found
+   * for the same head/base. Default behaviour (false) re-syncs the body via
+   * `gh pr edit` so addressing internal feedback re-publishes upstream.
+   */
+  noUpdateExisting?: boolean;
+}
+
+/**
+ * Generates a synthetic upstream PR body from the branch's commit log when no
+ * internal review PR was found. Lists the non-merge commits in
+ * `upstream/<defaultBranch>..<branch>` so the upstream maintainer sees what
+ * the change actually is, rather than a "please add a description" placeholder.
+ *
+ * The body must not reveal the private mirror — upstream only ever sees the
+ * commit summary, never that the work was staged from a mirror.
+ *
+ * Fetches `upstream/<defaultBranch>` first so the log works even when schedule
+ * is disabled and the ref may not exist locally yet.
+ */
+async function buildSyntheticBody(
+  branch: string,
+  defaultBranch: string,
+  cwd: string
+): Promise<string> {
+  // Ensure the remote-tracking ref exists before running the log.
+  await $({ cwd, reject: false })`git fetch upstream ${defaultBranch}`;
+  const log = await $({
+    cwd,
+    reject: false,
+  })`git log --oneline --no-merges upstream/${defaultBranch}..${branch}`;
+  if (log.exitCode !== 0 || !log.stdout.trim()) {
+    return 'No description provided.';
+  }
+  const lines = log.stdout
+    .trim()
+    .split('\n')
+    .map((line) => `- ${line}`)
+    .join('\n');
+  return `Commits in this branch:\n\n${lines}`;
+}
+
+/**
+ * Build the body and title for the upstream PR. Falls back to a generated
+ * commit-summary body when there's no internal PR to translate.
+ */
+async function buildUpstreamPrPayload(
+  branch: string,
+  internal: InternalPrInfo | null,
+  override: { title?: string; body?: string },
+  context: { defaultBranch: string; cwd: string }
+): Promise<{ title: string; body: string }> {
+  if (internal) {
+    return {
+      title: override.title ?? internal.title,
+      body: override.body ?? translateInternalBody(internal.body),
+    };
+  }
+  return {
+    title: override.title ?? branch,
+    body:
+      override.body ??
+      (await buildSyntheticBody(branch, context.defaultBranch, context.cwd)),
+  };
+}
+
+/**
+ * Creates the upstream PR via gh and returns its URL. Surfaces the duplicate-PR
+ * case ("already exists") cleanly so the caller can recover.
+ */
+async function createUpstreamPr(args: {
+  upstreamRepoPath: string;
+  /** Owner where the head branch lives. Same as upstream owner in no-public mode. */
+  headOwner: string;
+  /** True when head and base live in the same repo (no-public mode) — gh wants a bare branch name in that case, not `owner:branch`. */
+  sameRepoHead: boolean;
+  branch: string;
+  base: string;
+  title: string;
+  body: string;
+  draft: boolean;
+  cwd: string;
+}): Promise<{ url: string; alreadyExists: boolean }> {
+  const head = args.sameRepoHead
+    ? args.branch
+    : `${args.headOwner}:${args.branch}`;
+  const result = await $({
+    cwd: args.cwd,
+    reject: false,
+    input: args.body,
+  })`gh pr create --repo ${args.upstreamRepoPath} --base ${args.base} --head ${head} --title ${args.title} --body-file - ${args.draft ? '--draft' : []}`;
+
+  if (result.exitCode === 0) {
+    return { url: result.stdout.trim(), alreadyExists: false };
+  }
+  // gh prints something like "a pull request for branch X into branch Y already exists: https://..."
+  const combined = `${result.stdout}\n${result.stderr}`;
+  const existing = combined.match(/https?:\/\/\S*\/pull\/\d+/);
+  if (existing && /already exists/i.test(combined)) {
+    return { url: existing[0], alreadyExists: true };
+  }
+  throw new Error(
+    `Failed to create upstream PR via gh: ${combined.trim() || `exit ${result.exitCode}`}`
+  );
+}
+
+/**
+ * Stage command: Push branch to public fork for PR to upstream.
+ *
+ * With `--pr` (createPr), additionally opens the upstream PR using the
+ * internal-review PR's body as a starting point (with `<!-- venfork:internal
+ * -->...<!-- /venfork:internal -->` blocks stripped) and records the
+ * internal/upstream PR linkage in `venfork-config.shippedBranches`.
+ */
+export async function stageCommand(
+  branch: string | undefined,
+  options: StageOptions = {}
+): Promise<void> {
+  p.intro('📤 Venfork Stage');
+
+  const isAuthenticated = await checkGhAuth();
+  if (!isAuthenticated) {
+    throw new AuthenticationError();
+  }
+
+  if (!branch) {
+    p.log.error('Branch name is required');
+    p.outro(
+      'Usage: venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>]. Run `venfork help` for the full list of supported options, including `--internal-pr <n>` and `--no-update-existing`.'
+    );
+    process.exit(1);
+  }
+
+  const createPr = Boolean(options.createPr || options.draft);
+
+  const s = p.spinner();
+  const repoDir = process.cwd();
+
+  try {
+    s.start('Verifying branch exists');
+    const plan = await planStaging(branch, repoDir);
+    s.stop('Branch verified');
+
+    // Look up the internal PR up-front when --pr is set so the user sees the
+    // translated body in the confirm prompt before anything is published.
+    let internalPr: InternalPrInfo | null = null;
+    let translatedBody = '';
+    let prTitle = '';
+    const baseBranch = options.base ?? plan.upstreamDefaultBranch;
+    if (createPr) {
+      s.start('Looking up internal review PR');
+      const mirrorRepoPath = await findMirrorRepoPath(repoDir);
+      if (mirrorRepoPath) {
+        internalPr = await findInternalPr(
+          mirrorRepoPath,
+          plan.branch,
+          repoDir,
+          options.internalPrNumber
+        );
+      }
+      const payload = await buildUpstreamPrPayload(
+        plan.branch,
+        internalPr,
+        { title: options.title },
+        { defaultBranch: plan.upstreamDefaultBranch, cwd: repoDir }
+      );
+      prTitle = payload.title;
+      translatedBody = payload.body;
+      s.stop(
+        internalPr
+          ? `Internal PR found: ${internalPr.url}`
+          : 'No internal PR found — using synthetic body'
+      );
+    }
+
+    const detailLines = plan.noPublic
+      ? [
+          `Branch '${plan.branch}' will be pushed directly to upstream.`,
+          'This makes your work visible and ready for PR within upstream.',
+          '',
+          `  From: Private vendor repo (current)`,
+          `  To:   ${plan.pushUrl}`,
+          `  PR:   ${plan.upstreamRepoPath}@${plan.branch} → ${plan.upstreamRepoPath}`,
+        ]
+      : [
+          `Branch '${plan.branch}' will be pushed to your public fork.`,
+          'This makes your work visible and ready for PR to upstream.',
+          '',
+          `  From: Private vendor repo (current)`,
+          `  To:   ${plan.pushUrl}`,
+          `  PR:   ${plan.pushRepoPath} → ${plan.upstreamRepoPath}`,
+        ];
+    if (createPr) {
+      detailLines.push(
+        '',
+        `  Upstream PR: ${prTitle}`,
+        `  Base:        ${plan.upstreamRepoPath}@${baseBranch}`,
+        `  Draft:       ${options.draft ? 'yes' : 'no'}`
+      );
+    }
+    p.note(detailLines.join('\n'), 'Staging Details');
+
+    if (createPr) {
+      const previewBody =
+        translatedBody.length > 800
+          ? `${translatedBody.slice(0, 800)}\n…(truncated; full body sent on submit)`
+          : translatedBody;
+      p.note(previewBody || '(empty)', 'Upstream PR body preview');
+    }
+
+    const shouldStage = await confirmOrAutoYes({
+      message: plan.noPublic
+        ? createPr
+          ? 'Push to upstream and open the PR?'
+          : 'Push to upstream?'
+        : createPr
+          ? 'Push to public fork and open the upstream PR?'
+          : 'Push to public fork?',
+      initialValue: false,
+      allowNonInteractive: createPr,
+    });
+
+    if (p.isCancel(shouldStage)) {
+      p.cancel('Operation cancelled');
+      process.exit(0);
+    }
+
+    if (!shouldStage) {
+      p.outro('Stage cancelled');
+      process.exit(0);
+    }
+
+    const stagedHead = await executeStagingPush(plan, repoDir, s);
+
+    let upstreamPrUrl: string | undefined;
+    let alreadyExisted = false;
+    if (createPr) {
+      s.start('Opening upstream pull request');
+      try {
+        const result = await createUpstreamPr({
+          upstreamRepoPath: plan.upstreamRepoPath,
+          headOwner: plan.pushOwner,
+          sameRepoHead: plan.noPublic,
+          branch: plan.branch,
+          base: baseBranch,
+          title: prTitle,
+          body: translatedBody,
+          draft: Boolean(options.draft),
+          cwd: repoDir,
+        });
+        upstreamPrUrl = result.url;
+        alreadyExisted = result.alreadyExists;
+        s.stop(
+          alreadyExisted
+            ? `Upstream PR already exists: ${upstreamPrUrl}`
+            : `Upstream PR opened: ${upstreamPrUrl}`
+        );
+      } catch (err) {
+        s.stop('Upstream PR creation failed');
+        const msg = err instanceof Error ? err.message : String(err);
+        p.log.warn(msg);
+        p.log.warn(
+          'Staging succeeded; you can retry the PR manually with `gh pr create`.'
+        );
+      }
+
+      // Refresh the existing upstream PR's body from the (possibly updated)
+      // internal review. Default behaviour; opt out with --no-update-existing
+      // if the user wants the upstream body frozen at first-stage time.
+      if (alreadyExisted && upstreamPrUrl && !options.noUpdateExisting) {
+        s.start('Updating existing upstream PR body');
+        const editResult = await $({
+          cwd: repoDir,
+          reject: false,
+          input: translatedBody,
+        })`gh pr edit ${upstreamPrUrl} --body-file -`;
+        if (editResult.exitCode === 0) {
+          s.stop('Updated upstream PR body');
+        } else {
+          s.stop('Could not update upstream PR body');
+          p.log.warn(
+            editResult.stderr.trim() || `gh pr edit exit ${editResult.exitCode}`
+          );
+        }
+      }
+    }
+
+    if (createPr && upstreamPrUrl) {
+      try {
+        await updateVenforkConfig(repoDir, {
+          shippedBranches: {
+            [plan.branch]: {
+              upstreamPrUrl,
+              head: stagedHead,
+              shippedAt: new Date().toISOString(),
+              ...(internalPr ? { internalPrUrl: internalPr.url } : {}),
+            },
+          },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        p.log.warn(`Could not record shippedBranches entry: ${msg}`);
+      }
+    }
+
+    // Use the resolved baseBranch (which respects --base) so the compare URL
+    // points at the same base the user asked for, even if --pr wasn't set
+    // or `gh pr create` failed earlier. In no-public mode the head and base
+    // live in the same repo, so gh's compare URL accepts a bare branch name.
+    const prUrl = plan.noPublic
+      ? `https://github.com/${plan.upstreamRepoPath}/compare/${baseBranch}...${plan.branch}?expand=1`
+      : `https://github.com/${plan.upstreamRepoPath}/compare/${baseBranch}...${plan.pushOwner}:${plan.branch}?expand=1`;
+
+    if (createPr && upstreamPrUrl) {
+      const lines = [`Upstream PR: ${upstreamPrUrl}`];
+      if (internalPr) {
+        lines.push(`Internal review: ${internalPr.url}`);
+      }
+      p.note(lines.join('\n'), 'Next Steps');
+    } else {
+      p.note(
+        plan.noPublic
+          ? `Your branch is now on upstream!\n\nCreate a pull request:\n  ${prUrl}\n\n(Tip: re-run with --pr to open it automatically.)`
+          : `Your branch is now on the public fork!\n\nCreate a pull request to upstream:\n  ${prUrl}\n\n(Tip: re-run with --pr to open it automatically.)`,
+        'Next Steps'
+      );
+    }
+
+    p.outro('✨ Stage complete!');
+  } catch (error) {
+    s.stop('Error occurred');
+    p.log.error(error instanceof Error ? error.message : String(error));
+    p.outro('❌ Stage failed');
+    process.exit(1);
+  }
+}
