@@ -392,7 +392,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     expect(upstreamPr.isDraft).toBe(true);
   }, 300_000);
 
-  test('tier 4: pull-request imports an upstream PR; sync refreshes it', async () => {
+  test('tier 4: pull pr imports an upstream PR; sync refreshes it', async () => {
     const defaultBranch = await getRepoDefaultBranch(
       UPSTREAM_OWNER,
       names.upstream
@@ -410,7 +410,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     });
 
     // Pull it into the mirror.
-    await runVenfork(['pull-request', String(opened.number)], {
+    await runVenfork(['pull', 'pr', String(opened.number)], {
       cwd: localMirrorPath,
     });
 
@@ -452,7 +452,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     expect(refreshedMirrorHead).toBe(refreshedLocalHead);
   }, 300_000);
 
-  test('tier 5: issue stage + issue pull round-trip through gh', async () => {
+  test('tier 5: stage issue + pull issue round-trip through gh', async () => {
     // Create an internal issue on the mirror with a redaction block.
     const internalBody = [
       'Public bug summary: feature.txt does not load in Safari.',
@@ -469,7 +469,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     });
 
     // Stage the internal issue upstream.
-    await runVenfork(['issue', 'stage', String(internal.number)], {
+    await runVenfork(['stage', 'issue', String(internal.number)], {
       cwd: localMirrorPath,
       env: { VENFORK_NONINTERACTIVE: '1' },
     });
@@ -506,7 +506,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     const upstreamComment = `Follow-up detail ${RUN_ID}`;
     await $`gh issue comment ${upstreamReport.number} --repo ${UPSTREAM_OWNER}/${names.upstream} --body ${upstreamComment}`;
 
-    await runVenfork(['issue', 'pull', String(upstreamReport.number)], {
+    await runVenfork(['pull', 'issue', String(upstreamReport.number)], {
       cwd: localMirrorPath,
       env: { VENFORK_NONINTERACTIVE: '1' },
     });

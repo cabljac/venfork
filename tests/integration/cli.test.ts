@@ -113,6 +113,42 @@ describe('per-command help', () => {
     expect(result.stderr).toContain('Unknown command: frobnicate');
   });
 
+  test('the removed pull-request and issue commands are unknown commands', async () => {
+    for (const args of [
+      ['pull-request', '1'],
+      ['issue', 'pull', '1'],
+    ]) {
+      const result = await runCli(...args);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(`Unknown command: ${args[0]}`);
+      expect(result.stdout).not.toContain('Venfork');
+    }
+  });
+
+  for (const [args, usage] of [
+    [['pull', 'pr', '--help'], 'venfork pull pr <pr-number-or-url>'],
+    [['pull', 'issue', '--help'], 'venfork pull issue <number-or-url>'],
+    [['stage', 'issue', '--help'], 'venfork stage issue <number-or-url>'],
+    [['pull', '--help'], 'venfork pull issue <number-or-url>'],
+  ] as const) {
+    test(`${args.join(' ')} prints its usage and exits 0`, async () => {
+      const result = await runCli(...args);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(usage);
+      expect(result.stdout).not.toContain('venfork setup <upstream>');
+      expect(result.stderr).toBe('');
+    });
+  }
+
+  test('bare `stage issue` without a ref points at `stage branch issue`', async () => {
+    const result = await runCli('stage', 'issue');
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('venfork stage branch issue');
+  });
+
   test('the removed status command is an unknown command', async () => {
     const result = await runCli('status');
 

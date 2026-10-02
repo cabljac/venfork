@@ -116,7 +116,7 @@ export async function pokeUpstream(
  * via the GitHub contents API, then opens a PR from that branch into
  * upstream's default branch. Returns the PR number + URL.
  *
- * Used by Tier 4 (pull-request) so the test owns an upstream PR it can
+ * Used by Tier 4 (pull pr) so the test owns an upstream PR it can
  * also update later with `pushToUpstreamPrBranch`.
  */
 export async function openUpstreamPr(args: {

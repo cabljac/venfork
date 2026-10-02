@@ -53,9 +53,9 @@ a real GitHub Actions runner via `gh workflow run`:
 
 - Tier 3: `venfork stage --pr` opens the upstream PR with
   `<!-- venfork:internal -->` blocks redacted.
-- Tier 4: `venfork pull-request` imports an upstream PR, and `venfork sync`
+- Tier 4: `venfork pull pr` imports an upstream PR, and `venfork sync`
   refreshes it after the contributor pushes again.
-- Tier 5: `venfork issue stage` and `venfork issue pull` round-trip issues.
+- Tier 5: `venfork stage issue` and `venfork pull issue` round-trip issues.
 
 **Tier 6** (opt-in via `VENFORK_E2E_REAL_DISPATCH=1`) - pins why
 `VENFORK_PUSH_TOKEN` is required in no-public mode too:

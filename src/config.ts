@@ -24,7 +24,7 @@ export interface ShippedBranch {
 }
 
 /**
- * Record kept by `venfork pull-request` so `venfork sync <branch>` can
+ * Record kept by `venfork pull pr` so `venfork sync <branch>` can
  * refresh a pulled-in upstream PR against the latest `pull/<n>/head` ref.
  */
 export interface PulledPr {
@@ -37,7 +37,7 @@ export interface PulledPr {
 }
 
 /**
- * Record kept by `venfork issue stage` linking an internal issue (private
+ * Record kept by `venfork stage issue` linking an internal issue (private
  * mirror) to the upstream issue it was promoted to.
  */
 export interface ShippedIssue {
@@ -50,7 +50,7 @@ export interface ShippedIssue {
 }
 
 /**
- * Record kept by `venfork issue pull` linking an upstream issue to the
+ * Record kept by `venfork pull issue` linking an upstream issue to the
  * internal issue created on the mirror for team triage.
  */
 export interface PulledIssue {
@@ -108,16 +108,16 @@ export interface VenforkConfig {
   preserve?: string[];
   /** Branch -> upstream PR linkage recorded by `venfork stage --pr`. */
   shippedBranches?: Record<string, ShippedBranch>;
-  /** Branch -> upstream PR tracking recorded by `venfork pull-request`. */
+  /** Branch -> upstream PR tracking recorded by `venfork pull pr`. */
   pulledPrs?: Record<string, PulledPr>;
   /**
    * Internal-issue-number-as-string -> upstream issue linkage recorded by
-   * `venfork issue stage`.
+   * `venfork stage issue`.
    */
   shippedIssues?: Record<string, ShippedIssue>;
   /**
    * Internal-issue-number-as-string -> upstream issue linkage recorded by
-   * `venfork issue pull`.
+   * `venfork pull issue`.
    */
   pulledIssues?: Record<string, PulledIssue>;
   /**

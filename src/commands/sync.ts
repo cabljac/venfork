@@ -31,7 +31,7 @@ import {
 
 /**
  * Returns the upstream PR number for `branch` if it's a pulled-in PR. First
- * checks `venfork-config.pulledPrs` (recorded by `venfork pull-request`),
+ * checks `venfork-config.pulledPrs` (recorded by `venfork pull pr`),
  * then falls back to the `upstream-pr/<n>` naming convention. Returns null
  * if the branch is not a pulled PR (sync routes to the default flow).
  */

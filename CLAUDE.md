@@ -64,7 +64,7 @@ Determinism rule: the managed commit's author and committer are the venfork bot 
 
 ### Internal-block redaction
 
-`venfork stage --pr` and `venfork issue stage` promote internal content to upstream. Before doing so, `stripInternalBlocks` removes `<!-- venfork:internal -->…<!-- /venfork:internal -->` regions from PR/issue bodies and titles. Markers match case-insensitively (`<!-- VENFORK: internal (note) -->` works); an unmatched close marker or any leftover HTML comment mentioning venfork throws `RedactionError` instead of publishing. Anything that flows from mirror → public/upstream must go through this redaction. Stage also refuses (`StageLeakError`) to push a head whose diff against `upstream/<default>` adds the managed workflow or a preserved path upstream does not have.
+`venfork stage --pr` and `venfork stage issue` promote internal content to upstream. Before doing so, `stripInternalBlocks` removes `<!-- venfork:internal -->…<!-- /venfork:internal -->` regions from PR/issue bodies and titles. Markers match case-insensitively (`<!-- VENFORK: internal (note) -->` works); an unmatched close marker or any leftover HTML comment mentioning venfork throws `RedactionError` instead of publishing. Anything that flows from mirror → public/upstream must go through this redaction. Stage also refuses (`StageLeakError`) to push a head whose diff against `upstream/<default>` adds the managed workflow or a preserved path upstream does not have.
 
 ### Health checks
 

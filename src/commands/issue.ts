@@ -48,7 +48,7 @@ async function readIssue(
 
 /**
  * Renders upstream issue comments into a Markdown section for the mirror copy
- * created by `venfork issue pull`. Returns an empty string when there are no
+ * created by `venfork pull issue`. Returns an empty string when there are no
  * comments so the body stays clean.
  *
  * @internal Exported for unit testing.
@@ -115,6 +115,12 @@ function resolveIssueArg(
   return { number: Number(num) };
 }
 
+function issueUsage(action: 'stage' | 'pull' | undefined): string {
+  if (action === 'stage') return 'stage issue';
+  if (action === 'pull') return 'pull issue';
+  return '<stage|pull> issue';
+}
+
 /**
  * Issue command: stage an internal issue to upstream, or pull an upstream
  * issue into the mirror for internal triage. Body translation uses the same
@@ -130,16 +136,14 @@ export async function issueCommand(
 
   if (!action || !target) {
     p.log.error(
-      'Usage: venfork issue <stage|pull> <number-or-url> [--title <text>]'
+      `Usage: venfork ${issueUsage(action)} <number-or-url> [--title <text>]`
     );
     p.outro('');
     process.exit(1);
   }
 
   if (action !== 'stage' && action !== 'pull') {
-    p.log.error(
-      `Unknown action '${action}'. Usage: venfork issue <stage|pull> <number-or-url> [--title <text>]`
-    );
+    p.log.error(`Unknown action '${action}'. Expected one of: stage, pull.`);
     p.outro('');
     process.exit(1);
   }

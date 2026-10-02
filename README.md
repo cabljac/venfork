@@ -96,7 +96,7 @@ venfork stage feature/new-thing
 
 ```bash
 # Reviewing a third-party upstream PR internally
-venfork pull-request 1234
+venfork pull pr 1234
 # upstream-pr/1234 now exists on the mirror; team can review/test against your internal codebase
 
 # Refresh as the upstream contributor pushes updates
@@ -258,7 +258,7 @@ venfork sync develop   # Sync develop branch with upstream/develop
 
 ### `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing]`
 
-Push a branch to the public fork, making it visible and ready for PR to upstream. With `--pr`, also opens the upstream PR for you using your internal review PR's body.
+Push a branch to the public fork, making it visible and ready for PR to upstream. `venfork stage branch <name>` is the explicit form of the same command; use it for a branch named `issue` or `branch`. With `--pr`, also opens the upstream PR for you using your internal review PR's body.
 
 **⚠️ Important:** This is when your work becomes visible to the client!
 
@@ -333,7 +333,7 @@ The implementation follows the spec at https://example.com/oauth.
 
 A comment that mentions venfork but is not a well-formed marker (for example a typo such as `venfork:intenral`), an unmatched close marker, or any `venfork` left in the text after stripping stops the stage before anything is pushed. An unmatched open marker drops everything after it. If you forget to add markers around other internal context, it is sent upstream, so review the preview prompt before confirming.
 
-### `venfork pull-request <pr-number-or-url> [--branch-name <override>] [--no-push]`
+### `venfork pull pr <pr-number-or-url> [--branch-name <override>] [--no-push]`
 
 Pull a third-party upstream PR into the private mirror so your team can review it internally before it lands. The PR's commits land on a new branch (`upstream-pr/<n>` by default) that's pushed to your mirror.
 
@@ -347,13 +347,13 @@ Pull a third-party upstream PR into the private mirror so your team can review i
 **Examples:**
 ```bash
 # Bring upstream PR #1234 into the mirror
-venfork pull-request 1234
+venfork pull pr 1234
 
 # Or via URL
-venfork pull-request https://github.com/upstream/repo/pull/1234
+venfork pull pr https://github.com/upstream/repo/pull/1234
 
 # Use a custom branch name (e.g. for staged team review of a critical PR)
-venfork pull-request 1234 --branch-name review/oauth-pr
+venfork pull pr 1234 --branch-name review/oauth-pr
 ```
 
 **What it does:**
@@ -371,38 +371,39 @@ venfork sync upstream-pr/1234
 ```
 
 `venfork sync <branch>` falls into the pulled-PR path when:
-- `venfork-config.pulledPrs[<branch>]` exists (recorded by `pull-request`), OR
+- `venfork-config.pulledPrs[<branch>]` exists (recorded by `pull pr`), OR
 - The branch matches the `upstream-pr/<n>` naming convention.
 
 In that case it refetches `pull/<n>/head` from upstream and force-with-lease pushes the result to origin. The default-branch sync (the +1-managed-commit flow) is unaffected.
 
-### `venfork issue <stage|pull> <number-or-url> [--title <text>]`
+### `venfork stage issue <number-or-url> [--title <text>]` and `venfork pull issue <number-or-url> [--title <text>]`
 
-Move *issue* context between the private mirror and upstream — the same shape as `stage --pr` and `pull-request`, but for issues instead of PRs.
+Move *issue* context between the private mirror and upstream. The command names follow the direction: `stage` goes outward (mirror to upstream), `pull` comes inward (upstream to mirror). The shape matches `stage --pr` and `pull pr`, but for issues instead of PRs.
 
-**Sub-commands:**
-- `stage <internal-#>` — read an internal triage issue from the mirror, redact `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks (same convention as `stage --pr`), and open the upstream counterpart via `gh issue create`.
-- `pull <upstream-#>` — read an upstream issue **and its comments**, create a parallel internal issue on the mirror titled `[upstream #N] <original title>` so the team can triage it without leaving the private space. The upstream comment thread is snapshotted into the mirror issue body under an "Upstream comments" section.
+- `stage issue <internal-#>` - read an internal triage issue from the mirror, redact `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks (same convention as `stage --pr`), and open the upstream counterpart via `gh issue create`.
+- `pull issue <upstream-#>` - read an upstream issue **and its comments**, create a parallel internal issue on the mirror titled `[upstream #N] <original title>` so the team can triage it without leaving the private space. The upstream comment thread is snapshotted into the mirror issue body under an "Upstream comments" section.
+
+A branch named `issue` or `branch` cannot use the bare `venfork stage <name>` form. Run `venfork stage branch issue` instead.
 
 **Flags:**
 - `--title <text>` - Override the destination issue's title.
 
 **Examples:**
 ```bash
-# Found a bug while working internally → refine then file upstream
-venfork issue stage 7
+# Found a bug while working internally: refine then file upstream
+venfork stage issue 7
 
 # Watching an upstream issue that affects the team's roadmap
-venfork issue pull 1234
+venfork pull issue 1234
 ```
 
 **What gets recorded**
 
-Both sub-commands write a linkage to `venfork-config`:
-- `shippedIssues[<internal-#>]` for `stage`
-- `pulledIssues[<internal-#>]` for `pull`
+Both commands write a linkage to `venfork-config`:
+- `shippedIssues[<internal-#>]` for `stage issue`
+- `pulledIssues[<internal-#>]` for `pull issue`
 
-This is **only the linkage** — there is no *live* sync. `pull` snapshots the upstream body and comments into the mirror issue at pull time, but later comments and state changes do not propagate. If the upstream issue is closed, the internal one stays open until you close it manually (and vice versa). Treat the records as a "where did this go?" audit log rather than a live mirror.
+This is **only the linkage** — there is no *live* sync. `pull issue` snapshots the upstream body and comments into the mirror issue at pull time, but later comments and state changes do not propagate. If the upstream issue is closed, the internal one stays open until you close it manually (and vice versa). Treat the records as a "where did this go?" audit log rather than a live mirror.
 
 ### `venfork doctor [--json]`
 
@@ -570,7 +571,7 @@ venfork setup git@github.com:client/project.git
 
 ### `VENFORK_NONINTERACTIVE`
 
-Set `VENFORK_NONINTERACTIVE=1` to auto-confirm prompts in `venfork stage --pr`, `venfork issue stage`, and `venfork issue pull`. Useful when calling venfork from CI or scripts where stdin isn't a TTY.
+Set `VENFORK_NONINTERACTIVE=1` to auto-confirm prompts in `venfork stage --pr`, `venfork stage issue`, and `venfork pull issue`. Useful when calling venfork from CI or scripts where stdin isn't a TTY.
 
 ```bash
 VENFORK_NONINTERACTIVE=1 venfork stage feat/auth --pr
@@ -598,7 +599,7 @@ The generated workflow also reads the `VENFORK_PUSH_TOKEN` secret and the `VENFO
 
 ### Concurrency
 
-Commands that mutate `venfork-config` (`stage --pr`, `pull-request`, `issue stage`, `issue pull`, and `sync upstream-pr/<n>`) push to the orphan config branch with `--force-with-lease=venfork-config:<read-sha>`, leasing against the exact SHA the command read its starting state from.
+Commands that mutate `venfork-config` (`stage --pr`, `pull pr`, `stage issue`, `pull issue`, and `sync upstream-pr/<n>`) push to the orphan config branch with `--force-with-lease=venfork-config:<read-sha>`, leasing against the exact SHA the command read its starting state from.
 
 When two venfork commands race the config update, the losing one's push is rejected with a "stale info" error. **venfork auto-handles this**: it re-reads the freshly-updated config (now including the winning run's changes), re-applies its own patch on top, and pushes again with the new lease SHA. Up to 3 retries before giving up.
 
