@@ -39,13 +39,36 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: .bun-version
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Check formatting
+        run: bun run format:check
+
+      - name: Run linter
+        run: bun run lint
+
+      - name: Run unit and integration tests with the count gate
+        run: bun run test
+
       - name: Build
         run: bun run build
+
+      - name: Verify build output
+        run: |
+          if [ ! -f dist/index.js ]; then
+            echo "Build failed - dist/index.js not found"
+            exit 1
+          fi
+          if ! head -n 1 dist/index.js | grep -q "#!/usr/bin/env node"; then
+            echo "Build failed - shebang missing"
+            exit 1
+          fi
+
+      - name: Smoke test the built CLI under Node.js
+        run: bun run smoke:node
 
       - name: Publish to npm
         run: npm publish --access public --provenance
@@ -64,14 +87,25 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: .bun-version
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
         working-directory: .
 
+      - name: Check formatting
+        run: bun run format:check
+
+      - name: Run linter
+        run: bun run lint
+
+      - name: Run unit and integration tests with the count gate
+        run: bun run test
+
       - name: Build CLI for all platforms
         run: bun run scripts/release.ts
+        env:
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
 
       - name: Upload binaries to GitHub release
         env:

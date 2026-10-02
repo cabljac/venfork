@@ -1,8 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { $ } from 'execa';
+import { ConfigError, GitError } from './errors.js';
+import { SYNC_WORKFLOW_PATH } from './shared/constants.js';
+import { isValidCronExpression } from './shared/cron.js';
+import { netExec, netFailureReason } from './shared/net.js';
 import { parseRepoPath } from './utils.js';
 
 /**
@@ -20,7 +24,7 @@ export interface ShippedBranch {
 }
 
 /**
- * Record kept by `venfork pull-request` so `venfork sync <branch>` can
+ * Record kept by `venfork pull pr` so `venfork sync <branch>` can
  * refresh a pulled-in upstream PR against the latest `pull/<n>/head` ref.
  */
 export interface PulledPr {
@@ -33,7 +37,7 @@ export interface PulledPr {
 }
 
 /**
- * Record kept by `venfork issue stage` linking an internal issue (private
+ * Record kept by `venfork stage issue` linking an internal issue (private
  * mirror) to the upstream issue it was promoted to.
  */
 export interface ShippedIssue {
@@ -46,7 +50,7 @@ export interface ShippedIssue {
 }
 
 /**
- * Record kept by `venfork issue pull` linking an upstream issue to the
+ * Record kept by `venfork pull issue` linking an upstream issue to the
  * internal issue created on the mirror for team triage.
  */
 export interface PulledIssue {
@@ -88,10 +92,14 @@ export interface VenforkConfig {
    *   - no `..`, `.`, or empty path segments
    *   - no backslashes, NUL bytes, Windows drive prefixes (e.g. `C:`)
    *   - no whitespace anywhere in the path
+   *   - no glob characters (`*`, `?`, `[`, `]`) and no leading `:` (git
+   *     pathspec magic); entries are single files, never patterns
+   *   - not the managed sync workflow (or a path below it) and nothing under
+   *     `.venfork/`: venfork owns those
    *
    * Whitespace is forbidden so the divergence-error hint
    * (`venfork preserve add <path>`) stays copy/paste-safe without quoting.
-   * Entries that don't match are dropped during config normalization.
+   * Entries that don't match move to `invalidPreserve` during normalization.
    *
    * On sync, every listed path is read from the previous mirror tip
    * (`origin/<defaultBranch>`) and re-added to the deterministic "+1 commit"
@@ -100,18 +108,24 @@ export interface VenforkConfig {
   preserve?: string[];
   /** Branch -> upstream PR linkage recorded by `venfork stage --pr`. */
   shippedBranches?: Record<string, ShippedBranch>;
-  /** Branch -> upstream PR tracking recorded by `venfork pull-request`. */
+  /** Branch -> upstream PR tracking recorded by `venfork pull pr`. */
   pulledPrs?: Record<string, PulledPr>;
   /**
    * Internal-issue-number-as-string -> upstream issue linkage recorded by
-   * `venfork issue stage`.
+   * `venfork stage issue`.
    */
   shippedIssues?: Record<string, ShippedIssue>;
   /**
    * Internal-issue-number-as-string -> upstream issue linkage recorded by
-   * `venfork issue pull`.
+   * `venfork pull issue`.
    */
   pulledIssues?: Record<string, PulledIssue>;
+  /**
+   * In memory only: `preserve` entries from the branch that fail
+   * validation. They are written back into `preserve` on save, and sync and
+   * schedule refuse to run while any remain.
+   */
+  invalidPreserve?: string[];
 }
 
 const CONFIG_BRANCH = 'venfork-config';
@@ -123,6 +137,8 @@ const VENFORK_BOT_EMAIL = 'venfork-bot@users.noreply.github.com';
 
 export type VenforkConfigPatch = Omit<
   Partial<VenforkConfig>,
+  | 'schedule'
+  | 'invalidPreserve'
   | 'enabledWorkflows'
   | 'disabledWorkflows'
   | 'preserve'
@@ -131,6 +147,8 @@ export type VenforkConfigPatch = Omit<
   | 'shippedIssues'
   | 'pulledIssues'
 > & {
+  /** Merged into the current schedule; `null` removes it. */
+  schedule?: VenforkConfig['schedule'] | null;
   enabledWorkflows?: string[] | null;
   disabledWorkflows?: string[] | null;
   preserve?: string[] | null;
@@ -146,7 +164,8 @@ export type VenforkConfigPatch = Omit<
 };
 
 /**
- * Creates and pushes a venfork config branch to the origin remote.
+ * Creates and pushes a venfork config branch to the origin remote. Refuses
+ * with a {@link ConfigError} when origin already has one.
  *
  * Pass `publicForkUrl: null` (with `mode: 'no-public'`) when the layout
  * skips the public fork hop.
@@ -172,6 +191,21 @@ export async function createConfigBranch(
     config.publicForkUrl = publicForkUrl;
   }
 
+  const probe = await netExec(repoDir, {
+    bufferOutput: true,
+  })`git ls-remote --exit-code origin refs/heads/${CONFIG_BRANCH}`;
+  if (probe.exitCode === 0) {
+    throw new ConfigError(
+      `The ${CONFIG_BRANCH} branch already exists on origin; refusing to overwrite it. Use \`venfork clone\` to work with an existing mirror.`,
+      { reason: 'exists' }
+    );
+  }
+  if (probe.exitCode !== 2) {
+    throw new ConfigError(
+      `Could not check origin for the ${CONFIG_BRANCH} branch: ${netFailureReason(probe)}`,
+      { reason: 'fetch' }
+    );
+  }
   await writeConfigBranch(repoDir, config, 'Initialize venfork configuration');
 }
 
@@ -185,12 +219,13 @@ function isLeaseFailure(err: unknown): boolean {
   return /stale info/i.test(msg) || /\[rejected\][^\n]*stale/i.test(msg);
 }
 
+/** Pushes `config` as a new `venfork-config` commit and returns its SHA. */
 async function writeConfigBranch(
   repoDir: string,
   config: VenforkConfig,
   commitMessage: string,
   options: { expectedSha?: string } = {}
-): Promise<void> {
+): Promise<string> {
   const uniqueId = randomBytes(8).toString('hex');
   const tempDir = path.join(os.tmpdir(), `venfork-config-${uniqueId}`);
 
@@ -198,7 +233,7 @@ async function writeConfigBranch(
     await mkdir(path.join(tempDir, CONFIG_DIR), { recursive: true });
     await writeFile(
       path.join(tempDir, CONFIG_DIR, CONFIG_FILE),
-      JSON.stringify(config, null, 2)
+      JSON.stringify(toPersisted(config), null, 2)
     );
 
     await $({ cwd: tempDir })`git init`;
@@ -207,6 +242,9 @@ async function writeConfigBranch(
     await $({
       cwd: tempDir,
     })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${commitMessage}`;
+    const written = (
+      await $({ cwd: tempDir })`git rev-parse HEAD`
+    ).stdout.trim();
 
     const remoteResult = await $({ cwd: repoDir })`git remote get-url origin`;
     const originUrl = remoteResult.stdout.trim();
@@ -218,26 +256,29 @@ async function writeConfigBranch(
     // (`createConfigBranch`) and any callers that haven't been updated.
     let expectedSha = options.expectedSha ?? '';
     if (!expectedSha) {
-      const lsRemote = await $({
-        cwd: tempDir,
-        reject: false,
+      const lsRemote = await netExec(tempDir, {
+        bufferOutput: true,
       })`git ls-remote ${originUrl} ${CONFIG_BRANCH}`;
       expectedSha =
         lsRemote.exitCode === 0
-          ? (lsRemote.stdout.trim().split(/\s+/)[0] ?? '')
+          ? ((lsRemote.stdout ?? '').trim().split(/\s+/)[0] ?? '')
           : '';
     }
-    if (expectedSha) {
-      await $({
-        cwd: tempDir,
-      })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH} --force-with-lease=${CONFIG_BRANCH}:${expectedSha}`;
-    } else {
-      // First-time write: no upstream to lease against; concurrent writers
-      // can't exist yet because the branch doesn't yet exist.
-      await $({
-        cwd: tempDir,
-      })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH}`;
+    // First-time write has no lease: the branch does not exist yet.
+    const push = expectedSha
+      ? await netExec(tempDir, {
+          bufferOutput: true,
+        })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH} --force-with-lease=${CONFIG_BRANCH}:${expectedSha} --no-follow-tags`
+      : await netExec(tempDir, {
+          bufferOutput: true,
+        })`git push ${originUrl} ${CONFIG_BRANCH}:${CONFIG_BRANCH} --no-follow-tags`;
+    if (push.exitCode !== 0) {
+      throw new GitError(
+        `git push ${CONFIG_BRANCH} failed: ${netFailureReason(push)}`,
+        'git push'
+      );
     }
+    return written;
   } finally {
     try {
       await rm(tempDir, { recursive: true, force: true });
@@ -351,10 +392,27 @@ function normalizePulledIssue(value: unknown): PulledIssue | null {
 }
 
 /**
+ * True for the managed sync workflow, any path below it, and anything under
+ * `.venfork/`: venfork writes these itself, so they can never be preserved.
+ *
+ * @param entry Repo-relative path.
+ */
+export function isVenforkOwnedPath(entry: string): boolean {
+  return (
+    entry === SYNC_WORKFLOW_PATH ||
+    entry.startsWith(`${SYNC_WORKFLOW_PATH}/`) ||
+    entry === '.venfork' ||
+    entry.startsWith('.venfork/')
+  );
+}
+
+/**
  * Validates a single `preserve` entry. Rejects (returns null) anything that
  * isn't a clean repo-relative path: empty/whitespace-only, NUL bytes,
- * leading `/`, backslashes, Windows drive prefixes, leading `-`, or
- * `..` / `.` / empty segments. Whitespace anywhere in the value is rejected
+ * leading `/`, backslashes, Windows drive prefixes, leading `-`, glob
+ * characters (`*`, `?`, `[`, `]`), a leading `:` (pathspec magic), or
+ * `..` / `.` / empty segments, and venfork-owned paths
+ * ({@link isVenforkOwnedPath}). Whitespace anywhere in the value is rejected
  * too — preserve paths surface verbatim in the divergence-error hint
  * (`venfork preserve add <path>`), so disallowing whitespace keeps that
  * copy/paste-safe without quoting and rules out an entire bug class for a
@@ -367,7 +425,7 @@ function normalizePulledIssue(value: unknown): PulledIssue | null {
  *
  * IMPORTANT: if you change the rejection rules below, also update:
  *   - the JSDoc on `VenforkConfig.preserve` (above)
- *   - the user-facing error message in `preserveCommand` (src/commands.ts)
+ *   - the user-facing error message in `preserveCommand` (src/commands/preserve.ts)
  * All three must stay in sync — users see the JSDoc when editing config by
  * hand, and the error message when running `venfork preserve add`.
  */
@@ -381,6 +439,9 @@ export function normalizePreservePath(value: unknown): string | null {
   if (trimmed.startsWith('-')) return null;
   if (trimmed.includes('\\')) return null;
   if (/^[A-Za-z]:/.test(trimmed)) return null;
+  if (trimmed.startsWith(':')) return null;
+  if (/[*?[\]]/.test(trimmed)) return null;
+  if (isVenforkOwnedPath(trimmed)) return null;
   const segments = trimmed.split('/');
   for (const seg of segments) {
     if (seg === '' || seg === '.' || seg === '..') {
@@ -406,26 +467,42 @@ function normalizeBranchMap<T>(
   return Object.keys(out).length > 0 ? out : null;
 }
 
-function normalizeConfig(config: VenforkConfig): VenforkConfig | null {
+/** Options for {@link normalizeConfig}. */
+export interface NormalizeOptions {
+  /** Accept an invalid `schedule.cron`, for a write that replaces it. */
+  allowInvalidCron?: boolean;
+}
+
+function configProblem(message: string): ConfigError {
+  return new ConfigError(`Invalid ${CONFIG_BRANCH} config: ${message}`);
+}
+
+function normalizeConfig(
+  input: unknown,
+  options: NormalizeOptions = {}
+): VenforkConfig {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw configProblem(`${CONFIG_FILE} is not a JSON object`);
+  }
+  const config = input as VenforkConfig;
   if (!config.version || !config.upstreamUrl) {
-    return null;
+    throw configProblem('version and upstreamUrl are required');
   }
 
   const mode: 'standard' | 'no-public' =
     config.mode === 'no-public' ? 'no-public' : 'standard';
 
   if (mode === 'standard' && !config.publicForkUrl) {
-    return null;
+    throw configProblem('publicForkUrl is required unless mode is no-public');
   }
   if (mode === 'no-public' && config.publicForkUrl) {
-    // mode/publicForkUrl must agree — reject the ambiguous combo so a
-    // hand-edit can't leave the config in a contradictory state.
-    return null;
+    throw configProblem('mode no-public must not set publicForkUrl');
   }
 
   const normalized: VenforkConfig = {
     ...config,
   };
+  delete normalized.invalidPreserve;
   if (mode === 'no-public') {
     normalized.mode = 'no-public';
     delete normalized.publicForkUrl;
@@ -434,9 +511,17 @@ function normalizeConfig(config: VenforkConfig): VenforkConfig | null {
   }
 
   if (normalized.schedule) {
-    const cron = normalized.schedule.cron?.trim();
+    const cron =
+      typeof normalized.schedule.cron === 'string'
+        ? normalized.schedule.cron.trim()
+        : '';
     if (!cron || typeof normalized.schedule.enabled !== 'boolean') {
-      return null;
+      throw configProblem('schedule needs a cron string and enabled flag');
+    }
+    if (!options.allowInvalidCron && !isValidCronExpression(cron)) {
+      throw configProblem(
+        `schedule.cron '${cron}' is not a valid 5-field cron expression. Fix it with: venfork schedule set "<cron>" (or venfork schedule disable)`
+      );
     }
     normalized.schedule = {
       cron,
@@ -476,19 +561,25 @@ function normalizeConfig(config: VenforkConfig): VenforkConfig | null {
     }
   }
 
-  if (normalized.preserve) {
-    const cleaned = Array.from(
-      new Set(
-        normalized.preserve
-          .map((value) => normalizePreservePath(value))
-          .filter((value): value is string => value !== null)
-          .sort()
-      )
-    );
-    if (cleaned.length > 0) {
-      normalized.preserve = cleaned;
+  if (normalized.preserve !== undefined) {
+    const entries: unknown[] = Array.isArray(normalized.preserve)
+      ? normalized.preserve
+      : [normalized.preserve];
+    const valid = new Set<string>();
+    const invalid = new Set<string>();
+    for (const entry of entries) {
+      const cleaned = normalizePreservePath(entry);
+      if (cleaned !== null) valid.add(cleaned);
+      else
+        invalid.add(typeof entry === 'string' ? entry : JSON.stringify(entry));
+    }
+    if (valid.size > 0) {
+      normalized.preserve = [...valid].sort();
     } else {
       delete normalized.preserve;
+    }
+    if (invalid.size > 0) {
+      normalized.invalidPreserve = [...invalid].sort();
     }
   }
 
@@ -533,7 +624,77 @@ function normalizeConfig(config: VenforkConfig): VenforkConfig | null {
 }
 
 /**
- * Fetches and reads the venfork config from a remote repository.
+ * The config as it is stored on the branch: invalid preserve entries are
+ * kept in `preserve` so a save never silently drops them.
+ */
+function toPersisted(config: VenforkConfig): VenforkConfig {
+  const { invalidPreserve, ...persisted } = config;
+  if (invalidPreserve && invalidPreserve.length > 0) {
+    persisted.preserve = [
+      ...new Set([...(persisted.preserve ?? []), ...invalidPreserve]),
+    ].sort();
+  }
+  return persisted;
+}
+
+/**
+ * Throws a {@link ConfigError} when the config still holds preserve entries
+ * that fail validation, naming each one and the command that removes it.
+ * Sync and schedule call this before they rebuild the default branch.
+ */
+export function assertNoInvalidPreserve(config: VenforkConfig | null): void {
+  const invalid = config?.invalidPreserve ?? [];
+  if (invalid.length === 0) return;
+  throw invalidPreserveError(invalid);
+}
+
+/**
+ * The {@link ConfigError} for preserve entries venfork does not accept,
+ * naming each one and the command that removes it.
+ *
+ * @param entries The rejected entries, as stored in the config.
+ */
+export function invalidPreserveError(entries: readonly string[]): ConfigError {
+  return new ConfigError(
+    `The preserve list has entries venfork no longer accepts (single files only; no globs, pathspec magic or directories):\n${entries
+      .map((entry) => `  - ${entry}: ${preserveRemoveHint(entry)}`)
+      .join(
+        '\n'
+      )}\nRemove each entry, then add the individual files you want to keep.`
+  );
+}
+
+/**
+ * The `venfork preserve remove` command for `entries`, each single-quoted
+ * so a shell passes it through unchanged (`*.md` is not expanded).
+ *
+ * @param entries Preserve entries.
+ */
+export function preserveRemoveHint(...entries: string[]): string {
+  const quoted = entries.map((entry) => `'${entry.replaceAll("'", "'\\''")}'`);
+  return `venfork preserve remove ${quoted.join(' ')}`;
+}
+
+function parseConfig(
+  raw: string,
+  options: NormalizeOptions = {}
+): VenforkConfig {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new ConfigError(
+      `Invalid ${CONFIG_BRANCH} config: ${CONFIG_FILE} is not valid JSON (${err instanceof Error ? err.message : String(err)})`,
+      { cause: err }
+    );
+  }
+  return normalizeConfig(parsed, options);
+}
+
+/**
+ * Fetches and reads the venfork config from a remote repository. Returns
+ * null only when the repository has no `venfork-config` branch; any other
+ * failure throws a {@link ConfigError}.
  */
 export async function fetchVenforkConfig(
   repoUrl: string
@@ -543,22 +704,17 @@ export async function fetchVenforkConfig(
 
   try {
     const repoRef = parseRepoPath(repoUrl) || repoUrl;
-    const cloneResult = await $({
-      reject: false,
-    })`gh repo clone ${repoRef} ${tempDir} -- --branch ${CONFIG_BRANCH} --single-branch --depth 1`;
-
-    if (cloneResult.exitCode !== 0) {
-      return null;
+    const clone = await netExec(undefined, {
+      bufferOutput: true,
+    })`gh repo clone ${repoRef} ${tempDir} -- --no-checkout --depth 1 --filter=blob:none`;
+    if (clone.exitCode !== 0) {
+      throw new ConfigError(
+        `Could not clone ${repoRef} to read ${CONFIG_BRANCH}: ${netFailureReason(clone)}`,
+        { reason: 'fetch' }
+      );
     }
-
-    const rawConfig = await readFile(
-      path.join(tempDir, CONFIG_DIR, CONFIG_FILE),
-      'utf-8'
-    );
-    const config = JSON.parse(rawConfig) as VenforkConfig;
-    return normalizeConfig(config);
-  } catch {
-    return null;
+    const fetched = await fetchConfigContentAndSha(tempDir);
+    return fetched ? parseConfig(fetched.raw) : null;
   } finally {
     try {
       await rm(tempDir, { recursive: true, force: true });
@@ -571,8 +727,9 @@ export async function fetchVenforkConfig(
 /**
  * Atomically reads the config content + the SHA of the commit it came from
  * by running fetch once and resolving both `FETCH_HEAD` (for the SHA) and
- * `FETCH_HEAD:<config>` (for the content) against that single fetch. Returns
- * null if the branch doesn't exist or the content is unreadable.
+ * `FETCH_HEAD:<config>` (for the content) against that single fetch.
+ * Returns null only when `git ls-remote --exit-code` reports that origin has
+ * no `venfork-config` branch; every other failure throws a ConfigError.
  *
  * Capturing the SHA here is what lets `updateVenforkConfig` push back with
  * an explicit `--force-with-lease=<branch>:<sha>` against the *exact* SHA
@@ -581,79 +738,89 @@ export async function fetchVenforkConfig(
 async function fetchConfigContentAndSha(
   repoDir: string
 ): Promise<{ raw: string; sha: string } | null> {
-  const fetchResult = await $({
-    cwd: repoDir,
-    reject: false,
+  const probe = await netExec(repoDir, {
+    bufferOutput: true,
+  })`git ls-remote --exit-code origin refs/heads/${CONFIG_BRANCH}`;
+  if (probe.exitCode === 2) {
+    return null;
+  }
+  if (probe.exitCode !== 0) {
+    throw new ConfigError(
+      `Could not check origin for the ${CONFIG_BRANCH} branch: ${netFailureReason(probe)}`,
+      { reason: 'fetch' }
+    );
+  }
+
+  const fetchResult = await netExec(repoDir, {
+    bufferOutput: true,
   })`git fetch origin ${CONFIG_BRANCH}`;
   if (fetchResult.exitCode !== 0) {
-    return null;
+    throw new ConfigError(
+      `Could not fetch ${CONFIG_BRANCH} from origin: ${netFailureReason(fetchResult)}`,
+      { reason: 'fetch' }
+    );
   }
 
   const revParseResult = await $({
     cwd: repoDir,
     reject: false,
   })`git rev-parse FETCH_HEAD`;
-  if (revParseResult.exitCode !== 0) {
-    return null;
-  }
-  const sha = revParseResult.stdout.trim();
+  const sha = revParseResult.exitCode === 0 ? revParseResult.stdout.trim() : '';
   if (!sha) {
-    return null;
+    throw new ConfigError(
+      `Could not resolve the fetched ${CONFIG_BRANCH} commit: ${revParseResult.stderr.trim()}`
+    );
   }
 
-  const showResult = await $({
-    cwd: repoDir,
-    reject: false,
+  // A partial clone fetches this blob lazily, so it is a network read.
+  const showResult = await netExec(repoDir, {
+    bufferOutput: true,
   })`git show FETCH_HEAD:${CONFIG_DIR}/${CONFIG_FILE}`;
   if (showResult.exitCode !== 0) {
-    return null;
+    throw new ConfigError(
+      `${CONFIG_BRANCH} has no readable ${CONFIG_DIR}/${CONFIG_FILE}: ${netFailureReason(showResult)}`,
+      showResult.timedOut ? { reason: 'fetch' } : undefined
+    );
   }
-  return { raw: showResult.stdout, sha };
+  return { raw: showResult.stdout ?? '', sha };
 }
 
 /**
- * Reads venfork configuration from the local repo's orphan `venfork-config` branch.
+ * Reads venfork configuration from the local repo's orphan `venfork-config`
+ * branch. Returns null only when origin has no such branch; a fetch,
+ * parse or validation failure throws a {@link ConfigError}.
  */
 export async function readVenforkConfigFromRepo(
-  repoDir: string
+  repoDir: string,
+  options: NormalizeOptions = {}
 ): Promise<VenforkConfig | null> {
   const fetched = await fetchConfigContentAndSha(repoDir);
-  if (!fetched) return null;
-  try {
-    const config = JSON.parse(fetched.raw) as VenforkConfig;
-    return normalizeConfig(config);
-  } catch {
-    return null;
-  }
+  return fetched ? parseConfig(fetched.raw, options) : null;
 }
 
 /**
  * Like `readVenforkConfigFromRepo` but also returns the SHA of the commit
- * the config was read from. Used by `updateVenforkConfig` so the
- * subsequent push can lease against that SHA.
+ * the config was read from, so a later write can lease against it.
  */
-async function readVenforkConfigFromRepoWithSha(
-  repoDir: string
+export async function readVenforkConfigFromRepoWithSha(
+  repoDir: string,
+  options: NormalizeOptions = {}
 ): Promise<{ config: VenforkConfig; sha: string } | null> {
   const fetched = await fetchConfigContentAndSha(repoDir);
   if (!fetched) return null;
-  try {
-    const config = JSON.parse(fetched.raw) as VenforkConfig;
-    const normalized = normalizeConfig(config);
-    if (!normalized) return null;
-    return { config: normalized, sha: fetched.sha };
-  } catch {
-    return null;
-  }
+  return { config: parseConfig(fetched.raw, options), sha: fetched.sha };
 }
 
 /**
  * Apply a `VenforkConfigPatch` on top of an already-read config and return
- * the fully merged + normalized result. Pulled out so the retry loop in
- * `updateVenforkConfig` can re-apply the same patch to freshly-read state
+ * the fully merged + normalized result, without writing it. The retry loop
+ * in `updateVenforkConfig` re-applies the same patch to freshly-read state
  * after a `--force-with-lease` failure.
+ *
+ * @param current Config as read from the branch.
+ * @param patch Shallow patch; `null` deletes a field or map entry.
  */
-function applyPatchAndNormalize(
+export function applyPatchAndNormalize(
   current: VenforkConfig,
   patch: VenforkConfigPatch
 ): VenforkConfig {
@@ -669,7 +836,7 @@ function applyPatchAndNormalize(
   } = patch;
 
   const merged: VenforkConfig = {
-    ...current,
+    ...toPersisted(current),
     ...basePatch,
     schedule: basePatch.schedule
       ? {
@@ -678,6 +845,9 @@ function applyPatchAndNormalize(
         }
       : current.schedule,
   };
+  if (basePatch.schedule === null || merged.schedule === undefined) {
+    delete merged.schedule;
+  }
 
   if (patch.enabledWorkflows === null) {
     delete merged.enabledWorkflows;
@@ -734,11 +904,7 @@ function applyPatchAndNormalize(
     throw new Error('schedule.cron is required when schedule is configured');
   }
 
-  const normalized = normalizeConfig(merged);
-  if (!normalized) {
-    throw new Error('Updated venfork config is invalid');
-  }
-  return normalized;
+  return normalizeConfig(merged);
 }
 
 /**
@@ -759,9 +925,11 @@ export async function updateVenforkConfig(
   const MAX_RETRIES = 3;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
-    const read = await readVenforkConfigFromRepoWithSha(repoDir);
+    const read = await readVenforkConfigFromRepoWithSha(repoDir, {
+      allowInvalidCron: patch.schedule?.cron !== undefined,
+    });
     if (!read) {
-      throw new Error('venfork-config branch not found or invalid');
+      throw new ConfigError(`${CONFIG_BRANCH} branch not found on origin`);
     }
 
     const normalized = applyPatchAndNormalize(read.config, patch);
@@ -790,6 +958,58 @@ export async function updateVenforkConfig(
   throw new Error(
     `Could not update venfork-config after ${MAX_RETRIES} concurrent-write retries. Re-run the command, or resolve any unexpected state on the venfork-config branch.`
   );
+}
+
+/**
+ * Writes `config` to `venfork-config` only if origin still has the commit
+ * `expectedSha`, and returns the new commit's SHA. No retry: a moved branch
+ * throws a `ConfigError` with reason `conflict` and nothing is written.
+ */
+export async function writeVenforkConfigAt(
+  repoDir: string,
+  config: VenforkConfig,
+  expectedSha: string
+): Promise<string> {
+  try {
+    return await writeConfigBranch(
+      repoDir,
+      config,
+      UPDATE_CONFIG_COMMIT_MESSAGE,
+      { expectedSha }
+    );
+  } catch (err) {
+    if (isLeaseFailure(err)) {
+      throw new ConfigError(
+        `${CONFIG_BRANCH} changed on origin since this command read it; nothing was written. Re-run the command.`,
+        { reason: 'conflict', cause: err }
+      );
+    }
+    throw err;
+  }
+}
+
+/**
+ * Points `venfork-config` on origin back at the existing commit `sha`, only
+ * if origin still has `expectedSha`. A moved branch throws a `ConfigError`
+ * with reason `conflict`; any other failure throws a `GitError`.
+ */
+export async function restoreVenforkConfig(
+  repoDir: string,
+  sha: string,
+  expectedSha: string
+): Promise<void> {
+  const push = await netExec(repoDir, {
+    bufferOutput: true,
+  })`git push origin ${sha}:refs/heads/${CONFIG_BRANCH} --force-with-lease=refs/heads/${CONFIG_BRANCH}:${expectedSha} --no-follow-tags`;
+  if (push.exitCode === 0) return;
+  const reason = netFailureReason(push);
+  if (/stale info/i.test(reason)) {
+    throw new ConfigError(
+      `${CONFIG_BRANCH} changed on origin after ${expectedSha}`,
+      { reason: 'conflict' }
+    );
+  }
+  throw new GitError(`git push ${CONFIG_BRANCH} failed: ${reason}`, 'git push');
 }
 
 /**

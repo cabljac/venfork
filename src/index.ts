@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import * as p from '@clack/prompts';
 import { parseCloneCliArgs } from './clone-args.js';
+import { commandHelp } from './commands/help.js';
 import {
   cloneCommand,
+  doctorCommand,
   issueCommand,
   preserveCommand,
   pullRequestCommand,
@@ -11,15 +12,18 @@ import {
   setupCommand,
   showHelp,
   stageCommand,
-  statusCommand,
   syncCommand,
   workflowsCommand,
 } from './commands.js';
-import { parseIssueCliArgs } from './issue-args.js';
+import { requiresGhAuth } from './dispatch.js';
+import { parseDoctorCliArgs } from './doctor-args.js';
+import { ensureGhAuth } from './git.js';
 import { parsePreserveCliArgs } from './preserve-args.js';
-import { parsePullRequestCliArgs } from './pull-request-args.js';
+import { parsePullCliArgs } from './pull-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
 import { parseStageCliArgs } from './stage-args.js';
+import { parseSyncCliArgs } from './sync-args.js';
+import { VENFORK_VERSION } from './version.js';
 import { parseWorkflowsCliArgs } from './workflows-args.js';
 
 /**
@@ -37,6 +41,21 @@ async function main(): Promise<void> {
   ) {
     showHelp();
     return;
+  }
+
+  if (command === '--version' || command === '-v' || command === 'version') {
+    console.log(VENFORK_VERSION);
+    return;
+  }
+
+  const usage = commandHelp(command, args.slice(1));
+  if (usage && args.slice(1).some((arg) => arg === '-h' || arg === '--help')) {
+    console.log(usage);
+    return;
+  }
+
+  if (requiresGhAuth(command, args.slice(1))) {
+    await ensureGhAuth();
   }
 
   switch (command) {
@@ -59,14 +78,20 @@ async function main(): Promise<void> {
       });
       break;
     }
-    case 'sync':
-      await syncCommand(args[1]);
+    case 'sync': {
+      const parsed = parseSyncCliArgs(args.slice(1));
+      await syncCommand(parsed.branch, { reportIssues: parsed.reportIssues });
       break;
+    }
     case 'schedule':
       await scheduleCommand(args[1], args[2]);
       break;
     case 'stage': {
       const parsed = parseStageCliArgs(args.slice(1));
+      if (parsed.kind === 'issue') {
+        await issueCommand('stage', parsed.ref, { title: parsed.title });
+        break;
+      }
       await stageCommand(parsed.branch, {
         createPr: parsed.createPr,
         draft: parsed.draft,
@@ -77,9 +102,13 @@ async function main(): Promise<void> {
       });
       break;
     }
-    case 'status':
-      await statusCommand();
+    case 'doctor': {
+      const parsed = parseDoctorCliArgs(args.slice(1));
+      if (!(await doctorCommand({ json: parsed.json }))) {
+        process.exitCode = 1;
+      }
       break;
+    }
     case 'workflows': {
       const parsed = parseWorkflowsCliArgs(args.slice(1));
       await workflowsCommand(parsed.action, parsed.workflows);
@@ -90,29 +119,27 @@ async function main(): Promise<void> {
       await preserveCommand(parsed.action, parsed.paths);
       break;
     }
-    case 'pull-request': {
-      const parsed = parsePullRequestCliArgs(args.slice(1));
-      await pullRequestCommand(parsed.pr, {
-        branchName: parsed.branchName,
-        push: parsed.push,
-      });
-      break;
-    }
-    case 'issue': {
-      const parsed = parseIssueCliArgs(args.slice(1));
-      await issueCommand(parsed.action, parsed.target, {
-        title: parsed.title,
-      });
+    case 'pull': {
+      const parsed = parsePullCliArgs(args.slice(1));
+      if (parsed.kind === 'pr') {
+        await pullRequestCommand(parsed.ref, {
+          branchName: parsed.branchName,
+          push: parsed.push,
+        });
+      } else {
+        await issueCommand('pull', parsed.ref, { title: parsed.title });
+      }
       break;
     }
     default:
-      p.log.error(`Unknown command: ${command}`);
-      showHelp();
+      console.error(`Unknown command: ${command}. Run \`venfork help\`.`);
       process.exit(1);
   }
 }
 
 main().catch((error) => {
-  p.log.error(error instanceof Error ? error.message : String(error));
+  console.error(
+    `Error: ${error instanceof Error ? error.message : String(error)}`
+  );
   process.exit(1);
 });

@@ -1,6 +1,9 @@
+import { VENFORK_VERSION } from './version.js';
+
 const WORKFLOW_NAME = 'Venfork Sync';
 const WORKFLOW_FILENAME = '.github/workflows/venfork-sync.yml';
 
+/** Repo-relative path of the managed sync workflow file. */
 export function getSyncWorkflowPath(): string {
   return WORKFLOW_FILENAME;
 }
@@ -19,10 +22,14 @@ function escapeCronForYaml(cron: string): string {
  * In `'standard'` mode the workflow configures both `upstream` and `public`
  * remotes; in `'no-public'` mode the public-remote block is omitted so the
  * sync only mirrors upstream → origin.
+ *
+ * The runner installs exactly `version` (default: the running CLI), so the
+ * YAML a runner regenerates matches the YAML already on the default branch.
  */
 export function generateSyncWorkflow(
   cron: string,
-  mode: 'standard' | 'no-public' = 'standard'
+  mode: 'standard' | 'no-public' = 'standard',
+  version: string = VENFORK_VERSION
 ): string {
   const safeCron = escapeCronForYaml(cron);
   const noPublic = mode === 'no-public';
@@ -62,11 +69,21 @@ on:
 
 permissions:
   contents: write
+  issues: write
+
+concurrency:
+  group: venfork-sync-\${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
+      - name: Install venfork
+        env:
+          VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
+        run: npm install -g --ignore-scripts "\${VENFORK_INSTALL_SPEC:-venfork@${version}}"
       - name: Checkout mirror
         uses: actions/checkout@v4
         with:
@@ -82,13 +99,32 @@ jobs:
           # value is a separate entry under the same key.
           git config --global --add url."https://github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
-      - name: Install venfork
-        run: npm install -g venfork
       - name: Configure venfork remotes
         shell: bash
         run: |
 ${remotesScript}
       - name: Sync from upstream
-        run: venfork sync
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: venfork sync --report-issues
+      - name: Report failed sync
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: \${{ github.token }}
+          RUN_URL: \${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          if ! gh label list --repo "$REPO" --search venfork-sync-blocked --json name --jq '.[].name' | grep -qx venfork-sync-blocked; then
+            gh label create venfork-sync-blocked --repo "$REPO" --color B60205 --description "Scheduled venfork sync is blocked"
+          fi
+          NUMBER="$(gh issue list --repo "$REPO" --label venfork-sync-blocked --state open --json number --limit 1 --jq '.[0].number // empty')"
+          if [ -z "$NUMBER" ]; then
+            gh issue create --repo "$REPO" --label venfork-sync-blocked --title "Scheduled sync failed" --body "Scheduled venfork sync failed. See $RUN_URL"
+          # A blocked sync already wrote this run URL into the issue body.
+          elif ! gh issue view "$NUMBER" --repo "$REPO" --json body --jq '.body' | grep -qF "$RUN_URL"; then
+            gh issue comment "$NUMBER" --repo "$REPO" --body "Scheduled venfork sync failed. See $RUN_URL"
+          fi
 `;
 }

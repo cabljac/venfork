@@ -42,7 +42,7 @@ body:
         - setup
         - sync
         - stage
-        - status
+        - doctor
         - New command
         - Not command-specific
     validations:

@@ -1,4 +1,6 @@
 import { $ } from 'execa';
+import { AuthenticationError } from './errors.js';
+import { netExec } from './shared/net.js';
 
 /**
  * Checks if GitHub CLI is authenticated
@@ -11,6 +13,16 @@ export async function checkGhAuth(): Promise<boolean> {
     return result.exitCode === 0;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Throws `AuthenticationError` unless the GitHub CLI is authenticated.
+ * Called by the CLI dispatcher for commands that talk to GitHub through gh.
+ */
+export async function ensureGhAuth(): Promise<void> {
+  if (!(await checkGhAuth())) {
+    throw new AuthenticationError();
   }
 }
 
@@ -57,37 +69,38 @@ export async function isGitRepository(): Promise<boolean> {
 }
 
 /**
- * Gets all git remotes with their URLs
+ * Reads every git remote's fetch and push URL with `git remote get-url`
+ * (and `--push`), so URLs and paths containing spaces come back intact.
  *
- * @returns Object mapping remote names to their fetch/push URLs
+ * @param cwd Repository to read; defaults to the current directory.
+ * @returns Object mapping remote names to their fetch/push URLs; empty when
+ *   the directory is not a repository.
  */
-export async function getRemotes(): Promise<
-  Record<string, { fetch: string; push: string }>
-> {
+export async function getRemotes(
+  cwd?: string
+): Promise<Record<string, { fetch: string; push: string }>> {
+  const cwdOpt = cwd ? { cwd } : {};
   try {
-    const result = await $({ reject: false })`git remote -v`;
-    if (result.exitCode !== 0) {
+    const list = await $({ ...cwdOpt, reject: false })`git remote`;
+    if (list.exitCode !== 0) {
       return {};
     }
-
     const remotes: Record<string, { fetch: string; push: string }> = {};
-    const lines = result.stdout.trim().split('\n');
-
-    for (const line of lines) {
-      const match = line.match(/^(\S+)\s+(\S+)\s+\((\w+)\)$/);
-      if (match) {
-        const [, name, url, type] = match;
-        if (!remotes[name]) {
-          remotes[name] = { fetch: '', push: '' };
-        }
-        if (type === 'fetch') {
-          remotes[name].fetch = url;
-        } else if (type === 'push') {
-          remotes[name].push = url;
-        }
-      }
+    for (const name of list.stdout.split('\n').map((line) => line.trim())) {
+      if (!name) continue;
+      const fetchUrl = await $({
+        ...cwdOpt,
+        reject: false,
+      })`git remote get-url ${name}`;
+      const pushUrl = await $({
+        ...cwdOpt,
+        reject: false,
+      })`git remote get-url --push ${name}`;
+      remotes[name] = {
+        fetch: fetchUrl.exitCode === 0 ? fetchUrl.stdout.trim() : '',
+        push: pushUrl.exitCode === 0 ? pushUrl.stdout.trim() : '',
+      };
     }
-
     return remotes;
   } catch {
     return {};
@@ -151,7 +164,9 @@ export async function getDefaultBranch(
   const cwdOpt = cwd ? { cwd } : {};
   try {
     // First, try to update the remote HEAD to detect the default branch
-    await $({ ...cwdOpt, reject: false })`git remote set-head ${remote} -a`;
+    await netExec(cwd, {
+      bufferOutput: true,
+    })`git remote set-head ${remote} -a`;
 
     // Get the symbolic ref for the remote HEAD
     const result = await $({

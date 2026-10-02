@@ -44,8 +44,8 @@ Thank you for your interest in contributing to Venfork! This guide will help you
 ### Running Tests
 
 ```bash
-# Run all tests
-bun test
+# Run all tests (unit, then integration)
+bun run test
 # or
 npm test
 
@@ -96,14 +96,17 @@ The built files will be in the `dist/` directory.
 venfork/
 ├── src/
 │   ├── index.ts       # CLI entry point
-│   ├── commands.ts    # Command implementations
+│   ├── commands.ts    # Barrel re-exporting every command
+│   ├── commands/      # One file per command
+│   ├── shared/        # Helpers shared by several commands
 │   ├── git.ts         # Git/GitHub utilities
 │   ├── utils.ts       # Pure utility functions
 │   └── errors.ts      # Custom error types
 ├── tests/
-│   ├── git.test.ts
-│   ├── utils.test.ts
-│   └── errors.test.ts
+│   ├── unit/          # String-mocked execa tests
+│   ├── integration/   # Real git against local bare repos
+│   ├── harness/       # Fixture that builds those repos
+│   └── e2e/           # Real GitHub, opt-in
 └── dist/              # Built output (gitignored)
 ```
 
@@ -128,7 +131,7 @@ git checkout -b fix/bug-description
 
 - Write tests for new features in the appropriate test file
 - Use `test` (not `it`) for test blocks (project convention)
-- Ensure all tests pass: `bun test`
+- Ensure all tests pass: `bun run test`
 
 Example:
 ```typescript
@@ -158,7 +161,7 @@ The commit subject becomes the CHANGELOG entry, so write it for end users.
 
 ```bash
 # Run all checks
-bun run check && bun test && bun run build
+bun run check && bun run test && bun run build
 
 # or with npm
 npm run check && npm test && npm run build
@@ -193,7 +196,7 @@ Then create a PR on GitHub with:
 
 ### Before Submitting
 
-- ✅ All tests pass (`bun test`)
+- ✅ All tests pass (`bun run test`)
 - ✅ Code is formatted and linted (`bun run check`)
 - ✅ Build succeeds (`bun run build`)
 - ✅ Commit subject uses a [conventional prefix](#4-use-conventional-commit-messages) so release-please picks it up

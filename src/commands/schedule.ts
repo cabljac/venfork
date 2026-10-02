@@ -1,0 +1,126 @@
+import * as p from '@clack/prompts';
+import { $ } from 'execa';
+import { readVenforkConfigFromRepo } from '../config.js';
+import { getDefaultBranch } from '../git.js';
+import { applyConfigChange } from '../shared/config-change.js';
+import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
+import { isValidCronExpression } from '../shared/cron.js';
+import { parseRepoPath } from '../utils.js';
+
+/**
+ * Schedule command: Configure automated sync via GitHub Actions workflow.
+ */
+export async function scheduleCommand(
+  action?: string,
+  value?: string
+): Promise<void> {
+  p.intro('⏰ Venfork Schedule');
+  const repoDir = process.cwd();
+  const s = p.spinner();
+
+  try {
+    const defaultBranch = await getDefaultBranch('upstream');
+
+    if (action === 'set') {
+      const cron = value?.trim();
+      if (!cron) {
+        p.log.error('Cron expression is required');
+        p.outro('Usage: venfork schedule set "<cron>"');
+        process.exit(1);
+      }
+      if (!isValidCronExpression(cron)) {
+        p.log.error('Invalid cron expression (expected 5 fields)');
+        p.outro('Usage: venfork schedule set "<cron>"');
+        process.exit(1);
+      }
+
+      s.start('Updating schedule and the workflow on the default branch');
+      const updated = await applyConfigChange(
+        repoDir,
+        { schedule: { enabled: true, cron } },
+        { allowInvalidCron: true }
+      );
+      s.stop('Schedule and workflow updated');
+
+      let mirrorPath = '<owner>/<mirror>';
+      try {
+        const originUrl = (
+          await $({ cwd: repoDir })`git remote get-url origin`
+        ).stdout.trim();
+        const parsed = parseRepoPath(originUrl);
+        if (parsed) {
+          mirrorPath = parsed;
+        }
+      } catch {
+        // Best-effort: fall back to placeholder.
+      }
+
+      const tokenPurpose =
+        updated.mode === 'no-public'
+          ? 'so the workflow can push upstream commits that change .github/workflows (the job token cannot)'
+          : 'so the workflow can push to the public fork and push upstream commits that change .github/workflows (the job token can do neither)';
+      p.outro(
+        `✨ Scheduled sync enabled\n\nBranch: ${defaultBranch}\nCron: ${cron}\nWorkflow: ${SYNC_WORKFLOW_PATH}\n\nNext: set VENFORK_PUSH_TOKEN ${tokenPurpose}. The token needs the \`workflow\` scope (classic) or Workflows: write (fine-grained):\n  gh secret set VENFORK_PUSH_TOKEN --repo ${mirrorPath} --body "$(gh auth token)"\n(skip if VENFORK_PUSH_TOKEN is already configured)`
+      );
+      return;
+    }
+
+    if (action === 'disable') {
+      s.start('Disabling schedule and removing the workflow');
+      const currentConfig = await readVenforkConfigFromRepo(repoDir, {
+        allowInvalidCron: true,
+      });
+      if (!currentConfig) {
+        throw new Error('venfork-config branch not found or invalid');
+      }
+      const currentCron = currentConfig.schedule?.cron ?? '';
+      await applyConfigChange(
+        repoDir,
+        {
+          schedule: {
+            enabled: false,
+            cron: isValidCronExpression(currentCron)
+              ? currentCron
+              : '0 * * * *',
+          },
+        },
+        { allowInvalidCron: true }
+      );
+      s.stop('Schedule disabled and workflow removed');
+
+      p.outro(
+        `✨ Scheduled sync disabled\n\nBranch: ${defaultBranch}\nWorkflow removed: ${SYNC_WORKFLOW_PATH}`
+      );
+      return;
+    }
+
+    if (action === 'status' || !action) {
+      s.start('Reading schedule configuration');
+      const config = await readVenforkConfigFromRepo(repoDir);
+      s.stop('Configuration loaded');
+      if (!config) {
+        throw new Error('venfork-config branch not found or invalid');
+      }
+      const schedule = config.schedule;
+      const enabled = Boolean(schedule?.enabled);
+      const cron = schedule?.cron || '(not set)';
+      p.note(
+        `Branch: ${defaultBranch}\nEnabled: ${enabled ? 'yes' : 'no'}\nCron: ${cron}\nWorkflow: ${SYNC_WORKFLOW_PATH}`,
+        'Schedule Status'
+      );
+      p.outro('✨ Schedule status shown');
+      return;
+    }
+
+    p.log.error(`Unknown schedule action: ${action}`);
+    p.outro(
+      'Usage: venfork schedule <status|set <cron>|disable>\nExample: venfork schedule set "0 */6 * * *"'
+    );
+    process.exit(1);
+  } catch (error) {
+    s.stop('Error occurred');
+    p.log.error(error instanceof Error ? error.message : String(error));
+    p.outro('❌ Schedule command failed');
+    process.exit(1);
+  }
+}
