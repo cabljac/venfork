@@ -10,7 +10,10 @@ import {
   WORKFLOWS_DIR,
 } from './constants.js';
 import { pathExists } from './fs.js';
-import { MANAGED_COMMIT_MESSAGE } from './managed-commit.js';
+import {
+  MANAGED_COMMIT_MESSAGE,
+  MANAGED_COMMIT_TRAILER,
+} from './managed-commit.js';
 import { withDetachedWorktree } from './worktree.js';
 
 /** Basenames of `entries`, trimmed, de-duplicated and sorted. */
@@ -40,26 +43,33 @@ async function listWorkflowFiles(cwd: string): Promise<string[]> {
 }
 
 /**
- * Re-stamp `origin/<defaultBranch>` as `upstream/<defaultBranch>` plus one
- * deterministic "+1 commit" containing the managed sync workflow (when
- * scheduled) and any preserved mirror-only files. Force-pushes the result.
+ * Builds the commit that `origin/<defaultBranch>` should point at: the
+ * upstream tip plus at most one venfork-managed commit. Nothing is pushed.
  *
- * `previousMirrorTip` is the commit-ish to read preserve sources from
- * (typically captured from `git rev-parse origin/<defaultBranch>` *before*
- * sync's force-push runs). Pass an empty string when no previous tip exists
- * (first sync); preserve must be empty in that case.
+ * The managed commit holds the sync workflow (when `schedule` is set), the
+ * workflow allow/block filtering, and preserved mirror-only files read from
+ * `previousMirrorTip`. Its author, committer and dates come from fixed
+ * inputs (bot identity, upstream tip's committer date), so the same upstream
+ * tip and the same tree always give the same SHA. When the resulting tree
+ * equals the upstream tree, no commit is made and the upstream tip is
+ * returned.
+ *
+ * Pass an empty `previousMirrorTip` when origin has no default branch yet;
+ * `preserve` must be empty in that case.
  */
-export async function applyMirrorPlusOneCommit(args: {
+export async function buildMirrorTip(args: {
   defaultBranch: string;
+  upstreamTip: string;
   schedule: { cron: string; mode: 'standard' | 'no-public' } | null;
   enabledWorkflows: string[];
   disabledWorkflows: string[];
   preserve: string[];
   previousMirrorTip: string;
   cwd?: string;
-}): Promise<void> {
+}): Promise<string> {
   const {
     defaultBranch,
+    upstreamTip,
     schedule,
     enabledWorkflows,
     disabledWorkflows,
@@ -71,11 +81,9 @@ export async function applyMirrorPlusOneCommit(args: {
   const allowlist = normalizeWorkflowList(enabledWorkflows);
   const blocklist = normalizeWorkflowList(disabledWorkflows);
 
-  // Re-stamp from upstream so the private mirror default branch is always
-  // `upstream + exactly one deterministic internal workflow commit`.
-  await withDetachedWorktree(
+  return withDetachedWorktree(
     repoDir,
-    `upstream/${defaultBranch}`,
+    upstreamTip,
     'venfork-sync-',
     async (tempDir) => {
       if (schedule) {
@@ -137,15 +145,74 @@ export async function applyMirrorPlusOneCommit(args: {
         }
       }
 
-      await $({
-        cwd: tempDir,
-      })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit --allow-empty -m ${MANAGED_COMMIT_MESSAGE}`;
+      const tree = (await $({ cwd: tempDir })`git write-tree`).stdout.trim();
+      const upstreamTree = (
+        await $({ cwd: tempDir })`git rev-parse ${`${upstreamTip}^{tree}`}`
+      ).stdout.trim();
+      if (tree === upstreamTree) {
+        return upstreamTip;
+      }
 
-      await $({
+      const upstreamDate = (
+        await $({
+          cwd: tempDir,
+        })`git show -s --format=%cd --date=raw ${upstreamTip}`
+      ).stdout.trim();
+      const commit = await $({
         cwd: tempDir,
-      })`git push origin HEAD:${defaultBranch} --force-with-lease`;
+        env: {
+          GIT_AUTHOR_NAME: VENFORK_BOT_NAME,
+          GIT_AUTHOR_EMAIL: VENFORK_BOT_EMAIL,
+          GIT_AUTHOR_DATE: upstreamDate,
+          GIT_COMMITTER_NAME: VENFORK_BOT_NAME,
+          GIT_COMMITTER_EMAIL: VENFORK_BOT_EMAIL,
+          GIT_COMMITTER_DATE: upstreamDate,
+        },
+      })`git commit-tree --no-gpg-sign ${tree} -p ${upstreamTip} -m ${MANAGED_COMMIT_MESSAGE} -m ${MANAGED_COMMIT_TRAILER}`;
+      return commit.stdout.trim();
     }
   );
+}
+
+/**
+ * Points `<remote>/<branch>` at `target` with an explicit lease on
+ * `expected` (empty means the branch must not exist yet). Skips the push and
+ * returns false when the remote already points at `target`.
+ */
+export async function pushBranchWithLease(args: {
+  remote: string;
+  branch: string;
+  target: string;
+  expected: string;
+  cwd?: string;
+}): Promise<boolean> {
+  const { remote, branch, target, expected, cwd } = args;
+  if (target === expected) {
+    return false;
+  }
+  await $({
+    ...(cwd ? { cwd } : {}),
+  })`git push ${remote} ${target}:refs/heads/${branch} --force-with-lease=refs/heads/${branch}:${expected}`;
+  return true;
+}
+
+/**
+ * Re-stamps `origin/<defaultBranch>` as the upstream tip plus at most one
+ * deterministic venfork-managed commit (see {@link buildMirrorTip}) with a
+ * single leased push. Returns the new tip and whether a push happened.
+ */
+export async function applyMirrorPlusOneCommit(
+  args: Parameters<typeof buildMirrorTip>[0]
+): Promise<{ tip: string; pushed: boolean }> {
+  const tip = await buildMirrorTip(args);
+  const pushed = await pushBranchWithLease({
+    remote: 'origin',
+    branch: args.defaultBranch,
+    target: tip,
+    expected: args.previousMirrorTip,
+    cwd: args.cwd,
+  });
+  return { tip, pushed };
 }
 
 /**
@@ -190,7 +257,7 @@ export async function updateWorkflowOnOriginDefault(
 
       await $({
         cwd: tempDir,
-      })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${MANAGED_COMMIT_MESSAGE}`;
+      })`git -c user.name=${VENFORK_BOT_NAME} -c user.email=${VENFORK_BOT_EMAIL} commit -m ${MANAGED_COMMIT_MESSAGE} -m ${MANAGED_COMMIT_TRAILER}`;
       await $({
         cwd: tempDir,
       })`git push origin HEAD:${defaultBranch} --force-with-lease`;

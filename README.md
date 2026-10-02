@@ -219,9 +219,10 @@ venfork clone git@github.com:acme-corp/awesome-project-private.git
 
 ### `venfork sync [branch]`
 
-Update default branches from upstream. With scheduled sync enabled, the private mirror uses a managed `+1` model:
+Update default branches from upstream. With scheduled sync or a preserve list enabled, the private mirror uses a managed `+0/+1` model:
 - `public/<default>` matches `upstream/<default>`
-- `origin/<default>` is `upstream/<default>` plus one deterministic managed workflow commit
+- `origin/<default>` is `upstream/<default>` plus at most one deterministic managed commit (the sync workflow and preserved files). If that commit would add nothing, `origin/<default>` equals `upstream/<default>`.
+- The managed commit's SHA depends only on the upstream tip and its content, so a sync with nothing new to bring in pushes nothing and teammates never see a rewritten default branch.
 
 Normally you run this from your private mirror directory (or any subfolder of that repo). The same behavior is also used internally when **`venfork setup`** completes in recovery mode (existing GitHub repos), using the new clone’s path automatically.
 
@@ -237,15 +238,16 @@ venfork sync develop   # Sync develop branch with upstream/develop
 **What it does:**
 1. Fetches latest changes from all remotes (upstream, origin, public)
 2. Checks for divergent commits (warns if found to prevent data loss)
-3. Pushes upstream's default branch to origin and public
-4. If scheduled sync is enabled, re-applies one deterministic top commit for `.github/workflows/venfork-sync.yml` on the private mirror default branch
+3. Builds the new origin tip: upstream's default branch, plus (when scheduled sync or preserve is enabled) one deterministic managed commit with `.github/workflows/venfork-sync.yml` and preserved files
+4. Pushes origin and public once each with an explicit lease, skipping any remote that is already up to date
 5. If workflow policy is configured, that managed commit filters `.github/workflows` using:
    - `enabledWorkflows` allowlist (highest precedence)
    - otherwise `disabledWorkflows` blocklist
 6. **Does not affect your current working branch or feature branches**
 
 **Important:**
-- With scheduled sync enabled, mirror default branch follows the `upstream + 1 managed commit` model
+- With scheduled sync or preserve enabled, mirror default branch follows the `upstream + at most 1 managed commit` model
+- After upgrading venfork, the first sync rewrites the managed commit once (new trailer and dates); later syncs are stable
 - Public default branch remains aligned with upstream
 - Your current work on feature branches is completely unaffected
 - If divergent commits are detected, sync will abort to prevent data loss

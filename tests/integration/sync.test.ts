@@ -15,6 +15,8 @@ import {
 
 const MANAGED_SUBJECT = 'chore: venfork-managed mirror commit';
 const CALLER = '.github/workflows/caller.yml';
+const WORKFLOW = '.github/workflows/venfork-sync.yml';
+const BOT = 'venfork-bot <venfork-bot@users.noreply.github.com>';
 
 let fx: MirrorFixture;
 let active: MirrorFixture | undefined;
@@ -73,26 +75,24 @@ describe('harness', () => {
 });
 
 describe('sync with the managed commit', () => {
-  // Red until sync builds the managed commit deterministically.
-  test.todo(
-    'sync twice with no upstream change yields the same origin SHA',
-    async () => {
-      await enableSchedule();
+  test('sync twice with no upstream change yields the same origin SHA', async () => {
+    await enableSchedule();
 
-      setClock(1_800_000_000);
-      await sync();
-      const first = await fx.sha(fx.origin, 'main');
+    setClock(1_800_000_000);
+    await sync();
+    const first = await fx.sha(fx.origin, 'main');
+    const pushesAfterFirst = await fx.pushCount(fx.origin, 'refs/heads/main');
 
-      setClock(1_800_003_600);
-      await sync();
-      const second = await fx.sha(fx.origin, 'main');
+    setClock(1_800_003_600);
+    await sync();
 
-      expect(second).toBe(first);
-    }
-  );
+    expect(await fx.sha(fx.origin, 'main')).toBe(first);
+    expect(await fx.pushCount(fx.origin, 'refs/heads/main')).toBe(
+      pushesAfterFirst
+    );
+  });
 
-  // Red until sync stops pushing bare upstream before the managed commit.
-  test.todo('sync pushes origin exactly once', async () => {
+  test('sync pushes origin exactly once', async () => {
     await enableSchedule();
     await fx.commitOnUpstream({ 'src/new.txt': 'new\n' });
     const before = await fx.pushCount(fx.origin, 'refs/heads/main');
@@ -100,6 +100,108 @@ describe('sync with the managed commit', () => {
     await sync();
 
     expect((await fx.pushCount(fx.origin, 'refs/heads/main')) - before).toBe(1);
+    expect(await fx.subjects(fx.origin, 'main', 'main~1..main')).toEqual([
+      MANAGED_SUBJECT,
+    ]);
+    expect(await fx.fileAt(fx.origin, 'main', WORKFLOW)).not.toBeNull();
+  });
+
+  test('managed commit carries Venfork-Managed trailer, bot identity and the upstream date', async () => {
+    await enableSchedule();
+    await sync();
+
+    const format =
+      '%(trailers:key=Venfork-Managed,valueonly)%x00%an <%ae>%x00%cn <%ce>%x00%cd';
+    const [trailer, author, committer, date] = (
+      await fx.git(
+        fx.origin,
+        'log',
+        '-1',
+        `--format=${format}`,
+        '--date=raw',
+        'main'
+      )
+    ).split('\0');
+    const upstreamDate = await fx.git(
+      fx.upstream,
+      'log',
+      '-1',
+      '--format=%cd',
+      '--date=raw',
+      'main'
+    );
+
+    expect(trailer.trim()).toBe('1');
+    expect(author).toBe(BOT);
+    expect(committer).toBe(BOT);
+    expect(date).toBe(upstreamDate);
+  });
+
+  test('sync replaces a legacy managed commit without reporting divergence', async () => {
+    await enableSchedule();
+    await fx.commitOnOrigin(
+      { [WORKFLOW]: 'name: old venfork sync\n' },
+      'chore: add/update scheduled sync workflow (venfork)'
+    );
+
+    await sync();
+
+    expect(await fx.sha(fx.origin, 'main~1')).toBe(
+      await fx.sha(fx.upstream, 'main')
+    );
+    expect(await fx.subjects(fx.origin, 'main', 'main~1..main')).toEqual([
+      MANAGED_SUBJECT,
+    ]);
+  });
+
+  test('sync with stale lease aborts rather than overwriting', async () => {
+    await enableSchedule();
+    await sync();
+    await fx.commitOnUpstream({ 'src/new.txt': 'new\n' });
+    const stale = `${fx.root}/stale-origin.git`;
+    await fx.git(fx.root, 'clone', '--quiet', '--bare', fx.origin, stale);
+    const teammate = await fx.commitOnOrigin({ 'src/team.txt': 'team\n' });
+    await fx.git(fx.work, 'remote', 'set-url', 'origin', stale);
+    await fx.git(fx.work, 'remote', 'set-url', '--push', 'origin', fx.origin);
+
+    await expect(sync()).rejects.toThrow('process.exit(1)');
+
+    expect(await fx.sha(fx.origin, 'main')).toBe(teammate);
+  });
+
+  test('sync does not touch public when public already equals upstream', async () => {
+    await sync();
+    const originPushes = await fx.pushCount(fx.origin, 'refs/heads/main');
+    await enableSchedule();
+    // Any push attempt to public now fails, like a missing cross-repo token.
+    await fx.git(
+      fx.work,
+      'remote',
+      'set-url',
+      '--push',
+      'public',
+      `${fx.root}/missing.git`
+    );
+
+    await sync();
+
+    expect(await fx.pushCount(fx.origin, 'refs/heads/main')).toBe(
+      originPushes + 1
+    );
+  });
+
+  test('preserve-only with all files now upstream yields +0', async () => {
+    process.chdir(fx.work);
+    await preserveCommand('add', [CALLER]);
+    await fx.commitOnOrigin({ [CALLER]: 'mirror version\n' });
+    await sync();
+    const upstreamTip = await fx.commitOnUpstream({
+      [CALLER]: 'upstream version\n',
+    });
+
+    await sync();
+
+    expect(await fx.sha(fx.origin, 'main')).toBe(upstreamTip);
   });
 
   test('sync throws SyncDivergenceError on a user commit to origin/main', async () => {

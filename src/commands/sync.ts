@@ -9,7 +9,10 @@ import {
 import { SyncDivergenceError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { checkDivergence } from '../shared/divergence.js';
-import { applyMirrorPlusOneCommit } from '../shared/mirror-commit.js';
+import {
+  applyMirrorPlusOneCommit,
+  pushBranchWithLease,
+} from '../shared/mirror-commit.js';
 
 /**
  * Returns the upstream PR number for `branch` if it's a pulled-in PR. First
@@ -252,46 +255,32 @@ export async function syncCommand(
       );
     }
 
-    // Capture the previous mirror tip BEFORE the force-push so
-    // `applyMirrorPlusOneCommit` can read preserved files from it. After the
-    // push, `origin/<defaultBranch>` (locally and remotely) points at the
-    // upstream tree and the previous mirror state is no longer reachable
-    // through that ref.
-    const prevTipResult = await $({
-      ...cwdOpt,
-      reject: false,
-    })`git rev-parse --verify origin/${defaultBranch}`;
-    const previousMirrorTip =
-      prevTipResult.exitCode === 0 ? prevTipResult.stdout.trim() : '';
-
-    // Step 5: Push upstream default branch to origin (and public, in standard mode)
-    s.start(
-      noPublic
-        ? `Syncing ${defaultBranch} to origin`
-        : `Syncing ${defaultBranch} to origin and public`
-    );
-
-    await $(
-      cwdOpt
-    )`git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} --force-with-lease`;
-    if (!noPublic) {
-      await $(
-        cwdOpt
-      )`git push public upstream/${defaultBranch}:refs/heads/${defaultBranch} --force-with-lease`;
+    const revParse = async (ref: string): Promise<string> => {
+      const result = await $({
+        ...cwdOpt,
+        reject: false,
+      })`git rev-parse --verify ${`${ref}^{commit}`}`;
+      return result.exitCode === 0 ? result.stdout.trim() : '';
+    };
+    const upstreamTip = await revParse(`upstream/${defaultBranch}`);
+    if (!upstreamTip) {
+      throw new Error(
+        `upstream/${defaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
+      );
     }
+    // Read before anything is pushed: preserved files come from this tip, and
+    // it is the lease for the origin push.
+    const previousMirrorTip = await revParse(`origin/${defaultBranch}`);
 
-    s.stop(noPublic ? 'Synced to origin' : 'Synced to all remotes');
-
-    // Step 6: Enforce mirror "+1 commit" model. Runs when schedule is enabled
-    // (writes the managed sync workflow + filters upstream workflows) OR when
-    // preserve is non-empty (carries mirror-only files forward across sync).
     const scheduleActive = Boolean(
       scheduleConfig?.enabled && scheduleConfig.cron
     );
+    s.start(`Syncing ${defaultBranch} to origin`);
+    let originPushed: boolean;
     if (scheduleActive || preserveList.length > 0) {
-      s.start('Re-applying mirror "+1 commit"');
-      await applyMirrorPlusOneCommit({
+      const result = await applyMirrorPlusOneCommit({
         defaultBranch,
+        upstreamTip,
         schedule:
           scheduleActive && scheduleConfig
             ? {
@@ -305,7 +294,36 @@ export async function syncCommand(
         previousMirrorTip,
         cwd: options?.cwd,
       });
-      s.stop('Mirror "+1 commit" applied');
+      originPushed = result.pushed;
+    } else {
+      originPushed = await pushBranchWithLease({
+        remote: 'origin',
+        branch: defaultBranch,
+        target: upstreamTip,
+        expected: previousMirrorTip,
+        cwd: options?.cwd,
+      });
+    }
+    s.stop(
+      originPushed
+        ? `Updated origin/${defaultBranch}`
+        : `origin/${defaultBranch} already up to date`
+    );
+
+    if (!noPublic) {
+      s.start(`Syncing ${defaultBranch} to public`);
+      const publicPushed = await pushBranchWithLease({
+        remote: 'public',
+        branch: defaultBranch,
+        target: upstreamTip,
+        expected: await revParse(`public/${defaultBranch}`),
+        cwd: options?.cwd,
+      });
+      s.stop(
+        publicPushed
+          ? `Updated public/${defaultBranch}`
+          : `public/${defaultBranch} already up to date`
+      );
     }
 
     if (!quiet) {

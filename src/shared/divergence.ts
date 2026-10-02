@@ -61,7 +61,8 @@ export interface DivergenceResult {
 /**
  * Counts user-authored commits on `<remote>/<defaultBranch>` that are not in
  * `upstream/<defaultBranch>`, skipping the venfork-managed commit and, when
- * `allowPreserved` is set, commits that only touch preserved paths.
+ * `allowPreserved` is set, commits that only touch preserved paths. A missing
+ * remote branch counts as no divergence; any other git failure throws.
  */
 export async function checkDivergence(args: {
   remote: string;
@@ -72,34 +73,37 @@ export async function checkDivergence(args: {
 }): Promise<DivergenceResult> {
   const { remote, defaultBranch, allowPreserved, preserveAllowed, cwd } = args;
   const cwdOpt = cwd ? { cwd } : {};
-  try {
-    const result = await $({
-      ...cwdOpt,
-    })`git rev-list upstream/${defaultBranch}..${remote}/${defaultBranch}`;
-    const divergentCommits = result.stdout
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean);
-
-    let count = 0;
-    const files = new Set<string>();
-    for (const commit of divergentCommits) {
-      if (await isManagedCommit(commit, cwd)) continue;
-      // Compute the changed files once — both the preserve check and the
-      // divergence-error file aggregation want the same list, and
-      // `git diff-tree` isn't free.
-      const commitFiles = await changedFilesInCommit(commit, cwd);
-      if (allowPreserved && isPreservedCommit(commitFiles, preserveAllowed)) {
-        continue;
-      }
-      count += 1;
-      for (const file of commitFiles) {
-        files.add(file);
-      }
-    }
-    return { count, files: Array.from(files).sort() };
-  } catch {
-    // Remote branch might not exist yet (first sync)
+  const remoteRef = await $({
+    ...cwdOpt,
+    reject: false,
+  })`git rev-parse --verify ${`${remote}/${defaultBranch}`}`;
+  if (remoteRef.exitCode !== 0) {
+    // First sync: the remote has no default branch yet.
     return { count: 0, files: [] };
   }
+  const result = await $({
+    ...cwdOpt,
+  })`git rev-list upstream/${defaultBranch}..${remote}/${defaultBranch}`;
+  const divergentCommits = result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  let count = 0;
+  const files = new Set<string>();
+  for (const commit of divergentCommits) {
+    if (await isManagedCommit(commit, cwd)) continue;
+    // Compute the changed files once — both the preserve check and the
+    // divergence-error file aggregation want the same list, and
+    // `git diff-tree` isn't free.
+    const commitFiles = await changedFilesInCommit(commit, cwd);
+    if (allowPreserved && isPreservedCommit(commitFiles, preserveAllowed)) {
+      continue;
+    }
+    count += 1;
+    for (const file of commitFiles) {
+      files.add(file);
+    }
+  }
+  return { count, files: Array.from(files).sort() };
 }

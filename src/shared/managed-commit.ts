@@ -18,6 +18,18 @@ export const MANAGED_COMMIT_MESSAGE = 'chore: venfork-managed mirror commit';
 export const LEGACY_MANAGED_COMMIT_MESSAGES: readonly string[] = [
   'chore: add/update scheduled sync workflow (venfork)',
 ];
+/** Trailer key written on every venfork-managed commit. */
+export const MANAGED_COMMIT_TRAILER_KEY = 'Venfork-Managed';
+/** Full trailer line written on every venfork-managed commit. */
+export const MANAGED_COMMIT_TRAILER = `${MANAGED_COMMIT_TRAILER_KEY}: 1`;
+
+async function hasManagedTrailer(ref: string, cwd?: string): Promise<boolean> {
+  const result = await $({
+    ...(cwd ? { cwd } : {}),
+    reject: false,
+  })`git log -1 --format=%(trailers:key=${MANAGED_COMMIT_TRAILER_KEY},valueonly) ${ref}`;
+  return result.exitCode === 0 && result.stdout.trim() === '1';
+}
 
 async function commitSubject(
   ref: string,
@@ -71,7 +83,8 @@ async function commitTouchesWorkflowPath(
  * Detects the venfork-managed "+1 commit" so sync's divergence check and
  * stage's cherry-pick filter can skip it without losing user work.
  *
- * Three signals all classify a commit as managed:
+ * Any of these signals classifies a commit as managed:
+ *  0. A `Venfork-Managed: 1` trailer.
  *  1. Subject matches the current `MANAGED_COMMIT_MESSAGE`.
  *  2. Subject matches one of `LEGACY_MANAGED_COMMIT_MESSAGES` — covers
  *     mirrors created before the message was generalized.
@@ -85,6 +98,7 @@ export async function isManagedCommit(
   ref: string,
   cwd?: string
 ): Promise<boolean> {
+  if (await hasManagedTrailer(ref, cwd)) return true;
   const subject = await commitSubject(ref, cwd);
   if (subject !== null) {
     if (subject === MANAGED_COMMIT_MESSAGE) return true;

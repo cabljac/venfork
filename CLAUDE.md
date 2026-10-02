@@ -55,9 +55,13 @@ CLI entry `src/index.ts` parses `argv[0]` as the command and dispatches via a sw
 - **`workflow.ts`** — generates the deterministic GitHub Actions sync YAML (`.github/workflows/venfork-sync.yml`).
 - **`errors.ts`** — typed errors (`VenforkError` + subclasses); `index.ts` prints `.message` and exits non-zero.
 
-### The "+1 managed commit" model (the core invariant)
+### The "+0/+1 managed commit" model (the core invariant)
 
-When scheduled sync or a `preserve` allowlist is active, the mirror's default branch is kept at **`upstream/<default>` plus exactly one deterministic venfork-managed commit** (subject `chore: venfork-managed mirror commit`). That commit carries the sync workflow YAML (filtered by `enabledWorkflows`/`disabledWorkflows`) and any preserved mirror-only files. `isManagedCommit` recognizes this subject plus legacy subjects so upgrades don't misclassify history as user divergence. Sync **aborts on divergent commits** to prevent data loss. When editing sync logic, preserve this single-managed-commit invariant — it's what lets sync stay idempotent and divergence-detectable.
+When scheduled sync or a `preserve` allowlist is active, the mirror's default branch is kept at **`upstream/<default>` plus at most one venfork-managed commit** (subject `chore: venfork-managed mirror commit`, trailer `Venfork-Managed: 1`). That commit carries the sync workflow YAML (filtered by `enabledWorkflows`/`disabledWorkflows`) and any preserved mirror-only files. When that content adds nothing to the upstream tree (for example every preserved file now exists upstream), there is no managed commit and the mirror tip equals the upstream tip (+0).
+
+Determinism rule: the managed commit's author and committer are the venfork bot and both dates are the committer date of the upstream tip, and it is built with `git commit-tree` (no hooks, no signing). Its SHA is therefore a function of the upstream tip and the tree. A sync with no upstream or config change rebuilds the same SHA, sees origin already points at it, and pushes nothing. When a push is needed it is a single `--force-with-lease=refs/heads/<default>:<previous tip>` push; public is skipped when it already equals upstream.
+
+`isManagedCommit` checks the trailer first, then the current subject, the legacy subjects, and a workflow-path heuristic, so upgrades don't misclassify history as user divergence. Sync **aborts on divergent commits** (`SyncDivergenceError`) to prevent data loss. When editing sync logic, preserve this invariant: it is what lets sync stay idempotent and divergence-detectable.
 
 ### Internal-block redaction
 
