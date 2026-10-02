@@ -17,16 +17,20 @@ import {
   getPushToken,
   getRepoDefaultBranch,
   listCommitMessages,
+  listOpenIssuesWithLabel,
   localMirrorPath,
   names,
   openUpstreamPr,
+  packCodeUnderTest,
   pokeUpstream,
+  publishTarballOnUpstream,
   pushToUpstreamPrBranch,
   REPO_ROOT,
   RUN_ID,
   readWorkflowFromOrigin,
   runVenfork,
   setRepoSecret,
+  setRepoVariable,
   tmpRoot,
   UPSTREAM_OWNER,
   waitForDispatchedRun,
@@ -207,8 +211,8 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     async () => {
       // Tier 1 left both repos in sync, with venfork's own workflow on
       // origin/main wired to use `secrets.VENFORK_PUSH_TOKEN || github.token`.
-      // We just need to set the secret, push another upstream change, and
-      // dispatch.
+      // We set the secret, point the install step at the code under test,
+      // push another upstream change, and dispatch.
       const defaultBranch = await getRepoDefaultBranch(
         UPSTREAM_OWNER,
         names.upstream
@@ -222,6 +226,17 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
         names.mirrorBare,
         'VENFORK_PUSH_TOKEN',
         token
+      );
+
+      // The published venfork lags this checkout, so install the build
+      // from beforeAll through the workflow's VENFORK_INSTALL_SPEC override.
+      const tarball = await packCodeUnderTest();
+      const installUrl = await publishTarballOnUpstream(tarball);
+      await setRepoVariable(
+        GITHUB_ORG,
+        names.mirrorBare,
+        'VENFORK_INSTALL_SPEC',
+        installUrl
       );
 
       // 2. Push another change to upstream so we can prove propagation
@@ -287,6 +302,14 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
       );
       expect(mirrorMessages[0]).toBe('chore: venfork-managed mirror commit');
       expect(mirrorMessages[1]).toContain('e2e poke dispatch.txt');
+
+      expect(
+        await listOpenIssuesWithLabel(
+          GITHUB_ORG,
+          names.mirrorBare,
+          'venfork-sync-blocked'
+        )
+      ).toEqual([]);
     },
     600_000
   );

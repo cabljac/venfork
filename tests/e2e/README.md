@@ -39,9 +39,14 @@ a real GitHub Actions runner via `gh workflow run`:
    `with: token: ${{ secrets.VENFORK_PUSH_TOKEN || github.token }}` wiring.
 2. Sets `VENFORK_PUSH_TOKEN` on the mirror to either `$VENFORK_E2E_PAT` or
    `gh auth token` (default).
-3. Pushes another commit to upstream and `gh workflow run`s the dispatch.
-4. Polls `gh run list` for the dispatched run, then `gh run view` for completion.
-5. Asserts the run conclusion is `success` and the same SHA invariants hold.
+3. Packs the build from `beforeAll` with `npm pack`, uploads the tarball as a
+   release asset on the public upstream repo, and sets the mirror's
+   `VENFORK_INSTALL_SPEC` repository variable to the asset URL. The runner
+   therefore installs the code under test, not the published venfork.
+4. Pushes another commit to upstream and `gh workflow run`s the dispatch.
+5. Polls `gh run list` for the dispatched run, then `gh run view` for completion.
+6. Asserts the run conclusion is `success`, the same SHA invariants hold, and
+   no open `venfork-sync-blocked` issue exists on the mirror.
 
 Both tiers clean up all three repos and `tmp/<run-id>/` in `afterAll` regardless
 of pass/fail.
@@ -89,10 +94,13 @@ The workflow `venfork schedule set` generates wires
 `actions/checkout@v4`, plus a step that rewrites SSH GitHub URLs to HTTPS so
 `actions/checkout`'s extraheader auth applies to all push targets.
 
-Tier 2 just needs to set the `VENFORK_PUSH_TOKEN` secret on the mirror — no
-workflow patching. The helper `getPushToken()` returns `$VENFORK_E2E_PAT` if
-set, otherwise `gh auth token` (your local OAuth token). The secret is removed
-automatically when the test repo is deleted in `afterAll`.
+Tier 2 sets the `VENFORK_PUSH_TOKEN` secret on the mirror. It does not patch
+the workflow: the install spec is overridden through the
+`VENFORK_INSTALL_SPEC` repository variable that the generated workflow reads,
+so the runner executes the code under test. The helper `getPushToken()`
+returns `$VENFORK_E2E_PAT` if set, otherwise `gh auth token` (your local OAuth
+token). The secret, the variable and the release are removed automatically
+when the test repos are deleted in `afterAll`.
 
 ## If a run is interrupted
 

@@ -338,6 +338,77 @@ export async function setRepoSecret(
   })`gh secret set ${name} --repo ${owner}/${repo}`;
 }
 
+/**
+ * Packs the freshly built CLI into an npm tarball under `tmpRoot` and
+ * returns its path. Only the published `files` that the CLI needs are
+ * staged, so stray build outputs in `dist/` (compiled binaries) stay out.
+ */
+export async function packCodeUnderTest(): Promise<string> {
+  const stage = path.join(tmpRoot, 'pack-src');
+  await fs.rm(stage, { recursive: true, force: true });
+  await fs.mkdir(path.join(stage, 'dist'), { recursive: true });
+  for (const file of ['package.json', 'README.md', 'LICENSE']) {
+    await fs.copyFile(path.join(REPO_ROOT, file), path.join(stage, file));
+  }
+  await fs.copyFile(VENFORK_BIN, path.join(stage, 'dist', 'index.js'));
+  const { stdout } = await $({
+    cwd: stage,
+  })`npm pack --pack-destination ${tmpRoot} --json`;
+  const [packed] = JSON.parse(stdout) as Array<{ filename: string }>;
+  if (!packed) {
+    throw new Error(`npm pack produced no tarball: ${stdout}`);
+  }
+  return path.join(tmpRoot, packed.filename);
+}
+
+/**
+ * Uploads `tarball` as a release asset on the public upstream repo and
+ * returns its anonymous download URL. The release dies with the repo.
+ */
+export async function publishTarballOnUpstream(
+  tarball: string
+): Promise<string> {
+  const repo = `${UPSTREAM_OWNER}/${names.upstream}`;
+  const tag = `e2e-${RUN_ID}`;
+  await $`gh release create ${tag} ${tarball} --repo ${repo} --title ${`venfork e2e ${RUN_ID}`} --notes ${'Code under test for the venfork e2e workflow_dispatch tier.'}`;
+  const { stdout } =
+    await $`gh release view ${tag} --repo ${repo} --json assets --jq ${'.assets[0].url'}`;
+  const url = stdout.trim();
+  if (!url) {
+    throw new Error(`Release ${tag} on ${repo} has no asset URL`);
+  }
+  return url;
+}
+
+/**
+ * Stores `value` as a repo variable named `name` on `<owner>/<repo>`.
+ * The variable is removed automatically when the repo is deleted.
+ */
+export async function setRepoVariable(
+  owner: string,
+  repo: string,
+  name: string,
+  value: string
+): Promise<void> {
+  await $`gh variable set ${name} --repo ${owner}/${repo} --body ${value}`;
+}
+
+/**
+ * Returns the numbers of open issues on `<owner>/<repo>` carrying `label`.
+ */
+export async function listOpenIssuesWithLabel(
+  owner: string,
+  repo: string,
+  label: string
+): Promise<number[]> {
+  const { stdout } =
+    await $`gh issue list --repo ${owner}/${repo} --label ${label} --state open --json number --jq ${'.[].number'}`;
+  return stdout
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map(Number);
+}
+
 interface WorkflowRun {
   databaseId: number;
   status: string;
