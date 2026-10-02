@@ -24,7 +24,7 @@ const CONFIG_SIGNATURE =
   'a venfork config (an "upstreamUrl" key with "publicForkUrl", "mode": "no-public", "preserve", "schedule" or a link map)';
 
 /** Default for {@link CollectMirrorBlobsOptions.historyCap}. */
-const HISTORY_COMMIT_CAP = 2000;
+const HISTORY_COMMIT_CAP = 20000;
 
 /** A blob with a NUL in its first bytes is binary and not text-scanned. */
 const BINARY_SNIFF_BYTES = 8000;
@@ -208,20 +208,22 @@ async function batchCheck(
 interface HistoryGroup {
   refs: readonly string[];
   entries: readonly string[];
-  /** Warn when a remote-tracking ref among `refs` has an empty reflog. */
-  warnOnEmptyReflog: boolean;
 }
+
+/** How to proceed when mirror history is longer than the scan reads. */
+const OVER_CAP_REMEDY =
+  'Stage from a clone whose reflog is shorter, or, after confirming no mirror-only history older than that is needed, drop old entries with `git reflog expire --expire=<date> --all`.';
 
 /**
  * Tree ids of the existing commits among `refs`, of their reflog entries (a
  * forced push leaves the old tip only there) and of the history of both
- * that `base` cannot reach, newest first, capped and deduplicated.
+ * that `base` cannot reach, newest first and deduplicated. Throws when a
+ * reflog or that history is longer than `cap`: it could not all be read.
  */
 async function mirrorTrees(
   group: HistoryGroup,
   base: string,
   cap: number,
-  warnings: string[],
   cwd: string
 ): Promise<string[]> {
   const resolved = await batchCheck(
@@ -237,30 +239,22 @@ async function mirrorTrees(
     const reflog = await $({
       cwd,
       reject: false,
-    })`git log -g --format=%H --max-count=${cap} ${ref}`;
+    })`git log -g --format=%H --max-count=${cap + 1} ${ref}`;
     const entries =
       reflog.exitCode === 0 ? reflog.stdout.split('\n').filter(Boolean) : [];
-    for (const entry of entries) starts.add(entry);
-    if (entries.length >= cap) {
-      warnings.push(
-        `Read only the newest ${cap} reflog entries of ${ref}; mirror-only history older than that cannot be checked.`
-      );
-    } else if (
-      entries.length === 0 &&
-      group.warnOnEmptyReflog &&
-      ref.startsWith('refs/remotes/')
-    ) {
-      warnings.push(
-        `${ref} has no reflog; mirror-only history older than the reflog cannot be checked.`
+    if (entries.length > cap) {
+      throw new VenforkError(
+        `Refusing to publish: ${ref} has more than ${cap} reflog entries, and venfork checks at most ${cap}, so older mirror-only history cannot be checked. ${OVER_CAP_REMEDY}`
       );
     }
+    for (const entry of entries) starts.add(entry);
   }
   if (starts.size === 0) return [];
   const log = await $({
     cwd,
     reject: false,
     input: `${[...starts].join('\n')}\n`,
-  })`git log --format=%T --max-count=${cap} --stdin ${`^${base}`}`;
+  })`git log --format=%T --max-count=${cap + 1} --stdin ${`^${base}`}`;
   if (log.exitCode !== 0) {
     throw new GitError(
       `Cannot read mirror history: ${log.stderr.trim()}`,
@@ -268,9 +262,9 @@ async function mirrorTrees(
     );
   }
   const trees = log.stdout.split('\n').filter(Boolean);
-  if (trees.length >= cap) {
-    warnings.push(
-      `Read only the newest ${cap} commits of mirror history; mirror-only history older than that cannot be checked.`
+  if (trees.length > cap) {
+    throw new VenforkError(
+      `Refusing to publish: the mirror holds more than ${cap} commits that ${base} does not, and venfork checks at most ${cap}, so older mirror-only history cannot be checked. ${OVER_CAP_REMEDY}`
     );
   }
   return [...new Set(trees)];
@@ -381,8 +375,6 @@ export interface CollectMirrorBlobsOptions {
 export interface MirrorBlobs {
   /** Mirror-held blob id to the path it was found at. */
   blobs: Map<string, string>;
-  /** History the scan could not cover, worded for the user. */
-  warnings: string[];
 }
 
 /**
@@ -393,9 +385,10 @@ export interface MirrorBlobs {
  * its history is left out: it is upstream content, not mirror content.
  *
  * `refs` (and the venfork-config refs) are read at their tips, at their
- * reflog entries and in the history of both that `base` cannot reach, up to
- * `historyCap` commits and reflog entries per ref. Older versions are not
- * covered; {@link MirrorBlobs.warnings} says when that may matter.
+ * reflog entries and in the history of both that `base` cannot reach.
+ * Throws {@link VenforkError} when a ref has more than `historyCap` reflog
+ * entries or that history more than `historyCap` commits, since older
+ * versions could not be checked.
  *
  * @param refs Mirror commits to read (missing refs are skipped).
  * @param preserve The preserve allowlist.
@@ -411,22 +404,19 @@ export async function collectMirrorBlobs(
   options: CollectMirrorBlobsOptions = {}
 ): Promise<MirrorBlobs> {
   const cap = options.historyCap ?? HISTORY_COMMIT_CAP;
-  const warnings: string[] = [];
   const groups: HistoryGroup[] = [
     {
       refs,
       entries: [...new Set([...preserve, SYNC_WORKFLOW_PATH])],
-      warnOnEmptyReflog: true,
     },
     {
       refs: ['refs/remotes/origin/venfork-config', 'refs/heads/venfork-config'],
       entries: [CONFIG_PATH],
-      warnOnEmptyReflog: false,
     },
   ];
   const found: TreeBlob[] = [];
   for (const group of groups) {
-    const trees = await mirrorTrees(group, base, cap, warnings, cwd);
+    const trees = await mirrorTrees(group, base, cap, cwd);
     found.push(...(await blobsInTrees(trees, group.entries, cwd)));
   }
   const upstream = await upstreamVersions(
@@ -440,7 +430,7 @@ export async function collectMirrorBlobs(
     if (upstream.has(`${blob.path}\0${blob.oid}`)) continue;
     blobs.set(blob.oid, blob.path);
   }
-  return { blobs, warnings };
+  return { blobs };
 }
 
 /** Inputs for {@link assertPublishableCommits}. */

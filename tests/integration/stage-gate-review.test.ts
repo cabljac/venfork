@@ -160,14 +160,14 @@ describe('collectMirrorBlobs scales with history', () => {
     expect([...new Set(kept)].sort()).toEqual(Object.keys(files).sort());
   });
 
-  test('warns when the history cap is hit', async () => {
+  test('refuses when a reflog is over the history cap', async () => {
     await fx.commitOnOrigin({ 'keep/a.txt': 'kept\n' });
     await seedPreserve(fx, ['keep/a.txt']);
     await sync();
     await git('fetch', '--quiet', 'origin');
     await growReflog('refs/remotes/origin/main', 10);
 
-    const { warnings: found } = await collectMirrorBlobs(
+    const scan = collectMirrorBlobs(
       ['refs/remotes/origin/main'],
       ['keep/a.txt'],
       'upstream/main',
@@ -175,21 +175,71 @@ describe('collectMirrorBlobs scales with history', () => {
       { historyCap: 3 }
     );
 
-    expect(found.join('\n')).toContain(
-      'mirror-only history older than that cannot be checked'
+    await expect(scan).rejects.toThrow(
+      'refs/remotes/origin/main has more than 3 reflog entries'
+    );
+    await expect(scan).rejects.toThrow('git reflog expire');
+  });
+
+  test('refuses when mirror-only history is over the history cap', async () => {
+    let commit = await git('rev-parse', 'upstream/main');
+    const tree = await git('rev-parse', `${commit}^{tree}`);
+    for (let i = 0; i < 4; i++) {
+      commit = await git('commit-tree', tree, '-p', commit, '-m', `m${i}`);
+    }
+
+    await expect(
+      collectMirrorBlobs([commit], [], 'upstream/main', fx.work, {
+        historyCap: 3,
+      })
+    ).rejects.toThrow('more than 3 commits');
+  });
+
+  test('a reflog of exactly the history cap is read in full', async () => {
+    await fx.commitOnOrigin({ 'keep/a.txt': 'kept\n' });
+    await seedPreserve(fx, ['keep/a.txt']);
+    await sync();
+    await git('fetch', '--quiet', 'origin');
+    await growReflog('refs/remotes/origin/main', 5);
+    const entries = (await git('reflog', 'show', 'refs/remotes/origin/main'))
+      .split('\n')
+      .filter(Boolean).length;
+    const scan = (historyCap: number) =>
+      collectMirrorBlobs(
+        ['refs/remotes/origin/main'],
+        ['keep/a.txt'],
+        'upstream/main',
+        fx.work,
+        { historyCap }
+      );
+
+    const { blobs } = await scan(entries);
+
+    expect([...blobs.values()]).toContain('keep/a.txt');
+    await expect(scan(entries - 1)).rejects.toThrow(
+      `more than ${entries - 1} reflog entries`
     );
   });
 
-  test('stage warns when the reflog of origin/main is empty', async () => {
+  test('stage refuses and pushes nothing when origin has more than 20000 reflog entries', async () => {
+    const tip = await git('rev-parse', 'refs/remotes/origin/main');
+    const reflog = `${fx.work}/.git/logs/refs/remotes/origin/main`;
+    const line = `${tip} ${tip} t <t@t> 1700000000 +0000\tfetch\n`;
+    await featureFrom('upstream/main');
+    await commitFile('src/a.txt', 'a\n', 'feat: a');
+    await Bun.write(reflog, line.repeat(20001));
+
+    await expectRefused('more than 20000 reflog entries');
+  });
+
+  test('stage does not warn when the reflog of origin/main is empty', async () => {
     await git('reflog', 'expire', '--expire=now', '--all');
     await featureFrom('upstream/main');
     await commitFile('src/a.txt', 'a\n', 'feat: a');
 
     await expectShipped();
 
-    expect(warnings().join('\n')).toContain(
-      'refs/remotes/origin/main has no reflog'
-    );
+    expect(warnings()).toEqual([]);
   });
 });
 
