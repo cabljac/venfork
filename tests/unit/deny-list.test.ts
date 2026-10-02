@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { MirrorReferenceError } from '../../src/errors.js';
 import {
   assertNoMirrorReference,
+  canonicalText,
   findDeniedText,
 } from '../../src/shared/deny-list.js';
 
@@ -52,5 +53,16 @@ describe('assertNoMirrorReference', () => {
         TERMS
       )
     ).toThrow("the upstream PR body contains 'acme/widget-private'");
+  });
+});
+
+describe('canonicalText', () => {
+  test.each([
+    ['a combining mark', 'veńfork'],
+    ['a variation selector', 'ven️fork'],
+    ['a soft hyphen', 'ven­fork'],
+    ['a Hangul filler', 'venㅤfork'],
+  ])('sees through %s', (_label, text) => {
+    expect(canonicalText(text)).toBe('venfork');
   });
 });

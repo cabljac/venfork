@@ -1,6 +1,6 @@
 import { $ } from 'execa';
 import { RedactionError } from '../errors.js';
-import { canonicalText } from './deny-list.js';
+import { canonicalText, selfReferenceAllowed } from './deny-list.js';
 
 /** Internal review PR fields read from the private mirror via gh. */
 export interface InternalPrInfo {
@@ -90,7 +90,7 @@ export function stripInternalBlocks(body: string): string {
   if (depth === 0) {
     result += body.slice(cursor);
   }
-  const leftover = venforkSnippet(result);
+  const leftover = selfReferenceAllowed() ? null : venforkSnippet(result);
   if (leftover !== null) {
     throw new RedactionError(leftover);
   }

@@ -2,21 +2,40 @@ import { $ } from 'execa';
 import { MirrorReferenceError } from '../errors.js';
 import { parseRepoPath } from '../utils.js';
 
+/** The bare word that also covers the internal markers and the bot identity. */
+const SELF_REFERENCE_TERM = 'venfork';
+
+/** Shortest mirror repo name used as a term; shorter names match too much. */
+const MIN_NAME_TERM_LENGTH = 6;
+
 /**
- * Folds compatibility forms (a full-width colon) and drops invisible format
- * characters (zero-width spaces), so a disguised mention is still seen.
+ * True when `VENFORK_ALLOW_SELF_REFERENCE=1`, for projects whose upstream
+ * legitimately mentions venfork. It relaxes only the bare word, never a URL,
+ * owner or repo name term.
+ */
+export function selfReferenceAllowed(): boolean {
+  return process.env.VENFORK_ALLOW_SELF_REFERENCE === '1';
+}
+
+/**
+ * Folds compatibility forms (a full-width colon) and drops invisible
+ * characters (zero-width spaces, variation selectors, fillers) and combining
+ * marks, so a disguised mention is still seen.
  *
  * @param text Text to fold.
  */
 export function canonicalText(text: string): string {
-  return text.normalize('NFKC').replace(/\p{Cf}/gu, '');
+  return text
+    .normalize('NFKD')
+    .replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}\p{M}]/gu, '');
 }
 
 /**
  * Text that must never reach the public fork or upstream because it points
  * back at the private mirror: origin's URL (as configured and without
- * `.git`), origin's GitHub `owner/name`, and the word `venfork` (which also
- * covers the internal markers and the bot identity). Most specific first.
+ * `.git`), origin's GitHub `owner/name`, origin's repo name when it is at
+ * least six characters and differs from upstream's, and the word `venfork`
+ * (unless {@link selfReferenceAllowed}). Most specific first.
  *
  * @param cwd Mirror checkout whose `origin` remote is the private mirror.
  */
@@ -29,10 +48,38 @@ export async function mirrorDenyList(cwd: string): Promise<string[]> {
     const bare = raw.replace(/\.git\/?$/, '');
     if (bare && bare !== raw) terms.push(bare);
     const repoPath = parseRepoPath(raw);
-    if (repoPath) terms.push(repoPath);
+    if (repoPath) {
+      terms.push(repoPath);
+      const name = repoPath.split('/')[1] ?? '';
+      const upstream = await $({
+        cwd,
+        reject: false,
+      })`git remote get-url upstream`;
+      const upstreamName =
+        upstream.exitCode === 0
+          ? (parseRepoPath(upstream.stdout.trim()).split('/')[1] ?? '')
+          : '';
+      if (
+        name.length >= MIN_NAME_TERM_LENGTH &&
+        name.toLowerCase() !== upstreamName.toLowerCase()
+      ) {
+        terms.push(name);
+      }
+    }
   }
-  terms.push('venfork');
+  if (!selfReferenceAllowed()) terms.push(SELF_REFERENCE_TERM);
   return terms;
+}
+
+/**
+ * The deny-list terms that point at the mirror itself, without the bare word
+ * `venfork`. Published file content and names are scanned with these: a docs
+ * file may mention the tool, but never the mirror.
+ *
+ * @param terms Output of {@link mirrorDenyList}.
+ */
+export function mirrorLocationTerms(terms: readonly string[]): string[] {
+  return terms.filter((term) => term !== SELF_REFERENCE_TERM);
 }
 
 /**

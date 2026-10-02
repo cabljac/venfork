@@ -168,8 +168,12 @@ async function rebuildLinearHead(
               `Failed to stage '${branch}': commit ${commit.slice(0, 9)} changes preserved mirror-only path(s) ${touched.join(', ')}, which do not exist on upstream/${defaultBranch}. Move those changes to the mirror default branch (they cannot go upstream), drop them from '${branch}', and retry.`
             );
           }
+          const reason =
+            pickResult.stderr.trim() ||
+            pickResult.stdout.trim() ||
+            `exit ${pickResult.exitCode}`;
           throw new Error(
-            `Failed to stage '${branch}' because cherry-picking ${commit} onto upstream/${defaultBranch} caused conflicts. Rebase '${branch}' on upstream/${defaultBranch} and retry.`
+            `Failed to stage '${branch}': cherry-picking ${commit} onto upstream/${defaultBranch} failed:\n${reason}\nRebase '${branch}' on upstream/${defaultBranch} and retry.`
           );
         }
         const picked = (
@@ -234,6 +238,7 @@ async function planStaging(
       `Refusing to stage '${branch}': it holds venfork's private configuration, not upstream work.`
     );
   }
+  assertNoMirrorReference(branch, 'the branch name', await mirrorDenyList(cwd));
   const branchCheck = await $({
     cwd,
     reject: false,
@@ -330,6 +335,10 @@ interface PreparedStage {
   subjects: string[];
   /** Output of `mirrorDenyList`, reused for the PR title and body. */
   denyList: string[];
+  /** Added, modified or retyped paths in `upstream/<default>..head`. */
+  files: string[];
+  /** Commits whose message mentions an issue or PR number (`#N`). */
+  issueRefCommits: number;
 }
 
 /**
@@ -371,10 +380,20 @@ async function prepareStage(
   const log = await $({
     cwd,
   })`git log --reverse --format=%s ${base}..${rebuilt.head}`;
+  const messages = await $({
+    cwd,
+  })`git log --format=%B%x00 ${base}..${rebuilt.head}`;
+  const changed = await $({
+    cwd,
+  })`git diff --name-only -z --no-renames --diff-filter=AMT ${base} ${rebuilt.head}`;
   return {
     head: rebuilt.head,
     subjects: log.stdout.split('\n').filter(Boolean),
     denyList,
+    files: changed.stdout.split('\0').filter(Boolean),
+    issueRefCommits: messages.stdout
+      .split('\0')
+      .filter((message) => /#\d+\b/.test(message)).length,
   };
 }
 
@@ -449,15 +468,21 @@ export interface StageOptions {
 
 /**
  * Synthetic upstream PR body for when no internal review PR was found: one
- * bullet per published commit subject, with any trailing `(#N)` reference
- * dropped (it would point at a mirror PR number). No SHAs, so nothing points
- * back at the mirror.
+ * bullet per published commit subject, with every `#N` reference dropped (it
+ * would resolve against an unrelated upstream issue or PR). No SHAs, so
+ * nothing points back at the mirror.
  *
  * @internal Exported for unit testing; not part of the public API.
  */
 export function syntheticBody(subjects: readonly string[]): string {
   const lines = subjects
-    .map((subject) => subject.replace(/(\s*\(#\d+\))+\s*$/, '').trim())
+    .map((subject) =>
+      subject
+        .replace(/#\d+\b/g, '')
+        .replace(/\(\s*\)/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    )
     .filter(Boolean)
     .map((subject) => `- ${subject}`);
   if (lines.length === 0) {
@@ -628,8 +653,16 @@ export async function stageCommand(
     detailLines.push(
       '',
       `  Commits (${prepared.subjects.length}), rebuilt on upstream/${plan.upstreamDefaultBranch}:`,
-      ...prepared.subjects.map((subject) => `    - ${subject}`)
+      ...prepared.subjects.map((subject) => `    - ${subject}`),
+      '',
+      `  Files (${prepared.files.length}) added or changed:`,
+      ...prepared.files.map((file) => `    - ${file}`)
     );
+    if (prepared.issueRefCommits > 0) {
+      p.log.warn(
+        `${prepared.issueRefCommits} commit message(s) reference issue/PR numbers that will resolve against upstream`
+      );
+    }
     if (createPr) {
       detailLines.push(
         '',
