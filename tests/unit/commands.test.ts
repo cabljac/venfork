@@ -2364,6 +2364,39 @@ describe('stageCommand', () => {
 });
 
 describe('scheduleCommand', () => {
+  test.each([
+    ['standard', { publicForkUrl: 'git@github.com:test/repo.git' }],
+    ['no-public', { mode: 'no-public' }],
+  ])(
+    'set outro names the token and its workflow scope (%s)',
+    async (mode, layout) => {
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          version: '1',
+          upstreamUrl: 'git@github.com:upstream/repo.git',
+          ...layout,
+        }),
+        stderr: '',
+      });
+      (clack.outro as ReturnType<typeof mock>).mockClear();
+
+      await scheduleCommand('set', '0 */6 * * *');
+
+      const outro = String(
+        (clack.outro as ReturnType<typeof mock>).mock.calls.at(-1)?.[0]
+      );
+      expect(outro).toContain('gh secret set VENFORK_PUSH_TOKEN');
+      expect(outro).toContain('`workflow` scope');
+      expect(outro).toContain('Workflows: write');
+      if (mode === 'no-public') {
+        expect(outro).not.toContain('public fork');
+      } else {
+        expect(outro).toContain('public fork');
+      }
+    }
+  );
+
   test('sets schedule and writes workflow/config updates', async () => {
     mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,

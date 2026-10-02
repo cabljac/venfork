@@ -152,14 +152,18 @@ describe('doctor GitHub checks', () => {
     });
   });
 
-  test('token is not needed in no-public mode', async () => {
+  test('token is required in no-public mode too', async () => {
     useMirror('no-public');
+    responses.unshift(['gh secret list', ok('[]')]);
     lastRun('success');
 
     const checks = await ghChecks(new Date('2026-03-01T01:00:00Z'));
 
-    expect(checks.token.ok).toBe(true);
-    expect(ghCalls.some((cmd) => cmd.includes('gh secret list'))).toBe(false);
+    expect(checks.token.ok).toBe(false);
+    expect(checks.token.detail).toContain(
+      'pushes of upstream commits that change .github/workflows will fail'
+    );
+    expect(checks.token.detail).toContain('workflow scope');
   });
 
   test('last-run fails and links the run when the last sync failed', async () => {
