@@ -241,7 +241,7 @@ export async function getRepoDefaultBranch(
 }
 
 /**
- * Returns up to `limit` recent commit messages on `branch`.
+ * Returns the subject lines of up to `limit` recent commits on `branch`.
  */
 export async function listCommitMessages(
   owner: string,
@@ -250,7 +250,8 @@ export async function listCommitMessages(
   limit: number
 ): Promise<string[]> {
   const apiPath = `repos/${owner}/${repo}/commits?sha=${branch}&per_page=${limit}`;
-  const { stdout } = await $`gh api ${apiPath} --jq .[].commit.message`;
+  const { stdout } =
+    await $`gh api ${apiPath} --jq ${'.[].commit.message | split("\\n")[0]'}`;
   return stdout.split('\n').filter((line) => line.length > 0);
 }
 

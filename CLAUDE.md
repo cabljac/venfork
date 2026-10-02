@@ -40,7 +40,6 @@ E2E tests hit real GitHub and are gated behind env flags (slow, opt-in):
 ```bash
 bun run test:e2e             # VENFORK_E2E=1
 bun run test:e2e:dispatch    # + real workflow_dispatch
-bun run test:e2e:cron        # + real scheduled cron
 ```
 
 ## Architecture

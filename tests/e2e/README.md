@@ -67,9 +67,6 @@ bun run test:e2e:dispatch
 
 # Tier 1 + Tier 2 with explicit PAT (fine-grained, scoped to just the test repos)
 VENFORK_E2E_PAT=ghp_… bun run test:e2e:dispatch
-
-# Tier 1 + Tier 2 slow real-cron (still a stub; opt-in via VENFORK_E2E_REAL_CRON)
-bun run test:e2e:cron
 ```
 
 The default `bun test` (no env var) loads this file but the `describe` block
@@ -83,7 +80,6 @@ is replaced with `describe.skip`, so no GitHub calls are made.
 | `VENFORK_E2E_UPSTREAM_OWNER` | no | `cabljac` | GitHub owner of the synthetic upstream repo |
 | `VENFORK_E2E_ORG` | no | `memcard-dev` | GitHub org for the mirror + public fork |
 | `VENFORK_E2E_REAL_DISPATCH` | no | unset | Run Tier 2 workflow_dispatch test |
-| `VENFORK_E2E_REAL_CRON` | no | unset | Run Tier 2 real-cron wait (still a stub) |
 | `VENFORK_E2E_PAT` | no | falls back to `gh auth token` | Token written as the `VENFORK_PUSH_TOKEN` secret on the mirror in Tier 2. Override with a fine-grained PAT scoped to just the test repos if you don't want the test using your full gh OAuth token. |
 
 ## How Tier 2 authenticates cross-repo pushes

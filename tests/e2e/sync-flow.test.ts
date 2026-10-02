@@ -35,7 +35,6 @@ import {
 
 const E2E_ENABLED = process.env.VENFORK_E2E === '1';
 const REAL_DISPATCH = process.env.VENFORK_E2E_REAL_DISPATCH === '1';
-const REAL_CRON = process.env.VENFORK_E2E_REAL_CRON === '1';
 
 const e2eDescribe = E2E_ENABLED ? describe : describe.skip;
 
@@ -149,8 +148,8 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
       defaultBranch,
       2
     );
-    expect(mirrorMessagesAfterSchedule[0]).toMatch(
-      /scheduled sync workflow \(venfork\)/
+    expect(mirrorMessagesAfterSchedule[0]).toBe(
+      'chore: venfork-managed mirror commit'
     );
 
     // 4. Push a new commit to upstream.
@@ -189,9 +188,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
       defaultBranch,
       2
     );
-    expect(mirrorMessagesFinal[0]).toMatch(
-      /scheduled sync workflow \(venfork\)/
-    );
+    expect(mirrorMessagesFinal[0]).toBe('chore: venfork-managed mirror commit');
     // Second commit is the upstream poke commit.
     expect(mirrorMessagesFinal[1]).toContain('e2e poke poke.txt');
 
@@ -288,25 +285,10 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
         defaultBranch,
         2
       );
-      expect(mirrorMessages[0]).toMatch(/scheduled sync workflow \(venfork\)/);
+      expect(mirrorMessages[0]).toBe('chore: venfork-managed mirror commit');
       expect(mirrorMessages[1]).toContain('e2e poke dispatch.txt');
     },
     600_000
-  );
-
-  test.skipIf(!REAL_CRON)(
-    'tier 2 slow: real cron firing succeeds (requires VENFORK_E2E_PAT, ≤20min)',
-    async () => {
-      // Implementation deferred. Same PAT setup as the dispatch test.
-      // Then poll `gh run list` every 60s for up to 20 minutes for a NEW
-      // scheduled (not workflow_dispatch) run with conclusion=success.
-      // GHA cron is best-effort and may not fire within the cap; this test
-      // is opt-in and inherently flaky.
-      throw new Error(
-        'tier 2 cron test not yet implemented; remove VENFORK_E2E_REAL_CRON=1 to skip'
-      );
-    },
-    1_500_000
   );
 
   test('tier 3: stage --pr opens upstream PR with internal body redacted', async () => {
