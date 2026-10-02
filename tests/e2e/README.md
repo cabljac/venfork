@@ -1,6 +1,7 @@
 # venfork e2e
 
-Real end-to-end tests that hit GitHub. The default `bun test` skips this suite.
+Real end-to-end tests that hit GitHub. A bare `bun test` never loads this
+suite: `bunfig.toml` sets the test root to `./tests/unit`.
 
 ## Owner split
 
@@ -19,7 +20,7 @@ rights in the mirror/fork org).
 
 ## What it covers
 
-**Tier 1** (default) — runs `venfork sync` locally against real GitHub:
+**Tier 1** (default) - runs `venfork sync` locally against real GitHub:
 
 1. Creates a fresh upstream repo (`<upstream-owner>/venfork-e2e-src-<id>`).
 2. Drives `venfork setup` to create the private mirror + public fork and clone
@@ -32,7 +33,7 @@ rights in the mirror/fork org).
    - `origin/<default>` is upstream + one workflow commit (parent of mirror tip
      equals the upstream tip).
 
-**Tier 2** (opt-in via `VENFORK_E2E_REAL_DISPATCH=1`) — runs the same sync inside
+**Tier 2** (opt-in via `VENFORK_E2E_REAL_DISPATCH=1`) - runs the same sync inside
 a real GitHub Actions runner via `gh workflow run`:
 
 1. Tier 1 setup leaves the workflow on origin/main with venfork's native
@@ -48,7 +49,30 @@ a real GitHub Actions runner via `gh workflow run`:
 6. Asserts the run conclusion is `success`, the same SHA invariants hold, and
    no open `venfork-sync-blocked` issue exists on the mirror.
 
-Both tiers clean up all three repos and `tmp/<run-id>/` in `afterAll` regardless
+**Tiers 3-5** (default) - run against the repos tier 1 created:
+
+- Tier 3: `venfork stage --pr` opens the upstream PR with
+  `<!-- venfork:internal -->` blocks redacted.
+- Tier 4: `venfork pull-request` imports an upstream PR, and `venfork sync`
+  refreshes it after the contributor pushes again.
+- Tier 5: `venfork issue stage` and `venfork issue pull` round-trip issues.
+
+**Tier 6** (opt-in via `VENFORK_E2E_REAL_DISPATCH=1`) - pins why
+`VENFORK_PUSH_TOKEN` is required in no-public mode too:
+
+1. Sets up a second, no-public mirror and enables scheduled sync, with no
+   `VENFORK_PUSH_TOKEN` secret, so the workflow runs with the job's
+   `GITHUB_TOKEN`.
+2. Pushes an upstream commit that edits `.github/workflows/ci.yml` and
+   dispatches the sync workflow.
+3. Asserts the run fails with GitHub's `refusing to allow a GitHub App to
+   create or update workflow ... without workflows permission` rejection, the
+   mirror's default branch does not move, and exactly one open
+   `venfork-sync-blocked` issue exists.
+
+Tier 6 needs no extra token: it deliberately sets no secret.
+
+Every tier cleans up its repos and `tmp/<run-id>/` in `afterAll` regardless
 of pass/fail.
 
 ## Prerequisites
@@ -58,24 +82,27 @@ of pass/fail.
   ```
   gh auth refresh -s delete_repo
   ```
-- Push access to `${VENFORK_E2E_ORG:-cabljac}` for repo creation/deletion.
+- Repo create and delete rights in both owners: the upstream owner
+  (`${VENFORK_E2E_UPSTREAM_OWNER:-cabljac}`) and the mirror org
+  (`${VENFORK_E2E_ORG:-memcard-dev}`).
 - `bun` available (the test runs `bun run build` in `beforeAll`).
 
 ## How to run
 
 ```bash
-# Tier 1 only — local sync e2e (~60–120s)
+# Tiers 1, 3, 4, 5 - local commands against real GitHub
 bun run test:e2e
 
-# Tier 1 + Tier 2 (workflow_dispatch on real GHA runner, ~90–120s total)
+# Every tier, including the workflow_dispatch runs (tiers 2 and 6, about 4-5 min)
 bun run test:e2e:dispatch
 
-# Tier 1 + Tier 2 with explicit PAT (fine-grained, scoped to just the test repos)
-VENFORK_E2E_PAT=ghp_… bun run test:e2e:dispatch
+# Same, with a fine-grained PAT for tier 2 instead of your gh OAuth token.
+# It needs Contents: write and Workflows: write on the test repos.
+VENFORK_E2E_PAT=github_pat_… bun run test:e2e:dispatch
 ```
 
-The default `bun test` (no env var) loads this file but the `describe` block
-is replaced with `describe.skip`, so no GitHub calls are made.
+`bun test ./tests/e2e` without `VENFORK_E2E=1` loads this file but replaces
+the `describe` block with `describe.skip`, so no GitHub calls are made.
 
 ## Environment variables
 
@@ -84,7 +111,7 @@ is replaced with `describe.skip`, so no GitHub calls are made.
 | `VENFORK_E2E` | yes (to run) | unset | Set to `1` to actually run the e2e describe block |
 | `VENFORK_E2E_UPSTREAM_OWNER` | no | `cabljac` | GitHub owner of the synthetic upstream repo |
 | `VENFORK_E2E_ORG` | no | `memcard-dev` | GitHub org for the mirror + public fork |
-| `VENFORK_E2E_REAL_DISPATCH` | no | unset | Run Tier 2 workflow_dispatch test |
+| `VENFORK_E2E_REAL_DISPATCH` | no | unset | Run the tier 2 and tier 6 workflow_dispatch tests |
 | `VENFORK_E2E_PAT` | no | falls back to `gh auth token` | Token written as the `VENFORK_PUSH_TOKEN` secret on the mirror in Tier 2. Override with a fine-grained PAT scoped to just the test repos if you don't want the test using your full gh OAuth token. |
 
 ## How Tier 2 authenticates cross-repo pushes
