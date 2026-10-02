@@ -15,6 +15,8 @@ import {
   syncCommand,
   workflowsCommand,
 } from './commands.js';
+import { requiresGhAuth } from './dispatch.js';
+import { ensureGhAuth } from './git.js';
 import { parseIssueCliArgs } from './issue-args.js';
 import { parsePreserveCliArgs } from './preserve-args.js';
 import { parsePullRequestCliArgs } from './pull-request-args.js';
@@ -37,6 +39,10 @@ async function main(): Promise<void> {
   ) {
     showHelp();
     return;
+  }
+
+  if (requiresGhAuth(command, args.slice(1))) {
+    await ensureGhAuth();
   }
 
   switch (command) {

@@ -5,8 +5,9 @@ import {
   GitError,
   NotInRepositoryError,
   RemoteNotFoundError,
+  SyncDivergenceError,
   VenforkError,
-} from '../src/errors';
+} from '../../src/errors';
 
 describe('VenforkError', () => {
   test('creates error with correct message', () => {
@@ -69,5 +70,31 @@ describe('BranchNotFoundError', () => {
     expect(error.name).toBe('BranchNotFoundError');
     expect(error.branchName).toBe('feature-branch');
     expect(error instanceof VenforkError).toBe(true);
+  });
+});
+
+describe('SyncDivergenceError', () => {
+  test('names each diverged remote and keeps the counts', () => {
+    const origin = { count: 2, files: ['a.ts', 'b.ts'] };
+    const publicFork = { count: 1, files: ['c.ts'] };
+    const error = new SyncDivergenceError('main', origin, publicFork);
+    expect(error.message).toBe(
+      'Sync aborted to prevent data loss: origin/main has 2, public/main has 1 commit(s) not in upstream/main'
+    );
+    expect(error.name).toBe('SyncDivergenceError');
+    expect(error.origin).toEqual(origin);
+    expect(error.publicFork).toEqual(publicFork);
+    expect(error instanceof VenforkError).toBe(true);
+  });
+
+  test('omits a remote with no divergence', () => {
+    const error = new SyncDivergenceError(
+      'main',
+      { count: 1, files: ['a.ts'] },
+      { count: 0, files: [] }
+    );
+    expect(error.message).toBe(
+      'Sync aborted to prevent data loss: origin/main has 1 commit(s) not in upstream/main'
+    );
   });
 });

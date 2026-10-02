@@ -1,4 +1,5 @@
 import { $ } from 'execa';
+import { AuthenticationError } from './errors.js';
 
 /**
  * Checks if GitHub CLI is authenticated
@@ -11,6 +12,16 @@ export async function checkGhAuth(): Promise<boolean> {
     return result.exitCode === 0;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Throws `AuthenticationError` unless the GitHub CLI is authenticated.
+ * Called by the CLI dispatcher for commands that talk to GitHub through gh.
+ */
+export async function ensureGhAuth(): Promise<void> {
+  if (!(await checkGhAuth())) {
+    throw new AuthenticationError();
   }
 }
 

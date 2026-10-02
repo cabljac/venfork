@@ -1,8 +1,6 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { fetchVenforkConfig } from '../config.js';
-import { AuthenticationError } from '../errors.js';
-import { checkGhAuth } from '../git.js';
 import {
   normalizeGitHubRepoInput,
   parseOwner,
@@ -33,12 +31,6 @@ export async function cloneCommand(
     );
     p.outro('❌ Clone failed');
     process.exit(1);
-  }
-
-  // Step 1: Check GitHub CLI authentication
-  const isAuthenticated = await checkGhAuth();
-  if (!isAuthenticated) {
-    throw new AuthenticationError();
   }
 
   const s = p.spinner();

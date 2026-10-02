@@ -89,6 +89,16 @@ function getMockExecaResponse(command: string) {
   if (command.includes('git branch --show-current')) {
     return Promise.resolve({ exitCode: 0, stdout: 'main', stderr: '' });
   }
+  const preserveSource = command.match(
+    /^git --literal-pathspecs ls-tree (?!HEAD )\S+ -- (.+)$/
+  );
+  if (preserveSource) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: `100644 blob 0123abcd\t${preserveSource[1]}`,
+      stderr: '',
+    });
+  }
   if (command.includes('git rev-parse')) {
     return Promise.resolve({ exitCode: 0, stdout: '.git', stderr: '' });
   }
@@ -233,7 +243,8 @@ import {
   statusCommand,
   syncCommand,
   workflowsCommand,
-} from '../src/commands.js';
+} from '../../src/commands.js';
+import { SyncDivergenceError } from '../../src/errors.js';
 
 /**
  * Helper function to start setupCommand and wait for async operations to progress
@@ -372,21 +383,18 @@ describe('setupCommand - execution tests', () => {
     // Verify we have multiple commands
     expect(execaCalls.length).toBeGreaterThanOrEqual(4);
 
-    // Step 0: Auth check happens first
-    expect(execaCalls[0]).toContain('gh auth status');
-
     // Step 1: Get GitHub username
-    expect(execaCalls[1]).toContain('gh api user');
+    expect(execaCalls[0]).toContain('gh api user');
 
     // Step 2: Fork the upstream repo
-    expect(execaCalls[2]).toContain('gh repo fork');
-    expect(execaCalls[2]).toContain('test/repo');
-    expect(execaCalls[2]).toContain('--clone=false');
+    expect(execaCalls[1]).toContain('gh repo fork');
+    expect(execaCalls[1]).toContain('test/repo');
+    expect(execaCalls[1]).toContain('--clone=false');
 
     // Step 3: Create private vendor repo
-    expect(execaCalls[3]).toContain('gh repo create');
-    expect(execaCalls[3]).toContain('test-vendor');
-    expect(execaCalls[3]).toContain('--private');
+    expect(execaCalls[2]).toContain('gh repo create');
+    expect(execaCalls[2]).toContain('test-vendor');
+    expect(execaCalls[2]).toContain('--private');
 
     // Verify we called multiple git/gh commands
     const ghCommands = execaCalls.filter((cmd) => cmd.includes('gh '));
@@ -877,14 +885,6 @@ describe('syncCommand', () => {
       stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
       stderr: '',
     });
-    mockResponses.set(
-      'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/caller.yml',
-      {
-        exitCode: 0,
-        stdout: 'name: caller\non: workflow_dispatch\n',
-        stderr: '',
-      }
-    );
 
     try {
       await syncCommand('main');
@@ -896,18 +896,12 @@ describe('syncCommand', () => {
     expect(
       execaCalls.some((cmd) => cmd.includes('git worktree add --detach'))
     ).toBe(true);
-    // git show is called against the captured previous mirror tip.
+    // The preserved file is checked out from the captured previous mirror tip.
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/caller.yml'
+          'git --literal-pathspecs checkout aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/caller.yml'
         )
-      )
-    ).toBe(true);
-    // The preserved file is added in the temp worktree.
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.includes('git add -- .github/workflows/caller.yml')
       )
     ).toBe(true);
     // The deterministic commit + force-push happen.
@@ -943,19 +937,13 @@ describe('syncCommand', () => {
       // Expected in mocked environment
     }
 
-    // git show against the previous mirror tip should NOT be called for the
-    // colliding path — upstream's version wins, and the carry-forward is skipped.
+    // Upstream's version wins for the colliding path: nothing is checked out
+    // from the previous mirror tip.
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/ci.yml'
+          'git --literal-pathspecs checkout aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/ci.yml'
         )
-      )
-    ).toBe(false);
-    // git add for the preserved path should NOT be called either.
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.includes('git add -- .github/workflows/ci.yml')
       )
     ).toBe(false);
   });
@@ -977,8 +965,8 @@ describe('syncCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/missing.yml',
-      { exitCode: 128, stdout: '', stderr: 'fatal: path ... does not exist' }
+      'git --literal-pathspecs ls-tree aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/missing.yml',
+      { exitCode: 0, stdout: '', stderr: '' }
     );
 
     let caught = false;
@@ -1023,16 +1011,6 @@ describe('syncCommand', () => {
       stdout: 'v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2',
       stderr: '',
     });
-    // Reading agent.yml from the v2 SHA returns the user's v2 content.
-    mockResponses.set(
-      'git show v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2:agent.yml',
-      { exitCode: 0, stdout: 'agent: v2', stderr: '' }
-    );
-    mockResponses.set('git ls-tree v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2', {
-      exitCode: 0,
-      stdout: '100644 blob deadbeef\tagent.yml\n',
-      stderr: '',
-    });
     // Divergence check: the v2 commit is on origin (the user's commit).
     mockResponses.set('git rev-list upstream/main..origin/main', {
       exitCode: 0,
@@ -1060,15 +1038,14 @@ describe('syncCommand', () => {
       // Expected in mocked environment
     }
 
-    // The write that feeds the deterministic +1 commit must contain v2.
-    const agentWrite = writeFileCalls.find((w) => w.path.endsWith('agent.yml'));
-    expect(agentWrite).toBeDefined();
-    expect(String(agentWrite?.content)).toBe('agent: v2');
-
-    // And: agent.yml is `git add`ed, then committed and force-pushed back.
-    expect(execaCalls.some((cmd) => cmd.includes('git add -- agent.yml'))).toBe(
-      true
-    );
+    // The +1 commit takes agent.yml from the v2 commit.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git --literal-pathspecs checkout v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2 -- agent.yml'
+        )
+      )
+    ).toBe(true);
     expect(
       execaCalls.some((cmd) =>
         cmd.includes('git push origin HEAD:main --force-with-lease')
@@ -1114,15 +1091,9 @@ describe('syncCommand', () => {
       { exitCode: 0, stdout: 'agent.yml\n', stderr: '' }
     );
 
-    let aborted = false;
-    try {
-      await syncCommand('main');
-    } catch {
-      aborted = true;
-    }
-
-    // Sync must abort (process.exit(1) is mocked to throw).
-    expect(aborted).toBe(true);
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
     // The upstream→origin force-push must NOT have happened.
     expect(
       execaCalls.some((cmd) =>
@@ -1231,10 +1202,6 @@ describe('syncCommand', () => {
       stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
       stderr: '',
     });
-    mockResponses.set(
-      'git show aaaa1111bbbb2222cccc3333dddd4444eeee5555:.github/workflows/caller.yml',
-      { exitCode: 0, stdout: 'name: caller\n', stderr: '' }
-    );
 
     try {
       await syncCommand('main');
@@ -2734,22 +2701,6 @@ describe('setupCommand - VENFORK_ORG environment variable', () => {
 });
 
 describe('setupCommand - error paths', () => {
-  test('throws AuthenticationError when not authenticated', async () => {
-    // Mock checkGhAuth to return false
-    mockResponses.set('gh auth status', {
-      exitCode: 1,
-      stdout: '',
-      stderr: 'not authenticated',
-    });
-
-    try {
-      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
-      expect(true).toBe(false); // Should not reach here
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
-  });
-
   test('handles error in catch block', async () => {
     // Make fork command fail instead of hanging
     mockResponses.set('gh repo fork', (_command: string) =>
@@ -2768,20 +2719,6 @@ describe('setupCommand - error paths', () => {
 });
 
 describe('cloneCommand', () => {
-  test('checks authentication first', async () => {
-    try {
-      await cloneCommand('git@github.com:acme/project-private.git');
-    } catch {
-      // Expected
-    }
-
-    // Should check authentication
-    const authCalls = execaCalls.filter((cmd) =>
-      cmd.includes('gh auth status')
-    );
-    expect(authCalls.length).toBeGreaterThan(0);
-  });
-
   test('clones the vendor repository', async () => {
     try {
       await cloneCommand('git@github.com:acme/project-private.git');
@@ -2843,21 +2780,6 @@ describe('cloneCommand', () => {
 });
 
 describe('cloneCommand - error paths', () => {
-  test('throws AuthenticationError when not authenticated', async () => {
-    mockResponses.set('gh auth status', {
-      exitCode: 1,
-      stdout: '',
-      stderr: 'not authenticated',
-    });
-
-    try {
-      await cloneCommand('git@github.com:acme/project-private.git');
-      expect(true).toBe(false); // Should not reach here
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
-  });
-
   test('requires vendor repo URL', async () => {
     try {
       await cloneCommand();
@@ -2878,13 +2800,10 @@ describe('syncCommand - error paths', () => {
       stderr: '',
     });
 
-    try {
-      await syncCommand('main');
-    } catch {
-      // Expected - process.exit(1) throws in tests
-    }
-
-    expect(process.exit).toHaveBeenCalledWith(1);
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+    expect(process.exit).not.toHaveBeenCalled();
   });
 
   test('aborts when public has divergent commits', async () => {
@@ -2895,13 +2814,10 @@ describe('syncCommand - error paths', () => {
       stderr: '',
     });
 
-    try {
-      await syncCommand('main');
-    } catch {
-      // Expected - process.exit(1) throws in tests
-    }
-
-    expect(process.exit).toHaveBeenCalledWith(1);
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+    expect(process.exit).not.toHaveBeenCalled();
   });
 
   test('treats commits touching only .github/workflows files as managed', async () => {
@@ -2956,13 +2872,10 @@ describe('syncCommand - error paths', () => {
       stderr: '',
     });
 
-    try {
-      await syncCommand('main');
-    } catch {
-      // Expected - process.exit(1) throws in tests
-    }
-
-    expect(process.exit).toHaveBeenCalledWith(1);
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+    expect(process.exit).not.toHaveBeenCalled();
     expect(
       execaCalls.some((cmd) =>
         cmd.includes('git push origin upstream/main:refs/heads/main')
@@ -2992,13 +2905,10 @@ describe('syncCommand - error paths', () => {
       stderr: '',
     });
 
-    try {
-      await syncCommand('main');
-    } catch {
-      // Expected - process.exit(1) throws in tests
-    }
-
-    expect(process.exit).toHaveBeenCalledWith(1);
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+    expect(process.exit).not.toHaveBeenCalled();
     expect(
       execaCalls.some((cmd) =>
         cmd.includes('git push origin upstream/main:refs/heads/main')
@@ -3036,21 +2946,6 @@ describe('syncCommand - error paths', () => {
 });
 
 describe('stageCommand - error paths', () => {
-  test('throws AuthenticationError when not authenticated', async () => {
-    mockResponses.set('gh auth status', {
-      exitCode: 1,
-      stdout: '',
-      stderr: 'not authenticated',
-    });
-
-    try {
-      await stageCommand('feature-branch');
-      expect(true).toBe(false); // Should not reach here
-    } catch (error) {
-      expect(error).toBeDefined();
-    }
-  });
-
   test('throws BranchNotFoundError when branch does not exist', async () => {
     mockResponses.set('git rev-parse --verify', {
       exitCode: 1,

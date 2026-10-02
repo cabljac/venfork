@@ -98,8 +98,10 @@ function getMockResponse(command: string, _options: ExecaOptions = {}) {
 }
 
 // Import git.ts AFTER mocking execa
+import { AuthenticationError } from '../../src/errors';
 import {
   checkGhAuth,
+  ensureGhAuth,
   getCurrentBranch,
   getDefaultBranch,
   getGitHubUsername,
@@ -108,7 +110,7 @@ import {
   ghRepoIsForkOf,
   hasRemote,
   isGitRepository,
-} from '../src/git';
+} from '../../src/git';
 
 beforeEach(() => {
   execaCalls.length = 0;
@@ -150,6 +152,28 @@ describe('checkGhAuth', () => {
     const result = await checkGhAuth();
 
     expect(result).toBe(false);
+  });
+});
+
+describe('ensureGhAuth', () => {
+  test('resolves when gh is authenticated', async () => {
+    mockResponses.set('gh auth status', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+
+    await expect(ensureGhAuth()).resolves.toBeUndefined();
+  });
+
+  test('throws AuthenticationError when gh is not authenticated', async () => {
+    mockResponses.set('gh auth status', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'not authenticated',
+    });
+
+    await expect(ensureGhAuth()).rejects.toBeInstanceOf(AuthenticationError);
   });
 });
 

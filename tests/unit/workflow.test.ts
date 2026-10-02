@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { generateSyncWorkflow, getSyncWorkflowPath } from '../src/workflow.js';
+import {
+  generateSyncWorkflow,
+  getSyncWorkflowPath,
+} from '../../src/workflow.js';
 
 describe('workflow helpers', () => {
   test('returns managed workflow path', () => {

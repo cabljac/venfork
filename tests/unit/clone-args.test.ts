@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseCloneCliArgs } from '../src/clone-args.js';
+import { parseCloneCliArgs } from '../../src/clone-args.js';
 
 describe('parseCloneCliArgs', () => {
   test('parses bare positional vendor URL', () => {

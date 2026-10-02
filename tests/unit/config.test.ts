@@ -93,7 +93,7 @@ function getMockExecaResponse(command: string) {
 import {
   readVenforkConfigFromRepo,
   updateVenforkConfig,
-} from '../src/config.js';
+} from '../../src/config.js';
 
 beforeEach(() => {
   execaCalls.length = 0;

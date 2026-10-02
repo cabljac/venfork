@@ -66,3 +66,33 @@ export class BranchNotFoundError extends VenforkError {
     this.name = 'BranchNotFoundError';
   }
 }
+
+/** Divergent commits on one remote's default branch. */
+export interface RemoteDivergence {
+  count: number;
+  files: string[];
+}
+
+/**
+ * Thrown when sync refuses to run because origin or public carries commits
+ * that upstream does not have.
+ */
+export class SyncDivergenceError extends VenforkError {
+  constructor(
+    public readonly defaultBranch: string,
+    public readonly origin: RemoteDivergence,
+    public readonly publicFork: RemoteDivergence
+  ) {
+    const parts: string[] = [];
+    if (origin.count > 0) {
+      parts.push(`origin/${defaultBranch} has ${origin.count}`);
+    }
+    if (publicFork.count > 0) {
+      parts.push(`public/${defaultBranch} has ${publicFork.count}`);
+    }
+    super(
+      `Sync aborted to prevent data loss: ${parts.join(', ')} commit(s) not in upstream/${defaultBranch}`
+    );
+    this.name = 'SyncDivergenceError';
+  }
+}
