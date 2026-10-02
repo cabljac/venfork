@@ -71,14 +71,24 @@ describe('workflow helpers', () => {
 
   test('pins the venfork version in the install step', () => {
     const workflow = generateSyncWorkflow('0 */6 * * *', 'standard', '1.2.3');
-    expect(workflow).toContain('run: npm install -g venfork@1.2.3');
+    expect(workflow).toContain(
+      `run: npm install -g "\${VENFORK_INSTALL_SPEC:-venfork@1.2.3}"`
+    );
     expect(workflow).toMatchSnapshot();
   });
 
   test('defaults the pin to the running CLI version from package.json', () => {
     expect(VENFORK_VERSION).toBe(pkg.version);
     expect(generateSyncWorkflow('0 */6 * * *')).toContain(
-      `run: npm install -g venfork@${pkg.version}`
+      `run: npm install -g "\${VENFORK_INSTALL_SPEC:-venfork@${pkg.version}}"`
     );
+  });
+
+  test('lets a repository variable override the install spec', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *', 'standard', '1.2.3');
+    expect(workflow).toContain(
+      `VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}`
+    );
+    expect(workflow).toContain(`"\${VENFORK_INSTALL_SPEC:-venfork@1.2.3}"`);
   });
 });

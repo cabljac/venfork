@@ -30,7 +30,9 @@ jobs:
           git config --global --add url."https://github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
       - name: Install venfork
-        run: npm install -g venfork@1.2.3
+        env:
+          VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
+        run: npm install -g "\${VENFORK_INSTALL_SPEC:-venfork@1.2.3}"
       - name: Configure venfork remotes
         shell: bash
         run: |
