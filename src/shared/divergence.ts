@@ -1,4 +1,6 @@
 import { $ } from 'execa';
+import { normalizePreservePath } from '../config.js';
+import type { SyncDivergenceError } from '../errors.js';
 import { isManagedCommit } from './managed-commit.js';
 
 /**
@@ -106,4 +108,65 @@ export async function checkDivergence(args: {
     }
   }
   return { count, files: Array.from(files).sort() };
+}
+
+/**
+ * Human-readable explanation of a {@link SyncDivergenceError}: which remotes
+ * diverged, the files involved, and how to unblock sync.
+ */
+export function formatDivergenceReport(error: SyncDivergenceError): string {
+  const { defaultBranch, origin, publicFork } = error;
+  const warnings: string[] = [];
+  if (origin.count > 0) {
+    warnings.push(
+      `  • origin/${defaultBranch} has ${origin.count} commit(s) not in upstream`
+    );
+  }
+  if (publicFork.count > 0) {
+    warnings.push(
+      `  • public/${defaultBranch} has ${publicFork.count} commit(s) not in upstream`
+    );
+  }
+
+  // When origin diverges, surface the changed files and a concrete
+  // `venfork preserve add ...` hint. Most likely cause is a mirror-only
+  // file the user committed directly (or one whose preserve entry was
+  // just removed) — both cases resolve with `preserve add`. Public
+  // divergence does NOT get this hint: preserve doesn't apply to public,
+  // so suggesting it would mislead.
+  const sections: string[] = [warnings.join('\n')];
+  if (origin.files.length > 0) {
+    sections.push(
+      `Files changed by divergent commits on origin/${defaultBranch}:\n${origin.files
+        .map((f) => `  • ${f}`)
+        .join('\n')}`
+    );
+    // Only suggest preserve for paths the validator would actually
+    // accept — otherwise the copy/paste command line would fail.
+    // If every divergent path is invalid for preserve, suppress the hint
+    // entirely (rebase/force-sync below still apply).
+    const validForPreserve: string[] = [];
+    const invalidForPreserve: string[] = [];
+    for (const file of origin.files) {
+      if (normalizePreservePath(file) !== null) {
+        validForPreserve.push(file);
+      } else {
+        invalidForPreserve.push(file);
+      }
+    }
+    if (validForPreserve.length > 0) {
+      sections.push(
+        `If these are mirror-only files you want to keep across sync, add them to preserve:\n  venfork preserve add ${validForPreserve.join(' ')}`
+      );
+      if (invalidForPreserve.length > 0) {
+        sections.push(
+          `(skipped from the hint — paths can't be expressed in the preserve allowlist: ${invalidForPreserve.join(', ')})`
+        );
+      }
+    }
+  }
+  sections.push(
+    `Otherwise:\n- Rebase or cherry-pick to a feature branch before running sync\n- Force-sync (DESTRUCTIVE — permanently discards the commits): git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} -f`
+  );
+  return sections.join('\n\n');
 }

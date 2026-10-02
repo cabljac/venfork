@@ -1,20 +1,26 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import {
-  normalizePreservePath,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
   type VenforkConfig,
 } from '../config.js';
 import { SyncDivergenceError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
-import { checkDivergence } from '../shared/divergence.js';
+import {
+  checkDivergence,
+  formatDivergenceReport,
+} from '../shared/divergence.js';
 import {
   pushBranchWithLease,
   resolveCommit,
   updateOriginTip,
 } from '../shared/mirror-commit.js';
 import { netFetch } from '../shared/net.js';
+import {
+  reportSyncBlocked,
+  resolveSyncBlocked,
+} from '../shared/sync-report.js';
 
 /**
  * Returns the upstream PR number for `branch` if it's a pulled-in PR. First
@@ -106,11 +112,15 @@ async function syncPulledPr(
 }
 
 /**
- * Sync command: Update default branches of origin and public to match upstream
+ * Sync command: Update default branches of origin and public to match upstream.
+ *
+ * With `reportIssues` (set by the generated workflow), a divergence opens or
+ * refreshes a `venfork-sync-blocked` issue on the mirror, and a successful
+ * sync closes it.
  */
 export async function syncCommand(
   targetBranch?: string,
-  options?: { cwd?: string; quiet?: boolean }
+  options?: { cwd?: string; quiet?: boolean; reportIssues?: boolean }
 ): Promise<void> {
   const quiet = options?.quiet ?? false;
 
@@ -197,69 +207,20 @@ export async function syncCommand(
 
     s.stop('Checked for divergence');
 
-    // Step 4: Warn if divergent commits exist
+    // Step 4: Abort if divergent commits exist
     if (originDivergence.count > 0 || publicDivergence.count > 0) {
-      const warnings: string[] = [];
-      if (originDivergence.count > 0) {
-        warnings.push(
-          `  • origin/${defaultBranch} has ${originDivergence.count} commit(s) not in upstream`
-        );
-      }
-      if (publicDivergence.count > 0) {
-        warnings.push(
-          `  • public/${defaultBranch} has ${publicDivergence.count} commit(s) not in upstream`
-        );
-      }
-
-      // When origin diverges, surface the changed files and a concrete
-      // `venfork preserve add ...` hint. Most likely cause is a mirror-only
-      // file the user committed directly (or one whose preserve entry was
-      // just removed) — both cases resolve with `preserve add`. Public
-      // divergence does NOT get this hint: preserve doesn't apply to public,
-      // so suggesting it would mislead.
-      const sections: string[] = [warnings.join('\n')];
-      if (originDivergence.files.length > 0) {
-        sections.push(
-          `Files changed by divergent commits on origin/${defaultBranch}:\n${originDivergence.files
-            .map((f) => `  • ${f}`)
-            .join('\n')}`
-        );
-        // Only suggest preserve for paths the validator would actually
-        // accept — otherwise the copy/paste command line would fail.
-        // If every divergent path is invalid for preserve, suppress the hint
-        // entirely (rebase/force-sync below still apply).
-        const validForPreserve: string[] = [];
-        const invalidForPreserve: string[] = [];
-        for (const file of originDivergence.files) {
-          if (normalizePreservePath(file) !== null) {
-            validForPreserve.push(file);
-          } else {
-            invalidForPreserve.push(file);
-          }
-        }
-        if (validForPreserve.length > 0) {
-          sections.push(
-            `If these are mirror-only files you want to keep across sync, add them to preserve:\n  venfork preserve add ${validForPreserve.join(' ')}`
-          );
-          if (invalidForPreserve.length > 0) {
-            sections.push(
-              `(skipped from the hint — paths can't be expressed in the preserve allowlist: ${invalidForPreserve.join(', ')})`
-            );
-          }
-        }
-      }
-      sections.push(
-        `Otherwise:\n- Rebase or cherry-pick to a feature branch before running sync\n- Force-sync (DESTRUCTIVE — permanently discards the commits): git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} -f`
-      );
-
-      p.log.warn('Divergent commits detected:');
-      p.note(sections.join('\n\n'), '⚠️  Warning');
-
-      throw new SyncDivergenceError(
+      const divergence = new SyncDivergenceError(
         defaultBranch,
         originDivergence,
         publicDivergence
       );
+      const report = formatDivergenceReport(divergence);
+      p.log.warn('Divergent commits detected:');
+      p.note(report, '⚠️  Warning');
+      if (options?.reportIssues) {
+        await reportSyncBlocked({ cwd: repoDir, defaultBranch, report });
+      }
+      throw divergence;
     }
 
     // Read before anything is pushed: preserved files come from this tip, and
@@ -297,6 +258,10 @@ export async function syncCommand(
           ? `Updated public/${defaultBranch}`
           : `public/${defaultBranch} already up to date`
       );
+    }
+
+    if (options?.reportIssues) {
+      await resolveSyncBlocked({ cwd: repoDir });
     }
 
     if (!quiet) {

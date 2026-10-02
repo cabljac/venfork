@@ -69,6 +69,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   sync:
@@ -98,6 +99,25 @@ jobs:
         run: |
 ${remotesScript}
       - name: Sync from upstream
-        run: venfork sync
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: venfork sync --report-issues
+      - name: Report failed sync
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: \${{ github.token }}
+          RUN_URL: \${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          gh label create venfork-sync-blocked --repo "$REPO" --color B60205 --description "Scheduled venfork sync is blocked" --force
+          NUMBER="$(gh issue list --repo "$REPO" --label venfork-sync-blocked --state open --json number --limit 1 --jq '.[0].number // empty')"
+          if [ -z "$NUMBER" ]; then
+            gh issue create --repo "$REPO" --label venfork-sync-blocked --title "Scheduled sync failed" --body "Scheduled venfork sync failed. See $RUN_URL"
+          # A blocked sync already wrote this run URL into the issue body.
+          elif ! gh issue view "$NUMBER" --repo "$REPO" --json body --jq '.body' | grep -qF "$RUN_URL"; then
+            gh issue comment "$NUMBER" --repo "$REPO" --body "Scheduled venfork sync failed. See $RUN_URL"
+          fi
 `;
 }

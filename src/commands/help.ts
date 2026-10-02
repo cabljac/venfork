@@ -53,8 +53,10 @@ venfork doctor [--json]
   preserved files, the sync workflow, VENFORK_PUSH_TOKEN and the last scheduled run
   Exits 1 when any check fails; --json prints machine-readable results for CI
 
-venfork sync [branch]
+venfork sync [branch] [--report-issues]
   Update default branches of origin and public to match upstream
+  --report-issues (used by the scheduled workflow) opens a venfork-sync-blocked
+    issue on the mirror when sync is blocked and closes it after a successful sync
   Re-stamps private default branch as upstream + one internal workflow commit when schedule is enabled
   Applies workflow filtering from enabledWorkflows/disabledWorkflows policy
   Syncs main/master branch without affecting your current work

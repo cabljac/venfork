@@ -15,7 +15,7 @@ describe('workflow helpers', () => {
     const workflow = generateSyncWorkflow('0 */6 * * *');
     expect(workflow).toContain("cron: '0 */6 * * *'");
     expect(workflow).toContain('workflow_dispatch');
-    expect(workflow).toContain('run: venfork sync');
+    expect(workflow).toContain('run: venfork sync --report-issues');
   });
 
   test('checkout step wires VENFORK_PUSH_TOKEN with github.token fallback', () => {
@@ -90,5 +90,26 @@ describe('workflow helpers', () => {
       `VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}`
     );
     expect(workflow).toContain(`"\${VENFORK_INSTALL_SPEC:-venfork@1.2.3}"`);
+  });
+
+  test('grants issues: write and passes the job token to gh for issue reports', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *');
+    expect(workflow).toContain(
+      'permissions:\n  contents: write\n  issues: write\n'
+    );
+    expect(workflow).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expression we are asserting.
+      '      - name: Sync from upstream\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: venfork sync --report-issues\n'
+    );
+  });
+
+  test('final step reports any failed run on the venfork-sync-blocked issue', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *');
+    const step = workflow.slice(workflow.indexOf('- name: Report failed sync'));
+    expect(step).toContain('if: failure()');
+    expect(step).toContain('gh label create venfork-sync-blocked');
+    expect(step).toContain('--label venfork-sync-blocked --state open');
+    expect(step).toContain('gh issue create');
+    expect(step).toContain('gh issue comment');
   });
 });

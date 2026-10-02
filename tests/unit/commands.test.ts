@@ -38,6 +38,11 @@ const originalProcessOn = process.on;
 const originalProcessOff = process.off;
 const originalProcessExit = process.exit;
 
+/** Renders an interpolated value the way execa splits it into argv. */
+function argText(value: unknown): string {
+  return Array.isArray(value) ? value.join(' ') : String(value);
+}
+
 // Mock execa BEFORE any imports
 mock.module('execa', () => ({
   // biome-ignore lint/suspicious/noExplicitAny: Mocking execa's complex overloaded types requires any
@@ -55,14 +60,14 @@ mock.module('execa', () => ({
       _options = stringsOrOptions;
       // biome-ignore lint/suspicious/noExplicitAny: Template literal values type
       return mock((strings: TemplateStringsArray, ...vals: any[]) => {
-        command = String.raw({ raw: strings }, ...vals);
+        command = String.raw({ raw: strings }, ...vals.map(argText));
         execaCalls.push(command);
         return getMockExecaResponse(command);
       });
     }
 
     // Called without options: $`command`
-    command = String.raw({ raw: stringsOrOptions }, ...values);
+    command = String.raw({ raw: stringsOrOptions }, ...values.map(argText));
     execaCalls.push(command);
     return getMockExecaResponse(command);
   }),
@@ -2986,6 +2991,53 @@ describe('syncCommand - error paths', () => {
     expect(clack.log.error).toHaveBeenLastCalledWith(
       'upstream/main not found after fetch. Check the upstream remote and the default branch name.'
     );
+  });
+
+  test('--report-issues opens the sync-blocked issue on divergence', async () => {
+    mockResponses.set('git rev-list upstream/main..origin/main', {
+      exitCode: 0,
+      stdout: 'abc123\n',
+      stderr: '',
+    });
+    mockResponses.set('gh issue list', {
+      exitCode: 0,
+      stdout: '[]',
+      stderr: '',
+    });
+
+    await expect(
+      syncCommand('main', { reportIssues: true })
+    ).rejects.toBeInstanceOf(SyncDivergenceError);
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.startsWith(
+          'gh issue create --repo test/repo --title Scheduled sync blocked: divergent commits on origin/main --label venfork-sync-blocked'
+        )
+      )
+    ).toBe(true);
+  });
+
+  test('--report-issues closes the sync-blocked issue after a successful sync', async () => {
+    mockResponses.set('gh issue list', {
+      exitCode: 0,
+      stdout: '[{"number":9}]',
+      stderr: '',
+    });
+
+    await syncCommand('main', { reportIssues: true });
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.startsWith('gh issue close 9 --repo test/repo')
+      )
+    ).toBe(true);
+  });
+
+  test('without --report-issues sync never calls gh', async () => {
+    await syncCommand('main');
+
+    expect(execaCalls.some((cmd) => cmd.startsWith('gh '))).toBe(false);
   });
 
   test('handles fetch errors', async () => {
