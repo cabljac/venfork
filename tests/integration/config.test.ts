@@ -10,6 +10,7 @@ import {
   createMirrorFixture,
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
+import { seedPreserve } from '../harness/preserve.js';
 
 let fx: MirrorFixture;
 let active: MirrorFixture | undefined;
@@ -40,7 +41,7 @@ async function syncError(): Promise<unknown> {
 
 /** Origin carries docs/a.md in its managed commit, preserved by the config. */
 async function preserveDocOnOrigin(): Promise<void> {
-  await preserveCommand('add', ['docs/a.md']);
+  await seedPreserve(fx, ['docs/a.md']);
   await fx.commitOnOrigin({ 'docs/a.md': 'mirror only\n' });
   await sync();
   expect(await fx.fileAt(fx.origin, 'main', 'docs/a.md')).toBe('mirror only\n');
@@ -106,7 +107,7 @@ describe('invalid preserve entries', () => {
     expect(error).toBeInstanceOf(ConfigError);
     expect((error as Error).message).toContain('docs/*.md');
     expect((error as Error).message).toContain(
-      'venfork preserve remove docs/*.md'
+      "venfork preserve remove 'docs/*.md'"
     );
     expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
     expect(await fx.fileAt(fx.origin, 'main', 'docs/a.md')).toBe(

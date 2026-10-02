@@ -3384,6 +3384,36 @@ describe('stageCommand --pr payload', () => {
     expect(preview?.message).toBe(longBody);
   });
 
+  test('warns when the internal PR title or body references #N', async () => {
+    mockPrStage();
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          { number: 7, url: 'u', title: 'feat: x (#12)', body: 'Closes #7.' },
+        ]),
+        stderr: '',
+      }
+    );
+    const warn = clack.log.warn as ReturnType<typeof mock>;
+    warn.mockClear();
+
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } catch {
+      // updateVenforkConfig may fail under mocks
+    }
+
+    const warned = warn.mock.calls.map((call) => String(call[0]));
+    expect(warned).toContain(
+      'The upstream PR title references issue/PR numbers that will resolve against upstream'
+    );
+    expect(warned).toContain(
+      'The upstream PR body references issue/PR numbers that will resolve against upstream'
+    );
+  });
+
   test('--pr refuses an upstream remote that is not a GitHub repository', async () => {
     mockPrStage('/srv/git/upstream.git');
 

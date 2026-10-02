@@ -313,22 +313,27 @@ venfork stage feature-auth --pr --base develop
 ```
 
 **What it does (without `--pr`):**
-1. Refuses branches that are not upstream work: upstream's default branch, anything that is not a local branch (tags, remote-tracking refs), `venfork-config`, and a branch with no history in common with upstream.
+1. Refuses branches that are not upstream work: upstream's default branch, anything that is not a local branch (tags, remote-tracking refs), `venfork-config`, and a branch with no history in common with upstream. Like sync, it also refuses while the preserve list holds entries venfork no longer accepts, and names the `venfork preserve remove` command for each.
 2. Fetches upstream and origin, then rebuilds the branch as a linear history on `upstream/<default>`: every non-merge commit is cherry-picked in order and venfork-managed commits are dropped. Merge commits never ship (a merge with a manual conflict resolution is refused, since dropping it would lose work). The rebuilt commits get new SHAs even when the branch was already based on upstream.
 3. Checks every rebuilt commit before anything is pushed and refuses the branch when a commit:
    - adds or changes `.github/workflows/venfork-sync.yml`, anything under `.venfork/`, or a preserved path (unless the result is exactly upstream's file at that path). Deleting a preserved file is allowed.
-   - adds a file whose content is identical to a preserved file on the mirror, at any path (catches renames and copies).
+   - adds a file whose content is identical to a preserved file on the mirror, at any path (catches renames and copies). The check covers every earlier version of a preserved file that the clone still knows and every earlier version of the venfork config: the mirror refs, their reflog entries and the history of both that upstream does not contain (up to 20000 commits and 20000 reflog entries per ref). A version that upstream itself has published at the same path is not mirror content. When a ref has more than 20000 reflog entries, or that history holds more than 20000 commits, stage refuses, because the older mirror-only history cannot be checked: stage from a clone whose reflog is shorter (a fresh clone has almost none), or, after confirming no mirror-only history older than that is needed, drop old entries with `git reflog expire --expire=<date> --all`. There is no override.
+   - adds or changes a file whose content contains origin's URL, origin's `owner/name`, origin's repo name after a host (`github.com/<owner>/<name>`, `git@<host>:<owner>/<name>`, `ssh://` or `https://` URLs; a bare `<owner>/<name>` with another owner, such as a package path, passes in file content), or that is a JSON object shaped like a venfork config (a URL-valued `upstreamUrl` plus a URL-valued `publicForkUrl`, `"mode": "no-public"`, or any of the keys `preserve`, `schedule`, `shippedBranches`, `pulledPrs`, `shippedIssues` and `pulledIssues`; with `VENFORK_ALLOW_SELF_REFERENCE=1`, only when its `upstreamUrl` or `publicForkUrl` names this mirror's upstream or public fork, or one of those link maps is not empty), or whose file name contains one of those terms. Text is read as UTF-8, or as UTF-16 when it starts with a byte order mark, and searched for every term. Every file, text or binary, is also searched byte by byte for origin's URL and `owner/name` encoded as UTF-8, UTF-16LE and UTF-16BE (ignoring ASCII case), whatever byte order mark or NUL bytes it has. Compressed content (gzip, zip and other archives) and UTF-32 text are not decoded, so a mirror reference inside them is not found. A file over 100 MB cannot be checked and is refused. The bare word `venfork` is allowed in file content, so docs can mention the tool.
    - was authored or committed by the venfork bot.
-   - has an author, committer or message that contains origin's URL, origin's `owner/name`, or the word `venfork` (this includes `<!-- venfork:internal -->` markers).
-4. Shows the target, the branch, and every commit subject that will be published, then asks for confirmation.
+   - has an author, committer or message that contains origin's URL, origin's `owner/name`, origin's repo name as the repo of any `owner/name` or URL (when it has at least six characters and differs from upstream's; `src/<name>/`, `src/<name>.ts`, `<owner>/<name>-public` and the plain word pass) or the word `venfork` (this includes `<!-- venfork:internal -->` markers).
+
+   Path matching ignores case. A preserve entry that is a directory on origin's default branch, on your local default branch or anywhere in the mirror history the check reads (possible in an old config) is refused as an invalid entry, with the `venfork preserve remove '<entry>'` command to run. The branch name goes through the same term check before anything is fetched.
+4. Shows the target, the branch, every commit subject and every file that any published commit adds or changes, then asks for confirmation. A file that a later commit deletes is listed as "removed later in the branch, still in history", because the public history still holds it. When commit messages, or with `--pr` the upstream PR title or body, contain `#N`, it warns that those numbers will resolve against upstream.
 5. Pushes the rebuilt head with `--force-with-lease` and `--no-follow-tags`, so no local tag goes with it.
 6. Provides a compare URL so you can open the PR yourself.
 
-Commit messages, author names and author emails are published as they are. Keep them free of anything that points at the private mirror; when stage refuses a commit, rewrite the branch (for example with `git rebase -i`) and stage again. A `#42` reference in a commit message is your own content and is published unchanged.
+Commit messages, author names and author emails are published as they are. Keep them free of anything that points at the private mirror; when stage refuses a commit, rewrite the branch (for example with `git rebase -i`) and stage again. A `#42` reference in a commit message is your own content and is published unchanged; the preview warns about it.
+
+To use venfork on a project whose upstream legitimately mentions venfork, set `VENFORK_ALLOW_SELF_REFERENCE=1`. It relaxes only the bare word `venfork`. URL, owner and repo name terms still apply, and text shaped like a marker (`venfork:internal` in any wrapper, such as `[venfork:internal]`) is still refused in PR titles and bodies. An HTML comment that only mentions the tool (`<!-- uses venfork -->`) passes, but one that reads like a broken marker (`<!-- venfork:intenral -->`, `<!-- venfork internal -->`) is refused.
 
 **What `--pr` adds:**
 1. Looks up the most recent PR on the private mirror with `--head <branch>` (open first, then most recent of any state).
-2. Renders the upstream PR body by stripping any `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks. With no internal PR, the body lists the published commit subjects, with any trailing `(#N)` reference removed. The title and body are then refused if they still contain `venfork`, origin's URL or origin's `owner/name`. The private mirror stays invisible to upstream: no back-link to the internal review and no hint that one exists. The internal PR URL is recorded only in your mirror config (step 5).
+2. Renders the upstream PR body by stripping any `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks. With no internal PR, the body lists the published commit subjects with standalone `#N` references and `(#N)` groups removed (`#N` inside a word or URL is kept). The title and body are then refused if they still contain `venfork`, origin's URL or origin's `owner/name`. The private mirror stays invisible to upstream: no back-link to the internal review and no hint that one exists. The internal PR URL is recorded only in your mirror config (step 5).
 3. Shows you the translated body **before** confirming, so you can catch redaction mistakes before they go public.
 4. Runs `gh pr create --repo <upstream> --base <default> --head <fork-owner>:<branch>` and surfaces the resulting PR URL.
 5. Records the linkage in `venfork-config.shippedBranches[<branch>]` for later tracking.
@@ -534,7 +539,7 @@ venfork preserve clear
 ```
 
 **Rules:**
-- Each entry is a single file: a regular file, an executable or a symlink. Directories and glob patterns (`*`, `?`, `[`) are rejected; list each file instead.
+- Each entry is a single file: a regular file, an executable or a symlink. `preserve add` checks `origin/<default>` and refuses directories, missing paths and glob patterns (`*`, `?`, `[`); list each file instead. Commit the file to `origin/<default>` first.
 - Paths are clean repo-relative paths: no leading `/` or `-`, no `..` or `.` segments, no backslashes or whitespace.
 - Commit the file to `origin/<default>` before you sync. On every sync, venfork copies each preserved file from the previous origin tip into the new managed commit. If a preserved file is missing, sync aborts until you commit it or remove the entry.
 - Upstream wins. When upstream adds a file at a preserved path, sync uses upstream's version. If upstream later deletes that path, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork preserve remove <path>` to let it go. A preserved file also cannot be restored when upstream adds a file at one of its parent directories; sync aborts and names the path.
@@ -542,6 +547,8 @@ venfork preserve clear
 - `venfork preserve remove` and `clear` re-stamp `origin/<default>` in the same step when the managed commit still carries a dropped file.
 - The sync workflow and anything under `.venfork/` cannot be preserved: venfork owns them. A commit with the managed trailer that also changes any other file counts as your work, so sync stops on it as divergence.
 - If the `venfork-config` branch is missing while `origin/<default>` still carries a managed commit, sync refuses. Restore the branch. `venfork setup` never overwrites an existing config branch.
+
+**Directory entries:** an old config can still hold a directory entry. `venfork stage` and `venfork sync` treat an entry that is a directory on origin's default branch as invalid and refuse to run until you run `venfork preserve remove '<directory>'` and add each file. Every `venfork preserve remove` command venfork prints single-quotes its entries, so a shell does not expand `*.md`.
 
 **Invalid entries:** an entry written by an older venfork, or by hand, that is not a valid single-file path (for example `docs/*.md`) makes sync abort and shows up in `venfork preserve list` and `venfork doctor`. Remove it with `venfork preserve remove <entry>`, using the entry exactly as listed. `remove` works on invalid entries too.
 
@@ -601,6 +608,10 @@ Cap in milliseconds for each network git or gh operation (default `600000`, 10 m
 ### `VENFORK_SEED_CHUNK` and `VENFORK_SEED_RETRY_MS`
 
 When `venfork setup` seeds a new mirror, it pushes the default branch in batches of `VENFORK_SEED_CHUNK` commits (default `1000`) and retries a failed push with a backoff based on `VENFORK_SEED_RETRY_MS` (default `8000`).
+
+### `VENFORK_ALLOW_SELF_REFERENCE`
+
+Set `VENFORK_ALLOW_SELF_REFERENCE=1` for projects whose upstream legitimately mentions venfork. `venfork stage` then stops refusing the bare word `venfork` in commit messages, PR titles and PR bodies. Mirror URL, owner and repo name terms are never relaxed.
 
 ### `GITHUB_REPOSITORY`
 

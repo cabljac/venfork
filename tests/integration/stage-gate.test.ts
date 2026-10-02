@@ -5,15 +5,12 @@ import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
-import {
-  preserveCommand,
-  stageCommand,
-  syncCommand,
-} from '../../src/commands.js';
+import { stageCommand, syncCommand } from '../../src/commands.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
+import { seedPreserve } from '../harness/preserve.js';
 
 const DOC = 'docs/internal.md';
 const BOT = [
@@ -183,7 +180,7 @@ describe.each(['standard', 'no-public'] as const)(
     test('a preserved file added and later removed is refused', async () => {
       await fx.commitOnOrigin({ [DOC]: 'client roadmap\n' }, 'docs: notes');
       await featureFrom('origin/main');
-      await preserveCommand('add', [DOC]);
+      await seedPreserve(fx, [DOC]);
       await fx.git(fx.work, 'rm', '--quiet', DOC);
       await fx.git(fx.work, 'commit', '--quiet', '-m', 'chore: drop notes');
 
@@ -193,7 +190,7 @@ describe.each(['standard', 'no-public'] as const)(
     test('a renamed preserved file is refused', async () => {
       await fx.commitOnOrigin({ [DOC]: 'client roadmap\n' }, 'docs: notes');
       await featureFrom('origin/main');
-      await preserveCommand('add', [DOC]);
+      await seedPreserve(fx, [DOC]);
       await syncCommand(undefined, { cwd: fx.work, quiet: true });
       await fx.git(fx.work, 'mv', DOC, 'docs/renamed.md');
       await fx.git(fx.work, 'commit', '--quiet', '-m', 'docs: rename');
@@ -203,7 +200,7 @@ describe.each(['standard', 'no-public'] as const)(
 
     test('a copy of a preserved file under a new path is refused', async () => {
       await fx.commitOnOrigin({ [DOC]: 'client roadmap\n' }, 'docs: notes');
-      await preserveCommand('add', [DOC]);
+      await seedPreserve(fx, [DOC]);
       await syncCommand(undefined, { cwd: fx.work, quiet: true });
       await featureFrom('origin/main');
       await commitFile('docs/copy.md', 'client roadmap\n', 'docs: copy');
@@ -214,7 +211,7 @@ describe.each(['standard', 'no-public'] as const)(
     });
 
     test('a preserved file added by a clean commit after sync is refused', async () => {
-      await preserveCommand('add', [DOC]);
+      await seedPreserve(fx, [DOC]);
       await fx.commitOnOrigin({ [DOC]: 'client roadmap\n' }, 'docs: notes');
       await syncCommand(undefined, { cwd: fx.work, quiet: true });
       await featureFrom('origin/main');
@@ -227,7 +224,7 @@ describe.each(['standard', 'no-public'] as const)(
 
     test('mirror content at a preserved path upstream also has is refused', async () => {
       await fx.commitOnUpstream({ [DOC]: 'upstream doc\n' }, 'docs: upstream');
-      await preserveCommand('add', [DOC]);
+      await seedPreserve(fx, [DOC]);
       await featureFrom('upstream/main');
       await commitFile(DOC, 'client roadmap\n', 'docs: tweak');
 
@@ -236,7 +233,7 @@ describe.each(['standard', 'no-public'] as const)(
 
     test("upstream's exact content at a preserved path ships", async () => {
       await fx.commitOnUpstream({ [DOC]: 'upstream doc\n' }, 'docs: upstream');
-      await preserveCommand('add', [DOC]);
+      await seedPreserve(fx, [DOC]);
       await featureFrom('upstream/main');
       await fx.git(fx.work, 'rm', '--quiet', DOC);
       await fx.git(fx.work, 'commit', '--quiet', '-m', 'docs: drop');

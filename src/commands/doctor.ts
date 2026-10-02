@@ -1,6 +1,10 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
-import { readVenforkConfigFromRepo, type VenforkConfig } from '../config.js';
+import {
+  preserveRemoveHint,
+  readVenforkConfigFromRepo,
+  type VenforkConfig,
+} from '../config.js';
 import { ConfigError } from '../errors.js';
 import { checkGhAuth, getDefaultBranch, getRemotes } from '../git.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
@@ -375,7 +379,7 @@ export async function runDoctorChecks(
             ok: false,
             detail: `invalid entries (single files only): ${invalidPreserve.join(', ')}`,
             fix: invalidPreserve
-              .map((entry) => `venfork preserve remove ${entry}`)
+              .map((entry) => preserveRemoveHint(entry))
               .join('; '),
           }
         : missing.length === 0
@@ -391,7 +395,7 @@ export async function runDoctorChecks(
               id: 'preserve',
               ok: false,
               detail: `missing on origin/${defaultBranch}: ${missing.join(', ')}`,
-              fix: `Commit the file(s) to origin/${defaultBranch}, or \`venfork preserve remove ${missing.join(' ')}\`. Sync aborts until then.`,
+              fix: `Commit the file(s) to origin/${defaultBranch}, or \`${preserveRemoveHint(...missing)}\`. Sync aborts until then.`,
             }
     );
 

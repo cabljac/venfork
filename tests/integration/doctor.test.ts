@@ -249,7 +249,9 @@ describe('doctor and a broken config', () => {
 
     expect(checks.preserve.ok).toBe(false);
     expect(checks.preserve.detail).toContain('docs/*.md');
-    expect(checks.preserve.fix).toContain('venfork preserve remove docs/*.md');
+    expect(checks.preserve.fix).toContain(
+      "venfork preserve remove 'docs/*.md'"
+    );
   });
 
   test('an invalid cron skips cron-age with the reason', async () => {

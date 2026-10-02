@@ -1,6 +1,10 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
-import { readVenforkConfigFromRepo, updateVenforkConfig } from '../config.js';
+import {
+  assertNoInvalidPreserve,
+  readVenforkConfigFromRepo,
+  updateVenforkConfig,
+} from '../config.js';
 import {
   BranchNotFoundError,
   GitError,
@@ -27,6 +31,7 @@ import {
 } from '../shared/redaction.js';
 import { findMirrorRepoPath } from '../shared/repo.js';
 import {
+  assertPreserveEntriesAreNotDirectories,
   assertPublishableCommits,
   collectMirrorBlobs,
 } from '../shared/stage-gate.js';
@@ -168,8 +173,12 @@ async function rebuildLinearHead(
               `Failed to stage '${branch}': commit ${commit.slice(0, 9)} changes preserved mirror-only path(s) ${touched.join(', ')}, which do not exist on upstream/${defaultBranch}. Move those changes to the mirror default branch (they cannot go upstream), drop them from '${branch}', and retry.`
             );
           }
+          const reason =
+            pickResult.stderr.trim() ||
+            pickResult.stdout.trim() ||
+            `exit ${pickResult.exitCode}`;
           throw new Error(
-            `Failed to stage '${branch}' because cherry-picking ${commit} onto upstream/${defaultBranch} caused conflicts. Rebase '${branch}' on upstream/${defaultBranch} and retry.`
+            `Failed to stage '${branch}': cherry-picking ${commit} onto upstream/${defaultBranch} failed:\n${reason}\nRebase '${branch}' on upstream/${defaultBranch} and retry.`
           );
         }
         const picked = (
@@ -214,15 +223,18 @@ export interface StagingPlan {
   preserve: string[];
   /** True when the head and base of the upstream PR live in the same repo (no-public mode). */
   noPublic: boolean;
+  /** Upstream and public fork URLs from the config and the remotes. */
+  recordedUrls: string[];
 }
 
 /**
  * Resolves remotes and the default branch for a staging push, fetches
  * upstream and origin, and refuses branches that are not upstream work:
  * `venfork-config`, anything that is not a local branch, upstream's default
- * branch, and a branch with no history in common with upstream. Throws
- * `BranchNotFoundError` / `RemoteNotFoundError` so callers can render a
- * single failure path.
+ * branch, and a branch with no history in common with upstream. Also
+ * refuses while the config holds invalid preserve entries, as sync does.
+ * Throws `BranchNotFoundError` / `RemoteNotFoundError` so callers can render
+ * a single failure path.
  */
 async function planStaging(
   requested: string,
@@ -234,6 +246,7 @@ async function planStaging(
       `Refusing to stage '${branch}': it holds venfork's private configuration, not upstream work.`
     );
   }
+  assertNoMirrorReference(branch, 'the branch name', await mirrorDenyList(cwd));
   const branchCheck = await $({
     cwd,
     reject: false,
@@ -252,6 +265,7 @@ async function planStaging(
   }
 
   const config = await readVenforkConfigFromRepo(cwd);
+  assertNoInvalidPreserve(config);
   const noPublic = config?.mode === 'no-public';
 
   const upstreamUrlResult = await $({
@@ -293,6 +307,14 @@ async function planStaging(
       `Refusing to stage '${branch}': it is upstream's default branch, and staging it would overwrite ${branch} on ${noPublic ? 'upstream' : 'the public fork'}. Stage a feature branch instead.`
     );
   }
+  await assertPreserveEntriesAreNotDirectories(
+    config?.preserve ?? [],
+    [
+      `refs/remotes/origin/${upstreamDefaultBranch}`,
+      `refs/heads/${upstreamDefaultBranch}`,
+    ],
+    cwd
+  );
   const mergeBase = await $({
     cwd,
     reject: false,
@@ -318,8 +340,18 @@ async function planStaging(
     upstreamUrl,
     upstreamRepoPath,
     upstreamDefaultBranch,
-    preserve: [...(config?.preserve ?? []), ...(config?.invalidPreserve ?? [])],
+    preserve: config?.preserve ?? [],
     noPublic,
+    recordedUrls: [
+      ...new Set(
+        [
+          config?.upstreamUrl,
+          config?.publicForkUrl,
+          upstreamUrl,
+          noPublic ? undefined : pushUrl,
+        ].filter((url): url is string => Boolean(url))
+      ),
+    ],
   };
 }
 
@@ -330,6 +362,12 @@ interface PreparedStage {
   subjects: string[];
   /** Output of `mirrorDenyList`, reused for the PR title and body. */
   denyList: string[];
+  /** Paths some commit in `upstream/<default>..head` adds, modifies or retypes. */
+  files: string[];
+  /** Paths in `files` that are absent at `head` but still in its history. */
+  removedLater: string[];
+  /** Commits whose message mentions an issue or PR number (`#N`). */
+  issueRefCommits: number;
 }
 
 /**
@@ -348,7 +386,7 @@ async function prepareStage(
     cwd
   );
   const denyList = await mirrorDenyList(cwd);
-  const mirrorBlobs = await collectMirrorBlobs(
+  const { blobs: mirrorBlobs } = await collectMirrorBlobs(
     [
       `refs/remotes/origin/${plan.upstreamDefaultBranch}`,
       `refs/heads/${plan.upstreamDefaultBranch}`,
@@ -358,24 +396,46 @@ async function prepareStage(
     base,
     cwd
   );
-  await assertPublishableCommits({
+  const files = await assertPublishableCommits({
     branch: plan.branch,
     base,
     head: rebuilt.head,
     preserve: plan.preserve,
     mirrorBlobs,
     denyList,
+    recordedUrls: plan.recordedUrls,
     originalOf: rebuilt.originalOf,
     cwd,
   });
   const log = await $({
     cwd,
   })`git log --reverse --format=%s ${base}..${rebuilt.head}`;
+  const messages = await $({
+    cwd,
+  })`git log --format=%B%x00 ${base}..${rebuilt.head}`;
+  const atHead =
+    files.length === 0
+      ? ''
+      : (
+          await $({
+            cwd,
+          })`git --literal-pathspecs ls-tree -r -z --name-only ${rebuilt.head} -- ${files}`
+        ).stdout;
+  const present = new Set(atHead.split('\0').filter(Boolean));
   return {
     head: rebuilt.head,
     subjects: log.stdout.split('\n').filter(Boolean),
     denyList,
+    files,
+    removedLater: files.filter((file) => !present.has(file)),
+    issueRefCommits: messages.stdout.split('\0').filter(mentionsIssueNumber)
+      .length,
   };
+}
+
+/** True when `text` contains a `#N` issue or PR reference. */
+function mentionsIssueNumber(text: string): boolean {
+  return /#\d+\b/.test(text);
 }
 
 /**
@@ -449,15 +509,23 @@ export interface StageOptions {
 
 /**
  * Synthetic upstream PR body for when no internal review PR was found: one
- * bullet per published commit subject, with any trailing `(#N)` reference
- * dropped (it would point at a mirror PR number). No SHAs, so nothing points
- * back at the mirror.
+ * bullet per published commit subject, with `#N` references dropped (they
+ * would resolve against an unrelated upstream issue or PR): `(#N)` groups,
+ * and `#N` after the start or whitespace and before the end, whitespace or
+ * punctuation. `#N` inside a word or URL is kept. No SHAs, so nothing
+ * points back at the mirror.
  *
  * @internal Exported for unit testing; not part of the public API.
  */
 export function syntheticBody(subjects: readonly string[]): string {
   const lines = subjects
-    .map((subject) => subject.replace(/(\s*\(#\d+\))+\s*$/, '').trim())
+    .map((subject) =>
+      subject
+        .replace(/\s*\(#\d+\)/g, '')
+        .replace(/(^|\s+)#\d+(?=$|\s|[.,;:!?)\]}"'])/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    )
     .filter(Boolean)
     .map((subject) => `- ${subject}`);
   if (lines.length === 0) {
@@ -628,8 +696,30 @@ export async function stageCommand(
     detailLines.push(
       '',
       `  Commits (${prepared.subjects.length}), rebuilt on upstream/${plan.upstreamDefaultBranch}:`,
-      ...prepared.subjects.map((subject) => `    - ${subject}`)
+      ...prepared.subjects.map((subject) => `    - ${subject}`),
+      '',
+      `  Files (${prepared.files.length}) published in history:`,
+      ...prepared.files.map((file) =>
+        prepared.removedLater.includes(file)
+          ? `    - ${file} (removed later in the branch, still in history)`
+          : `    - ${file}`
+      )
     );
+    if (prepared.issueRefCommits > 0) {
+      p.log.warn(
+        `${prepared.issueRefCommits} commit message(s) reference issue/PR numbers that will resolve against upstream`
+      );
+    }
+    if (createPr && mentionsIssueNumber(prTitle)) {
+      p.log.warn(
+        'The upstream PR title references issue/PR numbers that will resolve against upstream'
+      );
+    }
+    if (createPr && mentionsIssueNumber(translatedBody)) {
+      p.log.warn(
+        'The upstream PR body references issue/PR numbers that will resolve against upstream'
+      );
+    }
     if (createPr) {
       detailLines.push(
         '',

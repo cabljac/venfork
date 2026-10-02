@@ -2,6 +2,7 @@ import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import {
   normalizePreservePath,
+  preserveRemoveHint,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
   type VenforkConfigPatch,
@@ -12,6 +13,7 @@ import { changedFilesInCommit } from '../shared/divergence.js';
 import { hasManagedTrailer } from '../shared/managed-commit.js';
 import { resolveCommit } from '../shared/mirror-commit.js';
 import { netFetch } from '../shared/net.js';
+import { assertPreserveEntriesAreFiles } from '../shared/preserve-entries.js';
 
 /**
  * Which of `paths` origin's managed commit carries, and where that commit
@@ -115,7 +117,7 @@ export async function preserveCommand(
       if (invalid.length > 0) {
         p.note(
           invalid
-            .map((entry) => `- ${entry}: venfork preserve remove ${entry}`)
+            .map((entry) => `- ${entry}: ${preserveRemoveHint(entry)}`)
             .join('\n'),
           'Invalid entries (sync refuses to run until they are removed)'
         );
@@ -168,7 +170,7 @@ export async function preserveCommand(
       validated.push(cleaned);
     }
 
-    // action === 'add'
+    await assertPreserveEntriesAreFiles(validated, repoDir);
     const merged = Array.from(new Set([...current, ...validated]));
     await updateVenforkConfig(repoDir, { preserve: merged });
     p.note(
@@ -176,7 +178,7 @@ export async function preserveCommand(
       'Added to preserve list'
     );
     p.outro(
-      '✨ Preserve list updated. Commit the file(s) to the mirror default branch (if not already), then run `venfork sync`.'
+      '✨ Preserve list updated. Run `venfork sync` to apply on the private mirror default branch.'
     );
   } catch (error) {
     p.log.error(error instanceof Error ? error.message : String(error));

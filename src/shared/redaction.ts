@@ -1,6 +1,6 @@
 import { $ } from 'execa';
 import { RedactionError } from '../errors.js';
-import { canonicalText } from './deny-list.js';
+import { canonicalText, selfReferenceAllowed } from './deny-list.js';
 
 /** Internal review PR fields read from the private mirror via gh. */
 export interface InternalPrInfo {
@@ -13,10 +13,16 @@ export interface InternalPrInfo {
 const HTML_COMMENT_RE = /<!--[\s\S]*?--!?>/g;
 const MARKER_RE = /^\s*(\/)?\s*venfork\s*:\s*internal\b/i;
 
-/** Text around the first canonical `venfork` mention, for error messages. */
-function venforkSnippet(text: string): string | null {
+/** Text shaped like a marker, whatever wraps it. */
+const MARKER_TEXT_RE = /venfork\s*:\s*internal/i;
+
+/** A comment body that reads like a broken marker (`venfork:intenral`, `venfork internal`). */
+const MARKER_SHAPED_COMMENT_RE = /venfork\s*:|venfork\W*internal/i;
+
+/** Text around the first canonical match of `pattern`, for error messages. */
+function snippetOf(text: string, pattern: RegExp): string | null {
   const folded = canonicalText(text);
-  const at = folded.toLowerCase().indexOf('venfork');
+  const at = folded.search(pattern);
   if (at === -1) return null;
   return folded.slice(Math.max(0, at - 20), at + 40);
 }
@@ -41,8 +47,12 @@ interface RedactionMarker {
  * Fails closed with {@link RedactionError}:
  *  - an unmatched close marker,
  *  - a comment that mentions venfork but is not a marker (a misspelled
- *    marker such as `venfork:intenral`), or
- *  - any `venfork` mention left anywhere after stripping.
+ *    marker such as `venfork:intenral`; with
+ *    `VENFORK_ALLOW_SELF_REFERENCE=1`, only a comment shaped like one,
+ *    with `venfork:` or `venfork` then `internal`), or
+ *  - any `venfork` mention left anywhere after stripping (with
+ *    `VENFORK_ALLOW_SELF_REFERENCE=1`, only text shaped like a marker,
+ *    such as `[venfork:internal]`).
  *
  * An unmatched open marker drops everything to end-of-input.
  *
@@ -63,7 +73,11 @@ export function stripInternalBlocks(body: string): string {
         start,
         end: start + comment.length,
       });
-    } else if (/venfork/i.test(inner)) {
+    } else if (
+      (selfReferenceAllowed() ? MARKER_SHAPED_COMMENT_RE : /venfork/i).test(
+        inner
+      )
+    ) {
       throw new RedactionError(comment);
     }
   }
@@ -90,7 +104,10 @@ export function stripInternalBlocks(body: string): string {
   if (depth === 0) {
     result += body.slice(cursor);
   }
-  const leftover = venforkSnippet(result);
+  const leftover = snippetOf(
+    result,
+    selfReferenceAllowed() ? MARKER_TEXT_RE : /venfork/i
+  );
   if (leftover !== null) {
     throw new RedactionError(leftover);
   }

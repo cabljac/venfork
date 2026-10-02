@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as prompts from '@clack/prompts';
 import { $ } from 'execa';
+import { seedPreserve } from '../harness/preserve.js';
 import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
@@ -127,7 +128,7 @@ describe('managed commit content check', () => {
   });
 
   test('removing a preserve entry re-stamps origin, so the next sync is not divergence', async () => {
-    await preserveCommand('add', ['tools/m.txt', 'tools/n.txt']);
+    await seedPreserve(fx, ['tools/m.txt', 'tools/n.txt']);
     await fx.commitOnOrigin({ 'tools/m.txt': 'm\n', 'tools/n.txt': 'n\n' });
     await sync();
 
@@ -160,7 +161,7 @@ describe('managed commit content check', () => {
 describe('managed commit left behind by a preserve removal', () => {
   /** Origin's managed commit carries m and n; the config names only m. */
   async function staleManagedCommit(): Promise<void> {
-    await preserveCommand('add', ['tools/m.txt', 'tools/n.txt']);
+    await seedPreserve(fx, ['tools/m.txt', 'tools/n.txt']);
     await fx.commitOnOrigin({ 'tools/m.txt': 'm\n', 'tools/n.txt': 'n\n' });
     await sync();
     await updateVenforkConfig(fx.work, { preserve: ['tools/m.txt'] });
@@ -235,7 +236,7 @@ describe('managed commit left behind by a preserve removal', () => {
   });
 
   test('preserve remove on a diverged origin warns that origin still carries the file', async () => {
-    await preserveCommand('add', ['tools/m.txt', 'tools/n.txt']);
+    await seedPreserve(fx, ['tools/m.txt', 'tools/n.txt']);
     await fx.commitOnOrigin({ 'tools/m.txt': 'm\n', 'tools/n.txt': 'n\n' });
     await sync();
     await fx.commitOnOrigin({ 'src/user.txt': 'user\n' });
@@ -257,7 +258,7 @@ describe('managed commit left behind by a preserve removal', () => {
 
 describe('missing venfork-config branch', () => {
   test('sync refuses when origin still carries a managed commit', async () => {
-    await preserveCommand('add', ['tools/m.txt']);
+    await seedPreserve(fx, ['tools/m.txt']);
     await fx.commitOnOrigin({ 'tools/m.txt': 'mirror\n' });
     await sync();
     await fx.git(fx.origin, 'branch', '-D', 'venfork-config');
@@ -322,7 +323,7 @@ describe('schedule changes do not drift from origin', () => {
 
 describe('tip builder path conflicts', () => {
   test('a preserved file replaced by an upstream directory fails and names both', async () => {
-    await preserveCommand('add', ['cfg']);
+    await seedPreserve(fx, ['cfg']);
     await fx.commitOnOrigin({ cfg: 'mirror cfg\n' });
     await sync();
     const before = await fx.sha(fx.origin, 'main');
@@ -367,7 +368,7 @@ describe('tip builder path conflicts', () => {
     );
     await fx.git(dev, 'commit', '--quiet', '-m', 'chore: mirror gitlink');
     await fx.git(dev, 'push', '--quiet', 'origin', 'main');
-    await preserveCommand('add', ['msub']);
+    await seedPreserve(fx, ['msub']);
 
     await expectSyncError(
       "Preserved path 'msub' is not a regular file, executable or symlink"
@@ -410,7 +411,7 @@ describe('workflow allowlist', () => {
 
 describe('sync leaves the user clone alone', () => {
   test('a dirty index and worktree are byte-identical after sync', async () => {
-    await preserveCommand('add', ['tools/m.txt']);
+    await seedPreserve(fx, ['tools/m.txt']);
     await fx.commitOnOrigin({ 'tools/m.txt': 'mirror\n' });
     await updateVenforkConfig(fx.work, {
       schedule: { enabled: true, cron: '0 * * * *' },

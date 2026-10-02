@@ -6,15 +6,12 @@ import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
-import {
-  preserveCommand,
-  stageCommand,
-  syncCommand,
-} from '../../src/commands.js';
+import { stageCommand, syncCommand } from '../../src/commands.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
+import { seedPreserve } from '../harness/preserve.js';
 
 const CALLER = '.github/workflows/caller.yml';
 
@@ -45,7 +42,7 @@ async function cutFeatureBranch(base: string): Promise<string> {
 
 describe('stage against real repos', () => {
   test('a post-checkout hook in the clone does not leak into the staged branch', async () => {
-    await preserveCommand('add', [CALLER]);
+    await seedPreserve(fx, [CALLER]);
     await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
     await syncCommand(undefined, { cwd: fx.work, quiet: true });
     await cutFeatureBranch('origin/main');
@@ -64,7 +61,7 @@ describe('stage against real repos', () => {
   });
 
   test('stage strips a preserve-only managed commit', async () => {
-    await preserveCommand('add', [CALLER]);
+    await seedPreserve(fx, [CALLER]);
     await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
     await syncCommand(undefined, { cwd: fx.work, quiet: true });
     await cutFeatureBranch('origin/main');
@@ -99,7 +96,7 @@ describe('stage against real repos', () => {
   });
 
   test('stage re-pushes a rebuilt branch when the public tracking ref is missing', async () => {
-    await preserveCommand('add', [CALLER]);
+    await seedPreserve(fx, [CALLER]);
     await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
     await syncCommand(undefined, { cwd: fx.work, quiet: true });
     await cutFeatureBranch('origin/main');
@@ -115,7 +112,7 @@ describe('stage against real repos', () => {
   });
 
   test('stage names the preserved path when a commit touching it cannot be replayed', async () => {
-    await preserveCommand('add', [CALLER]);
+    await seedPreserve(fx, [CALLER]);
     await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
     await syncCommand(undefined, { cwd: fx.work, quiet: true });
     await cutFeatureBranch('origin/main');
@@ -167,7 +164,7 @@ describe.each(['standard', 'no-public'] as const)(
   (mode) => {
     beforeEach(async () => {
       await useMode(mode);
-      await preserveCommand('add', [DOC]);
+      await seedPreserve(fx, [DOC]);
     });
 
     test('a branch cut before sync from a teammate commit of a preserved file', async () => {

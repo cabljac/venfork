@@ -3,7 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
-import { assertNoInvalidPreserve, type VenforkConfig } from '../config.js';
+import {
+  assertNoInvalidPreserve,
+  preserveRemoveHint,
+  type VenforkConfig,
+} from '../config.js';
 import { GitError, VenforkError } from '../errors.js';
 import { VENFORK_VERSION } from '../version.js';
 import { generateSyncWorkflow } from '../workflow.js';
@@ -19,6 +23,7 @@ import {
 } from './managed-commit.js';
 import { netExec, netFailureReason } from './net.js';
 import { compareSemver, pinnedVenforkVersion } from './semver.js';
+import { assertPreserveEntriesAreNotDirectories } from './stage-gate.js';
 
 /** True for a `*.yml` / `*.yaml` file directly in `.github/workflows/`. */
 function isTopLevelWorkflow(file: string): boolean {
@@ -248,7 +253,7 @@ export async function buildMirrorTip(args: {
         if (upstreamEntries.some((entry) => entry.type === 'tree')) {
           throw new Error(
             `Preserved file '${preservePath}' cannot be restored: upstream now has a directory at '${preservePath}'.\n` +
-              `Move the preserved file elsewhere, or remove the entry with:\n  venfork preserve remove ${preservePath}`
+              `Move the preserved file elsewhere, or remove the entry with:\n  ${preserveRemoveHint(preservePath)}`
           );
         }
         if (upstreamEntries.length > 0) {
@@ -340,14 +345,14 @@ async function preservedEntry(args: {
     if (found.some((entry) => entry.type !== 'tree')) {
       throw new Error(
         `Preserved file '${preservePath}' cannot be restored: upstream now has a file at '${ancestor}'.\n` +
-          `Move the preserved file elsewhere, or remove the entry with:\n  venfork preserve remove ${preservePath}`
+          `Move the preserved file elsewhere, or remove the entry with:\n  ${preserveRemoveHint(preservePath)}`
       );
     }
     const staged = await mustGit(git, ['ls-files', '-z', '--', ancestor]);
     if (staged.split('\0').includes(ancestor)) {
       throw new Error(
         `Preserved file '${preservePath}' cannot be restored: a file exists at '${ancestor}' in the managed tree.\n` +
-          `Move the preserved file elsewhere, or remove the entry with:\n  venfork preserve remove ${preservePath}`
+          `Move the preserved file elsewhere, or remove the entry with:\n  ${preserveRemoveHint(preservePath)}`
       );
     }
   }
@@ -358,7 +363,7 @@ async function preservedEntry(args: {
     throw new Error(
       `Preserved file '${preservePath}' not found on origin/${defaultBranch}.\n` +
         'Either commit it to the mirror first, or remove the entry with:\n' +
-        `  venfork preserve remove ${preservePath}`
+        `  ${preserveRemoveHint(preservePath)}`
     );
   }
   if (entry.type === 'tree') {
@@ -436,6 +441,13 @@ export async function buildOriginTip(args: {
 }): Promise<string> {
   const { config, defaultBranch, upstreamTip, previousMirrorTip, cwd } = args;
   assertNoInvalidPreserve(config);
+  if (previousMirrorTip) {
+    await assertPreserveEntriesAreNotDirectories(
+      config?.preserve ?? [],
+      [previousMirrorTip],
+      cwd ?? process.cwd()
+    );
+  }
   const schedule = config?.schedule;
   const scheduleActive = Boolean(schedule?.enabled && schedule.cron);
   if (scheduleActive && previousMirrorTip) {
