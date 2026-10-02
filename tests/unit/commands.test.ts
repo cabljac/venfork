@@ -36,7 +36,6 @@ let accessExists: (filePath: string) => boolean = () => false;
 // Store originals
 const originalProcessOn = process.on;
 const originalProcessOff = process.off;
-const originalProcessExit = process.exit;
 
 /** Renders an interpolated value the way execa splits it into argv. */
 function argText(value: unknown): string {
@@ -351,18 +350,12 @@ beforeEach(() => {
     return process;
     // biome-ignore lint/suspicious/noExplicitAny: Process.off return type is complex
   }) as any;
-
-  process.exit = mock(() => {
-    throw new Error('process.exit called');
-    // biome-ignore lint/suspicious/noExplicitAny: Process.exit type is complex
-  }) as any;
 });
 
 afterEach(() => {
   // Restore process methods
   process.on = originalProcessOn;
   process.off = originalProcessOff;
-  process.exit = originalProcessExit;
 });
 describe('setupCommand - execution tests', () => {
   test('registers SIGINT handler', async () => {
@@ -749,7 +742,7 @@ describe('setupCommand - idempotent recovery', () => {
         'invertase',
         'firebase-extensions'
       )
-    ).rejects.toThrow('process.exit called');
+    ).rejects.toThrow('process.exit(');
   });
 
   test('fails when private mirror create fails and repo is not found on GitHub', async () => {
@@ -766,7 +759,7 @@ describe('setupCommand - idempotent recovery', () => {
 
     await expect(
       setupCommand('git@github.com:test/repo.git', 'test-vendor')
-    ).rejects.toThrow('process.exit called');
+    ).rejects.toThrow('process.exit(');
   });
 });
 
@@ -1626,7 +1619,7 @@ describe('stageCommand', () => {
     });
 
     await expect(stageCommand('feature-branch')).rejects.toThrow(
-      'process.exit called'
+      'process.exit('
     );
 
     expect(process.exit).toHaveBeenCalledWith(1);
@@ -1666,7 +1659,7 @@ describe('stageCommand', () => {
     );
 
     await expect(stageCommand('feature-branch')).rejects.toThrow(
-      'process.exit called'
+      'process.exit('
     );
 
     expect(process.exit).toHaveBeenCalledWith(1);
@@ -2992,7 +2985,7 @@ describe('syncCommand - error paths', () => {
       Promise.reject(new Error('fatal: bad revision'))
     );
 
-    await expect(syncCommand('main')).rejects.toThrow('process.exit called');
+    await expect(syncCommand('main')).rejects.toThrow('process.exit(');
 
     expect(process.exit).toHaveBeenCalledWith(1);
     expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
@@ -3010,7 +3003,7 @@ describe('syncCommand - error paths', () => {
       )
     );
 
-    await expect(syncCommand('main')).rejects.toThrow('process.exit called');
+    await expect(syncCommand('main')).rejects.toThrow('process.exit(');
 
     expect(clack.log.error).toHaveBeenLastCalledWith(
       'upstream/main not found after fetch. Check the upstream remote and the default branch name.'
@@ -3384,9 +3377,7 @@ describe('pullRequestCommand', () => {
       stderr: '',
     });
 
-    await expect(pullRequestCommand('42')).rejects.toThrow(
-      'process.exit called'
-    );
+    await expect(pullRequestCommand('42')).rejects.toThrow('process.exit(');
     expect(
       execaCalls.some((cmd) => cmd.includes('git fetch upstream pull/42'))
     ).toBe(false);
@@ -3399,7 +3390,7 @@ describe('pullRequestCommand', () => {
       stderr: '',
     });
     await expect(pullRequestCommand('not-a-pr-ref')).rejects.toThrow(
-      'process.exit called'
+      'process.exit('
     );
   });
 });
@@ -3713,13 +3704,13 @@ describe('issueCommand', () => {
     await expect(
       // biome-ignore lint/suspicious/noExplicitAny: testing invalid runtime input
       issueCommand('burn' as any, '7')
-    ).rejects.toThrow('process.exit called');
+    ).rejects.toThrow('process.exit(');
   });
 
   test('rejects missing target', async () => {
     setupCommonRemotes();
     await expect(issueCommand('stage', undefined)).rejects.toThrow(
-      'process.exit called'
+      'process.exit('
     );
   });
 

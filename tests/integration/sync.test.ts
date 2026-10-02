@@ -22,18 +22,13 @@ const BOT = 'venfork-bot <venfork-bot@users.noreply.github.com>';
 let fx: MirrorFixture;
 let active: MirrorFixture | undefined;
 const originalCwd = process.cwd();
-const originalExit = process.exit;
 
 beforeEach(async () => {
   fx = await createMirrorFixture();
   active = fx;
-  process.exit = mock((code?: number) => {
-    throw new Error(`process.exit(${code})`);
-  }) as typeof process.exit;
 });
 
 afterEach(async () => {
-  process.exit = originalExit;
   process.chdir(originalCwd);
   await active?.cleanup();
   active = undefined;
