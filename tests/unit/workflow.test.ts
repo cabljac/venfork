@@ -72,7 +72,7 @@ describe('workflow helpers', () => {
   test('pins the venfork version in the install step', () => {
     const workflow = generateSyncWorkflow('0 */6 * * *', 'standard', '1.2.3');
     expect(workflow).toContain(
-      `run: npm install -g "\${VENFORK_INSTALL_SPEC:-venfork@1.2.3}"`
+      `run: npm install -g --ignore-scripts "\${VENFORK_INSTALL_SPEC:-venfork@1.2.3}"`
     );
     expect(workflow).toMatchSnapshot();
   });
@@ -80,7 +80,7 @@ describe('workflow helpers', () => {
   test('defaults the pin to the running CLI version from package.json', () => {
     expect(VENFORK_VERSION).toBe(pkg.version);
     expect(generateSyncWorkflow('0 */6 * * *')).toContain(
-      `run: npm install -g "\${VENFORK_INSTALL_SPEC:-venfork@${pkg.version}}"`
+      `run: npm install -g --ignore-scripts "\${VENFORK_INSTALL_SPEC:-venfork@${pkg.version}}"`
     );
   });
 
@@ -113,10 +113,19 @@ describe('workflow helpers', () => {
     expect(step).toContain('gh issue comment');
   });
 
+  test('installs venfork before checking out the mirror', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *');
+    expect(workflow.indexOf('- name: Install venfork')).toBeGreaterThan(-1);
+    expect(workflow.indexOf('- name: Install venfork')).toBeLessThan(
+      workflow.indexOf('- name: Checkout mirror')
+    );
+  });
+
   test('serializes runs and caps their duration', () => {
     const workflow = generateSyncWorkflow('0 */6 * * *');
     expect(workflow).toContain(
-      'concurrency:\n  group: venfork-sync\n  cancel-in-progress: false\n'
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expression we are asserting.
+      'concurrency:\n  group: venfork-sync-${{ github.workflow }}\n  cancel-in-progress: false\n'
     );
     expect(workflow).toContain(
       '  sync:\n    runs-on: ubuntu-latest\n    timeout-minutes: 30\n'

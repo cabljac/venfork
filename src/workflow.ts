@@ -72,7 +72,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: venfork-sync
+  group: venfork-sync-\${{ github.workflow }}
   cancel-in-progress: false
 
 jobs:
@@ -80,6 +80,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Install venfork
+        env:
+          VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
+        run: npm install -g --ignore-scripts "\${VENFORK_INSTALL_SPEC:-venfork@${version}}"
       - name: Checkout mirror
         uses: actions/checkout@v4
         with:
@@ -95,10 +99,6 @@ jobs:
           # value is a separate entry under the same key.
           git config --global --add url."https://github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
-      - name: Install venfork
-        env:
-          VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
-        run: npm install -g "\${VENFORK_INSTALL_SPEC:-venfork@${version}}"
       - name: Configure venfork remotes
         shell: bash
         run: |
