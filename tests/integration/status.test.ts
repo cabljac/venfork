@@ -1,10 +1,19 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test';
 import * as prompts from '@clack/prompts';
 import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
 import { statusCommand } from '../../src/commands.js';
+import * as config from '../../src/config.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
@@ -42,5 +51,24 @@ describe('status config warning', () => {
     await statusCommand();
 
     expect(prompts.log.warn).not.toHaveBeenCalled();
+  });
+
+  test('warns on an unexpected error while reading venfork-config', async () => {
+    const read = spyOn(config, 'readVenforkConfigFromRepo').mockImplementation(
+      async () => {
+        throw new Error('spawn git ENOENT');
+      }
+    );
+    try {
+      await statusCommand();
+    } finally {
+      read.mockRestore();
+    }
+
+    expect(prompts.log.warn).toHaveBeenCalledTimes(1);
+    const message = (prompts.log.warn as unknown as ReturnType<typeof mock>)
+      .mock.calls[0][0];
+    expect(message).toContain('Could not read venfork-config');
+    expect(message).toContain('spawn git ENOENT');
   });
 });

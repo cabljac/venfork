@@ -1,6 +1,6 @@
 import * as p from '@clack/prompts';
 import { readVenforkConfigFromRepo, type VenforkConfig } from '../config.js';
-import { ConfigError, NotInRepositoryError } from '../errors.js';
+import { NotInRepositoryError } from '../errors.js';
 import {
   getCurrentBranch,
   getRemotes,
@@ -33,9 +33,9 @@ export async function statusCommand(): Promise<void> {
   try {
     config = await readVenforkConfigFromRepo(process.cwd());
   } catch (err) {
-    if (err instanceof ConfigError) {
-      p.log.warn(`Could not read venfork-config: ${err.message}`);
-    }
+    p.log.warn(
+      `Could not read venfork-config: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
   const mode: 'standard' | 'no-public' =
     config?.mode === 'no-public' ? 'no-public' : 'standard';
