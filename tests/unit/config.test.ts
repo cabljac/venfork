@@ -93,6 +93,8 @@ function getMockExecaResponse(command: string) {
 }
 
 import {
+  assertNoInvalidPreserve,
+  preserveRemoveHint,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
 } from '../../src/config.js';
@@ -507,5 +509,27 @@ describe('updateVenforkConfig', () => {
 
     // Only one push attempt — we don't retry auth failures.
     expect(pushAttempt).toBe(1);
+  });
+});
+
+describe('preserve remove hints', () => {
+  test.each([
+    ['*.md', "venfork preserve remove '*.md'"],
+    ['docs/', "venfork preserve remove 'docs/'"],
+    ["it's here.md", "venfork preserve remove 'it'\\''s here.md'"],
+  ])('quotes %p for the shell', (entry, hint) => {
+    expect(preserveRemoveHint(entry)).toBe(hint);
+  });
+
+  test('assertNoInvalidPreserve names a quoted hint for every entry', () => {
+    expect(() =>
+      assertNoInvalidPreserve({
+        version: '1',
+        upstreamUrl: 'git@github.com:a/b.git',
+        invalidPreserve: ['*.md', 'docs/'],
+      })
+    ).toThrow(
+      "  - *.md: venfork preserve remove '*.md'\n  - docs/: venfork preserve remove 'docs/'"
+    );
   });
 });

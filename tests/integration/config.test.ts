@@ -107,7 +107,7 @@ describe('invalid preserve entries', () => {
     expect(error).toBeInstanceOf(ConfigError);
     expect((error as Error).message).toContain('docs/*.md');
     expect((error as Error).message).toContain(
-      'venfork preserve remove docs/*.md'
+      "venfork preserve remove 'docs/*.md'"
     );
     expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
     expect(await fx.fileAt(fx.origin, 'main', 'docs/a.md')).toBe(

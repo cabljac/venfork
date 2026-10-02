@@ -645,13 +645,34 @@ function toPersisted(config: VenforkConfig): VenforkConfig {
 export function assertNoInvalidPreserve(config: VenforkConfig | null): void {
   const invalid = config?.invalidPreserve ?? [];
   if (invalid.length === 0) return;
-  throw new ConfigError(
-    `The preserve list has entries venfork no longer accepts (single files only; no globs, pathspec magic or directories):\n${invalid
-      .map((entry) => `  - ${entry}: venfork preserve remove ${entry}`)
+  throw invalidPreserveError(invalid);
+}
+
+/**
+ * The {@link ConfigError} for preserve entries venfork does not accept,
+ * naming each one and the command that removes it.
+ *
+ * @param entries The rejected entries, as stored in the config.
+ */
+export function invalidPreserveError(entries: readonly string[]): ConfigError {
+  return new ConfigError(
+    `The preserve list has entries venfork no longer accepts (single files only; no globs, pathspec magic or directories):\n${entries
+      .map((entry) => `  - ${entry}: ${preserveRemoveHint(entry)}`)
       .join(
         '\n'
       )}\nRemove each entry, then add the individual files you want to keep.`
   );
+}
+
+/**
+ * The `venfork preserve remove` command for `entries`, each single-quoted
+ * so a shell passes it through unchanged (`*.md` is not expanded).
+ *
+ * @param entries Preserve entries.
+ */
+export function preserveRemoveHint(...entries: string[]): string {
+  const quoted = entries.map((entry) => `'${entry.replaceAll("'", "'\\''")}'`);
+  return `venfork preserve remove ${quoted.join(' ')}`;
 }
 
 function parseConfig(

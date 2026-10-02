@@ -2,6 +2,7 @@ import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import {
   normalizePreservePath,
+  preserveRemoveHint,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
   type VenforkConfigPatch,
@@ -116,7 +117,7 @@ export async function preserveCommand(
       if (invalid.length > 0) {
         p.note(
           invalid
-            .map((entry) => `- ${entry}: venfork preserve remove ${entry}`)
+            .map((entry) => `- ${entry}: ${preserveRemoveHint(entry)}`)
             .join('\n'),
           'Invalid entries (sync refuses to run until they are removed)'
         );
