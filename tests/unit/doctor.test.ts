@@ -214,4 +214,26 @@ describe('doctor GitHub checks', () => {
     });
     expect(checks['cron-age'].ok).toBe('skipped');
   });
+
+  test('a failing gh call skips its check with the gh error', async () => {
+    responses.unshift(
+      ['gh secret list', fail('HTTP 403: Resource not accessible')],
+      ['gh run list', fail('HTTP 502')]
+    );
+
+    const checks = await ghChecks();
+
+    expect(checks.token).toEqual({
+      id: 'token',
+      ok: 'skipped',
+      detail:
+        'cannot list secrets on acme/widget-private: HTTP 403: Resource not accessible',
+    });
+    expect(checks['last-run']).toEqual({
+      id: 'last-run',
+      ok: 'skipped',
+      detail: 'cannot list runs: HTTP 502',
+    });
+    expect(checks['cron-age'].ok).toBe('skipped');
+  });
 });

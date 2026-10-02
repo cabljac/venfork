@@ -6,6 +6,7 @@ import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
 import { cronMaxIntervalMinutes } from '../shared/cron.js';
 import { checkDivergence } from '../shared/divergence.js';
 import { isManagedCommit } from '../shared/managed-commit.js';
+import { netExec, netFailureReason } from '../shared/net.js';
 import { parseRepoPath } from '../utils.js';
 import { VENFORK_VERSION } from '../version.js';
 import { generateSyncWorkflow } from '../workflow.js';
@@ -169,9 +170,9 @@ export async function runDoctorChecks(
     'upstream',
     ...(noPublic ? [] : ['public']),
   ].filter((name) => remotes[name]);
-  const fetched = await git(
-    false
-  )`git fetch --quiet --multiple ${fetchRemotes}`;
+  const fetched = await netExec(cwd, {
+    bufferOutput: true,
+  })`git fetch --quiet --multiple ${fetchRemotes}`;
   const defaultBranch = await getDefaultBranch('upstream', cwd);
   const revParse = async (ref: string): Promise<string> => {
     const result = await git(
@@ -184,7 +185,7 @@ export async function runDoctorChecks(
   if (fetched.exitCode !== 0 || !originTip || !upstreamTip) {
     const detail =
       fetched.exitCode !== 0
-        ? `git fetch failed: ${fetched.stderr.trim() || `exit ${fetched.exitCode}`}`
+        ? `git fetch failed: ${netFailureReason(fetched)}`
         : `origin/${defaultBranch} or upstream/${defaultBranch} not found`;
     for (const id of ['invariant', 'divergence', 'preserve', 'workflow']) {
       checks.push({ id, ok: false, detail });
@@ -367,21 +368,20 @@ export async function runDoctorChecks(
       detail: 'not needed in no-public mode',
     });
   } else {
-    const secrets = await $({
-      cwd,
-      reject: false,
+    const secrets = await netExec(cwd, {
+      bufferOutput: true,
     })`gh secret list --repo ${mirrorRepo} --json name`;
     if (secrets.exitCode !== 0) {
       skip(
         'token',
-        `cannot list secrets on ${mirrorRepo}: ${secrets.stderr.trim() || `exit ${secrets.exitCode}`}`
+        `cannot list secrets on ${mirrorRepo}: ${netFailureReason(secrets)}`
       );
     } else {
       let names: string[] = [];
       try {
-        names = (JSON.parse(secrets.stdout) as Array<{ name: string }>).map(
-          (entry) => entry.name
-        );
+        names = (
+          JSON.parse(secrets.stdout ?? '') as Array<{ name: string }>
+        ).map((entry) => entry.name);
       } catch {
         names = [];
       }
@@ -398,21 +398,17 @@ export async function runDoctorChecks(
     }
   }
 
-  const runs = await $({
-    cwd,
-    reject: false,
+  const runs = await netExec(cwd, {
+    bufferOutput: true,
   })`gh run list --repo ${mirrorRepo} --workflow ${SYNC_WORKFLOW_FILE} --limit 1 --json conclusion,status,url,createdAt`;
   let lastRun: LastRun | null = null;
   if (runs.exitCode !== 0) {
-    skip(
-      'last-run',
-      `cannot list runs: ${runs.stderr.trim() || `exit ${runs.exitCode}`}`
-    );
+    skip('last-run', `cannot list runs: ${netFailureReason(runs)}`);
     skip('cron-age', 'needs the last run');
     return checks;
   }
   try {
-    lastRun = (JSON.parse(runs.stdout) as LastRun[])[0] ?? null;
+    lastRun = (JSON.parse(runs.stdout ?? '') as LastRun[])[0] ?? null;
   } catch {
     lastRun = null;
   }
