@@ -11,18 +11,14 @@ jobs:
     name: Test & Build
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        bun-version: [1.2.18]
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+        uses: oven-sh/setup-bun@v2
         with:
-          bun-version: ${{ matrix.bun-version }}
+          bun-version-file: .bun-version
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -34,10 +30,16 @@ jobs:
         run: bun run lint
 
       - name: Run unit tests
-        run: bun run test:unit
+        run: bun run test:unit --reporter=junit --reporter-outfile=unit.xml
+
+      - name: Check unit test count
+        run: bun scripts/test-count.ts unit unit.xml
 
       - name: Run integration tests
-        run: bun run test:integration
+        run: bun run test:integration --reporter=junit --reporter-outfile=integration.xml
+
+      - name: Check integration test count
+        run: bun scripts/test-count.ts integration integration.xml
 
       - name: Build
         run: bun run build
@@ -75,9 +77,9 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - name: Setup Bun (for building)
-        uses: oven-sh/setup-bun@v1
+        uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.18
+          bun-version-file: .bun-version
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

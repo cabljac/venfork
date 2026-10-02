@@ -14,7 +14,7 @@ A CLI that creates and manages **private mirrors of public GitHub repos** for ve
 
 ## Commands (development)
 
-Runtime is **Bun** (primary); Node.js 18+ is a supported target.
+Runtime is **Bun** (primary); Node.js `^18.19.0 || >=20.5.0` (execa 9) is a supported target.
 
 ```bash
 bun install              # deps

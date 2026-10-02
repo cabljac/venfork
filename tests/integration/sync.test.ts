@@ -8,6 +8,7 @@ import { preserveCommand, syncCommand } from '../../src/commands.js';
 import { updateVenforkConfig } from '../../src/config.js';
 import { SyncDivergenceError } from '../../src/errors.js';
 import { getDefaultBranch } from '../../src/git.js';
+import { checkDivergence } from '../../src/shared/divergence.js';
 import { isManagedCommit } from '../../src/shared/managed-commit.js';
 import {
   createMirrorFixture,
@@ -22,18 +23,13 @@ const BOT = 'venfork-bot <venfork-bot@users.noreply.github.com>';
 let fx: MirrorFixture;
 let active: MirrorFixture | undefined;
 const originalCwd = process.cwd();
-const originalExit = process.exit;
 
 beforeEach(async () => {
   fx = await createMirrorFixture();
   active = fx;
-  process.exit = mock((code?: number) => {
-    throw new Error(`process.exit(${code})`);
-  }) as typeof process.exit;
 });
 
 afterEach(async () => {
-  process.exit = originalExit;
   process.chdir(originalCwd);
   await active?.cleanup();
   active = undefined;
@@ -49,10 +45,12 @@ function enableSchedule(): Promise<unknown> {
   });
 }
 
-function setClock(epochSeconds: number): void {
-  const date = `@${epochSeconds} +0000`;
-  process.env.GIT_AUTHOR_DATE = date;
-  process.env.GIT_COMMITTER_DATE = date;
+/** Waits until the wall clock enters the next whole second. */
+async function nextSecond(): Promise<void> {
+  const start = Math.floor(Date.now() / 1000);
+  while (Math.floor(Date.now() / 1000) === start) {
+    await Bun.sleep(50);
+  }
 }
 
 describe('harness', () => {
@@ -79,14 +77,16 @@ describe('sync with the managed commit', () => {
   test('sync twice with no upstream change yields the same origin SHA', async () => {
     await enableSchedule();
 
-    setClock(1_800_000_000);
+    const firstAt = Math.floor(Date.now() / 1000);
     await sync();
     const first = await fx.sha(fx.origin, 'main');
     const pushesAfterFirst = await fx.pushCount(fx.origin, 'refs/heads/main');
 
-    setClock(1_800_003_600);
+    await nextSecond();
+    const secondAt = Math.floor(Date.now() / 1000);
     await sync();
 
+    expect(secondAt).toBeGreaterThan(firstAt);
     expect(await fx.sha(fx.origin, 'main')).toBe(first);
     expect(await fx.pushCount(fx.origin, 'refs/heads/main')).toBe(
       pushesAfterFirst
@@ -196,7 +196,6 @@ describe('sync with the managed commit', () => {
 
   test('the managed commit SHA ignores i18n.commitEncoding', async () => {
     await enableSchedule();
-    setClock(1_800_000_000);
     process.env.GIT_CONFIG_COUNT = '1';
     process.env.GIT_CONFIG_KEY_0 = 'i18n.commitEncoding';
     process.env.GIT_CONFIG_VALUE_0 = 'ISO-8859-1';
@@ -382,5 +381,25 @@ describe('sync with the managed commit', () => {
         "Preserved path 'tools' is a directory on origin/main; preserve supports single files only"
       )
     );
+  });
+});
+
+describe('divergence check errors', () => {
+  test('an unresolvable upstream ref throws instead of reporting no divergence', async () => {
+    await fx.commitOnOrigin({ 'src/mirror.txt': 'mirror\n' });
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+    await fx.git(fx.work, 'update-ref', '-d', 'refs/remotes/upstream/main');
+    const originBefore = await fx.sha(fx.origin, 'main');
+
+    await expect(
+      checkDivergence({
+        remote: 'origin',
+        defaultBranch: 'main',
+        allowPreserved: true,
+        preserveAllowed: new Set(),
+        cwd: fx.work,
+      })
+    ).rejects.toThrow();
+    expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
   });
 });

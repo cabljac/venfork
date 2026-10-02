@@ -19,19 +19,14 @@ const CALLER = '.github/workflows/caller.yml';
 let fx: MirrorFixture;
 let active: MirrorFixture | undefined;
 const originalCwd = process.cwd();
-const originalExit = process.exit;
 
 beforeEach(async () => {
   fx = await createMirrorFixture();
   active = fx;
-  process.exit = mock((code?: number) => {
-    throw new Error(`process.exit(${code})`);
-  }) as typeof process.exit;
   process.chdir(fx.work);
 });
 
 afterEach(async () => {
-  process.exit = originalExit;
   process.chdir(originalCwd);
   await active?.cleanup();
   active = undefined;
