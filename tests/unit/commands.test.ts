@@ -114,19 +114,23 @@ function getMockExecaResponse(
   if (command.includes('git rev-parse --verify upstream/')) {
     return Promise.resolve({ exitCode: 0, stdout: 'upstream0tip', stderr: '' });
   }
-  if (command.includes('git write-tree')) {
+  if (command.endsWith(' write-tree')) {
     return Promise.resolve({ exitCode: 0, stdout: 'mirror0tree', stderr: '' });
   }
   if (command.includes(' commit-tree ')) {
     return Promise.resolve({ exitCode: 0, stdout: 'managed0tip', stderr: '' });
   }
-  const preserveSource = command.match(
-    /^git --literal-pathspecs ls-tree (?!HEAD )\S+ -- (.+)$/
+  // Tip-builder tree lookups: upstream has a path only when accessExists
+  // says so; every other tip holds a regular file at the asked path.
+  const treeLookup = command.match(
+    /--literal-pathspecs ls-tree -z (\S+) -- (.+)$/
   );
-  if (preserveSource) {
+  if (treeLookup) {
+    const [, ref, entry] = treeLookup;
+    const present = ref !== 'upstream0tip' || accessExists(entry);
     return Promise.resolve({
       exitCode: 0,
-      stdout: `100644 blob 0123abcd\t${preserveSource[1]}`,
+      stdout: present ? `100644 blob 0123abcd\t${entry}\0` : '',
       stderr: '',
     });
   }
@@ -869,12 +873,12 @@ describe('syncCommand', () => {
     }
 
     expect(
-      execaCalls.some((cmd) => cmd.includes('git worktree add --detach'))
+      execaCalls.some((cmd) => cmd.endsWith(' read-tree upstream0tip'))
     ).toBe(true);
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git -c i18n.commitEncoding=UTF-8 commit-tree --no-gpg-sign mirror0tree -p upstream0tip -m chore: venfork-managed mirror commit -m Venfork-Managed: 1'
+          '-c i18n.commitEncoding=UTF-8 commit-tree --no-gpg-sign mirror0tree -p upstream0tip -m chore: venfork-managed mirror commit -m Venfork-Managed: 1'
         )
       )
     ).toBe(true);
@@ -891,8 +895,10 @@ describe('syncCommand', () => {
       )
     ).toBe(false);
     expect(
-      writeFileCalls.some((w) =>
-        w.path.includes('.github/workflows/venfork-sync.yml')
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('update-index --add --cacheinfo 100644,') &&
+          cmd.endsWith(',.github/workflows/venfork-sync.yml')
       )
     ).toBe(true);
   });
@@ -916,7 +922,7 @@ describe('syncCommand', () => {
     }
 
     expect(
-      execaCalls.some((cmd) => cmd.includes('git worktree add --detach'))
+      execaCalls.some((cmd) => cmd.endsWith(' read-tree upstream0tip'))
     ).toBe(false);
   });
 
@@ -945,13 +951,20 @@ describe('syncCommand', () => {
 
     // The "+1 commit" path runs even though schedule is disabled.
     expect(
-      execaCalls.some((cmd) => cmd.includes('git worktree add --detach'))
+      execaCalls.some((cmd) => cmd.endsWith(' read-tree upstream0tip'))
     ).toBe(true);
-    // The preserved file is checked out from the captured previous mirror tip.
+    // The preserved blob comes from the captured previous mirror tip.
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes(
-          'git --literal-pathspecs checkout aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/caller.yml'
+        cmd.endsWith(
+          'ls-tree -z aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/caller.yml'
+        )
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.endsWith(
+          'update-index --add --cacheinfo 100644,0123abcd,.github/workflows/caller.yml'
         )
       )
     ).toBe(true);
@@ -981,7 +994,7 @@ describe('syncCommand', () => {
       stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
       stderr: '',
     });
-    // Pretend the temp worktree (started from upstream) already has the file.
+    // Pretend the upstream tree already has the file.
     accessExists = (p) => p.includes('.github/workflows/ci.yml');
 
     try {
@@ -1018,7 +1031,7 @@ describe('syncCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git --literal-pathspecs ls-tree aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/missing.yml',
+      'ls-tree -z aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/missing.yml',
       { exitCode: 0, stdout: '', stderr: '' }
     );
 
@@ -1029,8 +1042,7 @@ describe('syncCommand', () => {
       caught = true;
     }
 
-    // process.exit(1) is mocked to throw — sync should have errored before
-    // creating the deterministic commit on the temp worktree.
+    // process.exit(1) is mocked to throw; sync errors before commit-tree.
     expect(caught).toBe(true);
     expect(
       execaCalls.some(
@@ -1076,8 +1088,8 @@ describe('syncCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git diff-tree -r --no-commit-id --name-only -m --first-parent v2v2v2v2v2v2v2v2',
-      { exitCode: 0, stdout: 'agent.yml\n', stderr: '' }
+      'git diff-tree -r -z --no-commit-id --name-only -m --first-parent v2v2v2v2v2v2v2v2',
+      { exitCode: 0, stdout: 'agent.yml\0', stderr: '' }
     );
     mockResponses.set('git log -1 --format=%s v2v2v2v2v2v2v2v2', {
       exitCode: 0,
@@ -1094,8 +1106,8 @@ describe('syncCommand', () => {
     // The +1 commit takes agent.yml from the v2 commit.
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes(
-          'git --literal-pathspecs checkout v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2 -- agent.yml'
+        cmd.endsWith(
+          'ls-tree -z v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2 -- agent.yml'
         )
       )
     ).toBe(true);
@@ -1142,8 +1154,8 @@ describe('syncCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git diff-tree -r --no-commit-id --name-only -m --first-parent orphancommit11111',
-      { exitCode: 0, stdout: 'agent.yml\n', stderr: '' }
+      'git diff-tree -r -z --no-commit-id --name-only -m --first-parent orphancommit11111',
+      { exitCode: 0, stdout: 'agent.yml\0', stderr: '' }
     );
 
     await expect(syncCommand('main')).rejects.toBeInstanceOf(
@@ -1239,10 +1251,10 @@ describe('syncCommand', () => {
     });
     // That commit's changed files: only the preserved path.
     mockResponses.set(
-      'git diff-tree -r --no-commit-id --name-only -m --first-parent feedfacecafebabe',
+      'git diff-tree -r -z --no-commit-id --name-only -m --first-parent feedfacecafebabe',
       {
         exitCode: 0,
-        stdout: '.github/workflows/caller.yml\n',
+        stdout: '.github/workflows/caller.yml\0',
         stderr: '',
       }
     );
@@ -1380,7 +1392,7 @@ describe('stageCommand', () => {
       stdout: 'chore: venfork-managed mirror commit',
       stderr: '',
     });
-    mockResponses.set('git show --name-only --pretty=format: mgd111', {
+    mockResponses.set('git show -z --name-only --pretty=format: mgd111', {
       exitCode: 0,
       stdout: 'internal/NOTES.md',
       stderr: '',
@@ -1390,7 +1402,7 @@ describe('stageCommand', () => {
       stdout: 'feat: real feature work',
       stderr: '',
     });
-    mockResponses.set('git show --name-only --pretty=format: feat222', {
+    mockResponses.set('git show -z --name-only --pretty=format: feat222', {
       exitCode: 0,
       stdout: 'src/index.ts',
       stderr: '',
@@ -1439,7 +1451,7 @@ describe('stageCommand', () => {
       stdout: 'feat: real feature work',
       stderr: '',
     });
-    mockResponses.set('git show --name-only --pretty=format: feat222', {
+    mockResponses.set('git show -z --name-only --pretty=format: feat222', {
       exitCode: 0,
       stdout: 'src/index.ts',
       stderr: '',
@@ -1520,7 +1532,7 @@ describe('stageCommand', () => {
       stdout: 'feat: real feature work',
       stderr: '',
     });
-    mockResponses.set('git show --name-only --pretty=format: feat111', {
+    mockResponses.set('git show -z --name-only --pretty=format: feat111', {
       exitCode: 0,
       stdout: 'src/index.ts',
       stderr: '',
@@ -1530,7 +1542,7 @@ describe('stageCommand', () => {
       stdout: 'feat: more real feature work',
       stderr: '',
     });
-    mockResponses.set('git show --name-only --pretty=format: feat333', {
+    mockResponses.set('git show -z --name-only --pretty=format: feat333', {
       exitCode: 0,
       stdout: 'src/other.ts',
       stderr: '',
@@ -1546,7 +1558,7 @@ describe('stageCommand', () => {
       stdout: 'venfork-bot@users.noreply.github.com',
       stderr: '',
     });
-    mockResponses.set('git show --name-only --pretty=format: wf222', {
+    mockResponses.set('git show -z --name-only --pretty=format: wf222', {
       exitCode: 0,
       stdout: '.github/workflows/venfork-sync.yml',
       stderr: '',
@@ -1597,7 +1609,7 @@ describe('stageCommand', () => {
       stdout: 'ci: tighten test matrix on ci.yml',
       stderr: '',
     });
-    mockResponses.set('git show --name-only --pretty=format: userci1', {
+    mockResponses.set('git show -z --name-only --pretty=format: userci1', {
       exitCode: 0,
       stdout: '.github/workflows/ci.yml',
       stderr: '',
@@ -1731,7 +1743,7 @@ describe('stageCommand', () => {
       stdout: 'feat: real feature work',
       stderr: '',
     });
-    mockResponses.set('git show --name-only --pretty=format: feat111', {
+    mockResponses.set('git show -z --name-only --pretty=format: feat111', {
       exitCode: 0,
       stdout: 'src/feature.ts',
       stderr: '',
@@ -1784,7 +1796,7 @@ describe('stageCommand', () => {
         stdout: `feat: work ${sha}`,
         stderr: '',
       });
-      mockResponses.set(`git show --name-only --pretty=format: ${sha}`, {
+      mockResponses.set(`git show -z --name-only --pretty=format: ${sha}`, {
         exitCode: 0,
         stdout: 'src/feature.ts',
         stderr: '',
@@ -2385,8 +2397,10 @@ describe('scheduleCommand', () => {
       )
     ).toBe(true);
     expect(
-      writeFileCalls.some((w) =>
-        w.path.includes('.github/workflows/venfork-sync.yml')
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('update-index --add --cacheinfo 100644,') &&
+          cmd.endsWith(',.github/workflows/venfork-sync.yml')
       )
     ).toBe(true);
   });
@@ -2917,9 +2931,9 @@ describe('syncCommand - error paths', () => {
       stdout: 'venfork-bot@users.noreply.github.com',
       stderr: '',
     });
-    mockResponses.set('git show --name-only --pretty=format: abc123', {
+    mockResponses.set('git show -z --name-only --pretty=format: abc123', {
       exitCode: 0,
-      stdout: '.github/workflows/sync.yml\n.github/workflows/venfork-sync.yml',
+      stdout: '.github/workflows/sync.yml\0.github/workflows/venfork-sync.yml',
       stderr: '',
     });
 
@@ -2948,9 +2962,9 @@ describe('syncCommand - error paths', () => {
       stdout: 'feat: real work on main',
       stderr: '',
     });
-    mockResponses.set('git show --name-only --pretty=format: deadbee', {
+    mockResponses.set('git show -z --name-only --pretty=format: deadbee', {
       exitCode: 0,
-      stdout: '.github/workflows/sync.yml\nsrc/index.ts',
+      stdout: '.github/workflows/sync.yml\0src/index.ts',
       stderr: '',
     });
 
@@ -2981,7 +2995,7 @@ describe('syncCommand - error paths', () => {
       stdout: 'ci: tighten test matrix on ci.yml',
       stderr: '',
     });
-    mockResponses.set('git show --name-only --pretty=format: userci1', {
+    mockResponses.set('git show -z --name-only --pretty=format: userci1', {
       exitCode: 0,
       stdout: '.github/workflows/ci.yml',
       stderr: '',

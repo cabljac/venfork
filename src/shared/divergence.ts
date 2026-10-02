@@ -27,16 +27,9 @@ export async function changedFilesInCommit(
   const result = await $({
     ...cwdOpt,
     reject: false,
-  })`git diff-tree -r --no-commit-id --name-only -m --first-parent ${ref}`;
+  })`git diff-tree -r -z --no-commit-id --name-only -m --first-parent ${ref}`;
   if (result.exitCode !== 0) return [];
-  // Strip only a trailing CR (CRLF on Windows checkouts), not arbitrary
-  // whitespace — git path entries can in principle contain leading/trailing
-  // spaces, and `trim()` would silently mangle them. Empty lines after the
-  // CR strip are dropped.
-  return result.stdout
-    .split('\n')
-    .map((line) => line.replace(/\r$/, ''))
-    .filter((line) => line !== '');
+  return result.stdout.split('\0').filter((entry) => entry !== '');
 }
 
 /**

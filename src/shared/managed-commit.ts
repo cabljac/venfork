@@ -58,16 +58,13 @@ async function commitTouchesWorkflowPath(
   const filesResult = await $({
     ...cwdOpt,
     reject: false,
-  })`git show --name-only --pretty=format: ${ref}`;
+  })`git show -z --name-only --pretty=format: ${ref}`;
   if (filesResult.exitCode !== 0) {
     return false;
   }
-  // Same line-handling rule as `changedFilesInCommit`: only strip a
-  // trailing CR (CRLF on Windows checkouts), not arbitrary whitespace.
   const changedFiles = filesResult.stdout
-    .split('\n')
-    .map((line) => line.replace(/\r$/, ''))
-    .filter((line) => line !== '');
+    .split('\0')
+    .filter((entry) => entry !== '');
   if (!changedFiles.length) {
     return false;
   }

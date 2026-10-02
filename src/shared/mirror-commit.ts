@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
@@ -11,13 +12,11 @@ import {
   VENFORK_BOT_NAME,
   WORKFLOWS_DIR,
 } from './constants.js';
-import { pathExists } from './fs.js';
 import {
   MANAGED_COMMIT_MESSAGE,
   MANAGED_COMMIT_TRAILER,
 } from './managed-commit.js';
 import { netExec, netFailureReason } from './net.js';
-import { withDetachedWorktree } from './worktree.js';
 
 /** Basenames of `entries`, trimmed, de-duplicated and sorted. */
 export function normalizeWorkflowList(entries: string[]): string[] {
@@ -31,31 +30,119 @@ export function normalizeWorkflowList(entries: string[]): string[] {
   );
 }
 
-async function listWorkflowFiles(cwd: string): Promise<string[]> {
-  const result = await $({
-    cwd,
-    reject: false,
-  })`git ls-tree -r --name-only HEAD -- ${WORKFLOWS_DIR}`;
-  if (result.exitCode !== 0 || !result.stdout.trim()) {
-    return [];
+/** One entry of `git ls-tree -z` output. */
+interface TreeEntry {
+  mode: string;
+  type: string;
+  oid: string;
+  path: string;
+}
+
+function parseLsTree(stdout: string): TreeEntry[] {
+  const entries: TreeEntry[] = [];
+  for (const record of stdout.split('\0')) {
+    if (!record) continue;
+    const match = record.match(/^(\d+) (\w+) ([0-9a-f]+)\t([\s\S]*)$/);
+    if (match) {
+      entries.push({
+        mode: match[1],
+        type: match[2],
+        oid: match[3],
+        path: match[4],
+      });
+    }
   }
-  return result.stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  return entries;
+}
+
+/** Runs git against the repo with a private index file and no hooks. */
+type PlumbingGit = (
+  args: string[],
+  options?: { input?: string; env?: Record<string, string> }
+) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+
+/**
+ * Runs `fn` with a git runner bound to `repoDir`, a fresh temporary index
+ * (`GIT_INDEX_FILE`) and an empty hooks directory. Inherited `GIT_DIR`,
+ * `GIT_WORK_TREE` and `GIT_INDEX_FILE` are dropped, so the user's index,
+ * worktree, sparse-checkout and hooks never take part.
+ */
+async function withTempIndex<T>(
+  repoDir: string,
+  fn: (git: PlumbingGit) => Promise<T>
+): Promise<T> {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'venfork-index-'));
+  const hooksDir = path.join(tempDir, 'hooks');
+  await mkdir(hooksDir);
+  const baseEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (key === 'GIT_DIR' || key === 'GIT_WORK_TREE') continue;
+    if (key === 'GIT_INDEX_FILE') continue;
+    baseEnv[key] = value;
+  }
+  baseEnv.GIT_INDEX_FILE = path.join(tempDir, 'index');
+  const git: PlumbingGit = async (args, options = {}) => {
+    const result = await $({
+      cwd: repoDir,
+      env: { ...baseEnv, ...options.env },
+      extendEnv: false,
+      reject: false,
+      stripFinalNewline: false,
+      ...(options.input === undefined ? {} : { input: options.input }),
+    })`git -c core.hooksPath=${hooksDir} --literal-pathspecs ${args}`;
+    return {
+      exitCode: result.exitCode ?? 1,
+      stdout: String(result.stdout ?? ''),
+      stderr: String(result.stderr ?? ''),
+    };
+  };
+  try {
+    return await fn(git);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+/** Runs a plumbing command and throws a GitError with stderr on failure. */
+async function mustGit(
+  git: PlumbingGit,
+  args: string[],
+  options?: { input?: string; env?: Record<string, string> }
+): Promise<string> {
+  const result = await git(args, options);
+  if (result.exitCode !== 0) {
+    throw new GitError(
+      `git ${args[0]} failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`,
+      `git ${args[0]}`
+    );
+  }
+  return result.stdout;
+}
+
+/** Entries of `ref`'s tree at exactly `entryPath` (not below it). */
+async function treeEntriesAt(
+  git: PlumbingGit,
+  ref: string,
+  entryPath: string
+): Promise<TreeEntry[]> {
+  const out = await mustGit(git, ['ls-tree', '-z', ref, '--', entryPath]);
+  return parseLsTree(out).filter((entry) => entry.path === entryPath);
 }
 
 /**
  * Builds the commit that `origin/<defaultBranch>` should point at: the
  * upstream tip plus at most one venfork-managed commit. Nothing is pushed.
  *
- * The managed commit holds the sync workflow (when `schedule` is set), the
- * workflow allow/block filtering, and preserved mirror-only files read from
- * `previousMirrorTip`. Its author, committer and dates come from fixed
- * inputs (bot identity, upstream tip's committer date), so the same upstream
- * tip and the same tree always give the same SHA. When the resulting tree
- * equals the upstream tree, no commit is made and the upstream tip is
- * returned.
+ * The tree is assembled with plumbing on a temporary index read from the
+ * upstream tip: no worktree, no filesystem checks, no hooks and no
+ * filters. The managed commit holds the sync workflow (when `schedule` is
+ * set), the workflow allow/block filtering by exact basename, and
+ * preserved mirror-only files copied as blobs from `previousMirrorTip`
+ * unless upstream's tree already has the path. Its author, committer and
+ * dates come from fixed inputs (bot identity, upstream tip's committer
+ * date), so the same inputs always give the same SHA. When the resulting
+ * tree equals the upstream tree, the upstream tip is returned.
  *
  * Pass an empty `previousMirrorTip` when origin has no default branch yet;
  * `preserve` must be empty in that case.
@@ -84,85 +171,115 @@ export async function buildMirrorTip(args: {
   const allowlist = normalizeWorkflowList(enabledWorkflows);
   const blocklist = normalizeWorkflowList(disabledWorkflows);
 
-  return withDetachedWorktree(
-    repoDir,
-    upstreamTip,
-    'venfork-sync-',
-    async (tempDir) => {
-      if (schedule) {
-        await mkdir(path.join(tempDir, '.github', 'workflows'), {
-          recursive: true,
-        });
-        await writeFile(
-          path.join(tempDir, SYNC_WORKFLOW_PATH),
-          generateSyncWorkflow(schedule.cron, schedule.mode)
+  return withTempIndex(repoDir, async (git) => {
+    await mustGit(git, ['read-tree', upstreamTip]);
+
+    if (schedule) {
+      const blob = (
+        await mustGit(git, ['hash-object', '-w', '--no-filters', '--stdin'], {
+          input: generateSyncWorkflow(schedule.cron, schedule.mode),
+        })
+      ).trim();
+      await mustGit(git, [
+        'update-index',
+        '--add',
+        '--cacheinfo',
+        `100644,${blob},${SYNC_WORKFLOW_PATH}`,
+      ]);
+
+      // Precedence: enabledWorkflows allowlist > disabledWorkflows blocklist.
+      if (allowlist.length > 0 || blocklist.length > 0) {
+        const listed = await mustGit(git, [
+          'ls-tree',
+          '-r',
+          '-z',
+          '--name-only',
+          upstreamTip,
+          '--',
+          WORKFLOWS_DIR,
+        ]);
+        for (const workflowFile of listed.split('\0').filter(Boolean)) {
+          if (workflowFile === SYNC_WORKFLOW_PATH) continue;
+          const base = path.posix.basename(workflowFile);
+          const keep =
+            allowlist.length > 0
+              ? allowlist.includes(base)
+              : !blocklist.includes(base);
+          if (!keep) {
+            await mustGit(git, [
+              'update-index',
+              '--force-remove',
+              '--',
+              workflowFile,
+            ]);
+          }
+        }
+      }
+    }
+
+    if (preserve.length > 0) {
+      if (!previousMirrorTip) {
+        throw new Error(
+          `Cannot preserve files: no previous origin/${defaultBranch} tip to read from.\n` +
+            'Run `venfork sync` once to populate the mirror, then commit your preserved files and re-run sync.'
         );
-        await $({ cwd: tempDir })`git add -- ${SYNC_WORKFLOW_PATH}`;
-
-        // Filter upstream workflow files as part of the managed "+1" commit.
-        // Precedence: enabledWorkflows allowlist > disabledWorkflows blocklist.
-        if (allowlist.length > 0 || blocklist.length > 0) {
-          const workflowFiles = await listWorkflowFiles(tempDir);
-          for (const workflowFile of workflowFiles) {
-            if (workflowFile === SYNC_WORKFLOW_PATH) {
-              continue;
-            }
-            const base = path.basename(workflowFile);
-            const shouldKeep =
-              allowlist.length > 0
-                ? allowlist.includes(base)
-                : !blocklist.includes(base);
-            if (!shouldKeep) {
-              await $({
-                cwd: tempDir,
-                reject: false,
-              })`git rm --quiet --ignore-unmatch -- ${workflowFile}`;
-            }
-          }
-        }
       }
-
-      if (preserve.length > 0) {
-        if (!previousMirrorTip) {
-          throw new Error(
-            `Cannot preserve files: no previous origin/${defaultBranch} tip to read from.\n` +
-              'Run `venfork sync` once to populate the mirror, then commit your preserved files and re-run sync.'
+      for (const preservePath of preserve) {
+        if ((await treeEntriesAt(git, upstreamTip, preservePath)).length > 0) {
+          p.log.warn(
+            `preserved file '${preservePath}' now exists upstream — using upstream version`
           );
+          continue;
         }
-        for (const preservePath of preserve) {
-          const upstreamHasIt = await pathExists(
-            path.join(tempDir, preservePath)
-          );
-          if (upstreamHasIt) {
-            p.log.warn(
-              `preserved file '${preservePath}' now exists upstream — using upstream version`
-            );
-            continue;
-          }
-          await addPreservedFile({
-            worktreeDir: tempDir,
-            sourceTip: previousMirrorTip,
-            preservePath,
-            defaultBranch,
-          });
-        }
+        const entry = await preservedEntry({
+          git,
+          upstreamTip,
+          sourceTip: previousMirrorTip,
+          preservePath,
+          defaultBranch,
+        });
+        await mustGit(git, [
+          'update-index',
+          '--add',
+          '--cacheinfo',
+          `${entry.mode},${entry.oid},${preservePath}`,
+        ]);
       }
+    }
 
-      const tree = (await $({ cwd: tempDir })`git write-tree`).stdout.trim();
-      const upstreamTree = (
-        await $({ cwd: tempDir })`git rev-parse ${`${upstreamTip}^{tree}`}`
-      ).stdout.trim();
-      if (tree === upstreamTree) {
-        return upstreamTip;
-      }
+    const tree = (await mustGit(git, ['write-tree'])).trim();
+    const upstreamTree = (
+      await mustGit(git, ['rev-parse', `${upstreamTip}^{tree}`])
+    ).trim();
+    if (tree === upstreamTree) {
+      return upstreamTip;
+    }
 
-      const upstreamDate = (
-        await $({
-          cwd: tempDir,
-        })`git show -s --format=%cd --date=raw ${upstreamTip}`
-      ).stdout.trim();
-      const commit = await $({
-        cwd: tempDir,
+    const upstreamDate = (
+      await mustGit(git, [
+        'show',
+        '-s',
+        '--format=%cd',
+        '--date=raw',
+        upstreamTip,
+      ])
+    ).trim();
+    const commit = await mustGit(
+      git,
+      [
+        '-c',
+        'i18n.commitEncoding=UTF-8',
+        'commit-tree',
+        '--no-gpg-sign',
+        tree,
+        '-p',
+        upstreamTip,
+        '-m',
+        MANAGED_COMMIT_MESSAGE,
+        '-m',
+        MANAGED_COMMIT_TRAILER,
+      ],
+      {
         env: {
           GIT_AUTHOR_NAME: VENFORK_BOT_NAME,
           GIT_AUTHOR_EMAIL: VENFORK_BOT_EMAIL,
@@ -171,10 +288,60 @@ export async function buildMirrorTip(args: {
           GIT_COMMITTER_EMAIL: VENFORK_BOT_EMAIL,
           GIT_COMMITTER_DATE: upstreamDate,
         },
-      })`git -c i18n.commitEncoding=UTF-8 commit-tree --no-gpg-sign ${tree} -p ${upstreamTip} -m ${MANAGED_COMMIT_MESSAGE} -m ${MANAGED_COMMIT_TRAILER}`;
-      return commit.stdout.trim();
+      }
+    );
+    return commit.trim();
+  });
+}
+
+/**
+ * The tree entry to restore for `preservePath` from `sourceTip`. The path
+ * must be a single file (regular, executable or symlink) there, and every
+ * parent directory must be a directory or absent in the upstream tree.
+ */
+async function preservedEntry(args: {
+  git: PlumbingGit;
+  upstreamTip: string;
+  sourceTip: string;
+  preservePath: string;
+  defaultBranch: string;
+}): Promise<TreeEntry> {
+  const { git, upstreamTip, sourceTip, preservePath, defaultBranch } = args;
+  const segments = preservePath.split('/');
+  for (let i = 1; i < segments.length; i++) {
+    const ancestor = segments.slice(0, i).join('/');
+    const found = await treeEntriesAt(git, upstreamTip, ancestor);
+    if (found.some((entry) => entry.type !== 'tree')) {
+      throw new Error(
+        `Preserved file '${preservePath}' cannot be restored: upstream now has a file at '${ancestor}'.\n` +
+          `Move the preserved file elsewhere, or remove the entry with:\n  venfork preserve remove ${preservePath}`
+      );
     }
-  );
+  }
+
+  const entries = await treeEntriesAt(git, sourceTip, preservePath);
+  const [entry] = entries;
+  if (!entry || entries.length !== 1) {
+    throw new Error(
+      `Preserved file '${preservePath}' not found on origin/${defaultBranch}.\n` +
+        'Either commit it to the mirror first, or remove the entry with:\n' +
+        `  venfork preserve remove ${preservePath}`
+    );
+  }
+  if (entry.type === 'tree') {
+    throw new Error(
+      `Preserved path '${preservePath}' is a directory on origin/${defaultBranch}; preserve supports single files only. List each file instead.`
+    );
+  }
+  if (
+    entry.type !== 'blob' ||
+    !['100644', '100755', '120000'].includes(entry.mode)
+  ) {
+    throw new Error(
+      `Preserved path '${preservePath}' is not a regular file, executable or symlink on origin/${defaultBranch} (mode ${entry.mode}); preserve supports single files only.`
+    );
+  }
+  return entry;
 }
 
 /**
@@ -283,72 +450,4 @@ export async function applyMirrorPlusOneCommit(
     cwd: args.cwd,
   });
   return { tip, pushed };
-}
-
-/**
- * Stages `preservePath` from `sourceTip` into the worktree at `worktreeDir`.
- * The path is matched literally and must be a single file (regular,
- * executable or symlink) on `sourceTip`. Throws, without touching the
- * worktree, when the path is missing, is a directory or submodule, or when
- * one of its parent directories is a file in the worktree.
- */
-export async function addPreservedFile(args: {
-  worktreeDir: string;
-  sourceTip: string;
-  preservePath: string;
-  defaultBranch: string;
-}): Promise<void> {
-  const { worktreeDir, sourceTip, preservePath, defaultBranch } = args;
-  const lsTree = async (ref: string, entry: string): Promise<string> =>
-    (
-      await $({
-        cwd: worktreeDir,
-        reject: false,
-      })`git --literal-pathspecs ls-tree ${ref} -- ${entry}`
-    ).stdout.trim();
-
-  const segments = preservePath.split('/');
-  for (let i = 1; i < segments.length; i++) {
-    const ancestor = segments.slice(0, i).join('/');
-    const entry = await lsTree('HEAD', ancestor);
-    if (/^\d+ blob /.test(entry)) {
-      throw new Error(
-        `Preserved file '${preservePath}' cannot be restored: upstream now has a file at '${ancestor}'.\n` +
-          `Move the preserved file elsewhere, or remove the entry with:\n  venfork preserve remove ${preservePath}`
-      );
-    }
-  }
-
-  const entries = (await lsTree(sourceTip, preservePath))
-    .split('\n')
-    .filter(Boolean);
-  const match = entries[0]?.match(/^(\d+) (\w+) [0-9a-f]+\t(.*)$/);
-  if (!match || entries.length !== 1 || match[3] !== preservePath) {
-    throw new Error(
-      `Preserved file '${preservePath}' not found on origin/${defaultBranch}.\n` +
-        'Either commit it to the mirror first, or remove the entry with:\n' +
-        `  venfork preserve remove ${preservePath}`
-    );
-  }
-  const [, mode, type] = match;
-  if (type === 'tree') {
-    throw new Error(
-      `Preserved path '${preservePath}' is a directory on origin/${defaultBranch}; preserve supports single files only. List each file instead.`
-    );
-  }
-  if (type !== 'blob' || !['100644', '100755', '120000'].includes(mode)) {
-    throw new Error(
-      `Preserved path '${preservePath}' is not a regular file, executable or symlink on origin/${defaultBranch} (mode ${mode}); preserve supports single files only.`
-    );
-  }
-
-  const checkout = await $({
-    cwd: worktreeDir,
-    reject: false,
-  })`git --literal-pathspecs checkout ${sourceTip} -- ${preservePath}`;
-  if (checkout.exitCode !== 0) {
-    throw new Error(
-      `Could not restore preserved file '${preservePath}' from origin/${defaultBranch}: ${checkout.stderr.trim() || `exit ${checkout.exitCode}`}`
-    );
-  }
 }
