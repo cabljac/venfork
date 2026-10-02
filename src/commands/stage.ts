@@ -15,6 +15,7 @@ import {
   findInternalPr,
   type InternalPrInfo,
   translateInternalBody,
+  translateInternalTitle,
 } from '../shared/redaction.js';
 import { findMirrorRepoPath } from '../shared/repo.js';
 import { withDetachedWorktree } from '../shared/worktree.js';
@@ -407,12 +408,12 @@ async function buildUpstreamPrPayload(
 ): Promise<{ title: string; body: string }> {
   if (internal) {
     return {
-      title: override.title ?? internal.title,
+      title: translateInternalTitle(override.title ?? internal.title),
       body: override.body ?? translateInternalBody(internal.body),
     };
   }
   return {
-    title: override.title ?? branch,
+    title: translateInternalTitle(override.title ?? branch),
     body:
       override.body ??
       (await buildSyntheticBody(branch, context.defaultBranch, context.cwd)),

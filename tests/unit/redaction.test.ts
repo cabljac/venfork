@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { stripInternalBlocks } from '../../src/commands.js';
+import { RedactionError } from '../../src/errors.js';
+import { translateInternalTitle } from '../../src/shared/redaction.js';
 
 describe('stripInternalBlocks', () => {
   test('removes a single block', () => {
@@ -36,9 +38,9 @@ describe('stripInternalBlocks', () => {
     expect(stripInternalBlocks(input)).toBe(input);
   });
 
-  test('drops a dangling close marker without consuming surrounding content', () => {
+  test('refuses a dangling close marker instead of guessing', () => {
     const input = 'pub<!-- /venfork:internal -->lic';
-    expect(stripInternalBlocks(input)).toBe('public');
+    expect(() => stripInternalBlocks(input)).toThrow(RedactionError);
   });
 
   test('drops content from an unmatched open marker to end-of-input (fail-safe)', () => {
@@ -72,5 +74,45 @@ describe('stripInternalBlocks', () => {
     expect(stripInternalBlocks(input)).toBe('AC');
     expect(stripInternalBlocks(input)).toBe('AC');
     expect(stripInternalBlocks(input)).toBe('AC');
+  });
+
+  test.each([
+    ['upper case', 'A<!-- VENFORK:INTERNAL -->B<!-- /VENFORK:INTERNAL -->C'],
+    [
+      'spaces around the colon',
+      'A<!-- venfork : internal -->B<!-- / venfork : internal -->C',
+    ],
+    [
+      'a note after the keyword',
+      'A<!-- venfork:internal (draft note) -->B<!-- /venfork:internal -->C',
+    ],
+    [
+      'a mixed-case close',
+      'A<!-- venfork:internal -->B<!-- /VenFork:Internal -->C',
+    ],
+  ])('matches markers with %s', (_label, input) => {
+    expect(stripInternalBlocks(input)).toBe('AC');
+  });
+
+  test('refuses a misspelled marker that would otherwise publish its content', () => {
+    const input = 'A<!-- venfork:intenral -->secret<!-- /venfork:intenral -->C';
+    expect(() => stripInternalBlocks(input)).toThrow(RedactionError);
+    expect(() => stripInternalBlocks(input)).toThrow('venfork:intenral');
+  });
+
+  test('keeps CRLF content around a block', () => {
+    const input =
+      'one\r\n<!-- venfork:internal -->\r\nsecret\r\n<!-- /venfork:internal -->\r\ntwo';
+    expect(stripInternalBlocks(input)).toBe('one\r\n\r\ntwo');
+  });
+});
+
+describe('translateInternalTitle', () => {
+  test('strips internal blocks from a title', () => {
+    expect(
+      translateInternalTitle(
+        'Fix parser <!-- venfork:internal -->for ACME-123<!-- /venfork:internal -->'
+      )
+    ).toBe('Fix parser');
   });
 });
