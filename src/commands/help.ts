@@ -40,6 +40,9 @@ venfork clone <vendor-repo> [--no-public] [--upstream <url>]
   • --no-public        Declare a no-public layout (origin + upstream only)
   • --upstream <url>   Provide the upstream URL explicitly (skips auto-detect/prompt)
 
+venfork --version
+  Print the installed venfork version
+
 venfork status
   Show current repository setup and configuration
   Check which remotes are configured and setup completion

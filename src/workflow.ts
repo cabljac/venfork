@@ -1,6 +1,9 @@
+import { VENFORK_VERSION } from './version.js';
+
 const WORKFLOW_NAME = 'Venfork Sync';
 const WORKFLOW_FILENAME = '.github/workflows/venfork-sync.yml';
 
+/** Repo-relative path of the managed sync workflow file. */
 export function getSyncWorkflowPath(): string {
   return WORKFLOW_FILENAME;
 }
@@ -19,10 +22,14 @@ function escapeCronForYaml(cron: string): string {
  * In `'standard'` mode the workflow configures both `upstream` and `public`
  * remotes; in `'no-public'` mode the public-remote block is omitted so the
  * sync only mirrors upstream → origin.
+ *
+ * The runner installs exactly `version` (default: the running CLI), so the
+ * YAML a runner regenerates matches the YAML already on the default branch.
  */
 export function generateSyncWorkflow(
   cron: string,
-  mode: 'standard' | 'no-public' = 'standard'
+  mode: 'standard' | 'no-public' = 'standard',
+  version: string = VENFORK_VERSION
 ): string {
   const safeCron = escapeCronForYaml(cron);
   const noPublic = mode === 'no-public';
@@ -83,7 +90,9 @@ jobs:
           git config --global --add url."https://github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
       - name: Install venfork
-        run: npm install -g venfork
+        env:
+          VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
+        run: npm install -g "\${VENFORK_INSTALL_SPEC:-venfork@${version}}"
       - name: Configure venfork remotes
         shell: bash
         run: |

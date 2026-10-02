@@ -22,6 +22,7 @@ import { parsePreserveCliArgs } from './preserve-args.js';
 import { parsePullRequestCliArgs } from './pull-request-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
 import { parseStageCliArgs } from './stage-args.js';
+import { VENFORK_VERSION } from './version.js';
 import { parseWorkflowsCliArgs } from './workflows-args.js';
 
 /**
@@ -38,6 +39,11 @@ async function main(): Promise<void> {
     command === '-h'
   ) {
     showHelp();
+    return;
+  }
+
+  if (command === '--version' || command === '-v' || command === 'version') {
+    console.log(VENFORK_VERSION);
     return;
   }
 

@@ -4,6 +4,17 @@ import path from 'node:path';
 const rootDir = path.resolve(import.meta.dir, '..');
 const distDir = path.join(rootDir, 'dist', 'targets');
 
+const pkg = JSON.parse(
+  await fs.readFile(path.join(rootDir, 'package.json'), 'utf8')
+) as { version: string };
+const releaseTag = process.env.RELEASE_TAG;
+if (releaseTag && releaseTag !== `v${pkg.version}`) {
+  console.error(
+    `Release tag ${releaseTag} does not match package.json version ${pkg.version}`
+  );
+  process.exit(1);
+}
+
 await fs.mkdir(distDir, { recursive: true });
 
 const TARGETS: { bunTarget: string; platform: string }[] = [
@@ -53,3 +64,26 @@ try {
 }
 
 console.log('Built all platforms');
+
+// The generated sync workflow pins `venfork@<version>` from the bundled
+// package.json, so the shipped binary must report the version being released.
+const hostPlatform = `${process.platform}-${process.arch}`;
+const hostBinary = path.join(
+  distDir,
+  process.platform === 'win32'
+    ? `venfork-${hostPlatform}.exe`
+    : `venfork-${hostPlatform}`
+);
+const versionProc = Bun.spawn([hostBinary, '--version'], {
+  cwd: rootDir,
+  stdout: 'pipe',
+  stderr: 'inherit',
+});
+const reported = (await new Response(versionProc.stdout).text()).trim();
+if ((await versionProc.exited) !== 0 || reported !== pkg.version) {
+  console.error(
+    `Built binary reports version '${reported}', expected '${pkg.version}'`
+  );
+  process.exit(1);
+}
+console.log(`Verified ${hostPlatform} binary reports ${pkg.version}`);
