@@ -15,8 +15,8 @@ const CONFIG_PATH = '.venfork/config.json';
 
 const CONFIG_SIGNATURE = '"upstreamUrl" and "publicForkUrl" keys';
 
-/** Most commits of history read per preserved path. */
-const HISTORY_COMMIT_CAP = 500;
+/** Default for {@link CollectMirrorBlobsOptions.historyCap}. */
+const HISTORY_COMMIT_CAP = 2000;
 
 /** A blob with a NUL in its first bytes is binary and not text-scanned. */
 const BINARY_SNIFF_BYTES = 8000;
@@ -91,51 +91,183 @@ async function blobAt(
   );
 }
 
-/** Every blob at or under `entry` in `ref` (a file entry yields itself). */
-async function blobsUnder(
-  ref: string,
-  entry: string,
-  cwd: string
-): Promise<TreeBlob[]> {
-  const result = await $({
-    cwd,
-    reject: false,
-  })`git --literal-pathspecs ls-tree -r -z ${ref} -- ${entry}`;
-  return result.exitCode === 0 ? parseTreeEntries(result.stdout) : [];
+interface ObjectInfo {
+  oid: string;
+  type: string;
 }
 
 /**
- * The existing commits among `refs`, up to the cap of commits in their
- * history that touched `entry`, and up to the cap of reflog entries per ref
- * (a forced push leaves the old tip only there).
+ * Resolves each spec (`<rev>`, `<tree>:<path>`) with one
+ * `git cat-file --batch-check`; null for a missing object.
  */
-async function commitsTouching(
-  refs: readonly string[],
-  entry: string,
+async function batchCheck(
+  specs: readonly string[],
   cwd: string
-): Promise<string[]> {
-  const tips: string[] = [];
-  for (const ref of refs) {
-    const check = await $({
-      cwd,
-      reject: false,
-    })`git rev-parse --verify --quiet ${`${ref}^{commit}`}`;
-    if (check.exitCode === 0) tips.push(ref);
+): Promise<Array<ObjectInfo | null>> {
+  if (specs.length === 0) return [];
+  const bad = specs.find((spec) => spec.includes('\n'));
+  if (bad !== undefined) {
+    throw new GitError(
+      `Cannot look up ${JSON.stringify(bad)}: it contains a newline`,
+      'git cat-file'
+    );
   }
-  if (tips.length === 0) return [];
-  const log = await $({
+  const result = await $({
     cwd,
     reject: false,
-  })`git --literal-pathspecs log --format=%H --full-history --max-count=${HISTORY_COMMIT_CAP} ${tips} -- ${entry}`;
-  const found = log.exitCode === 0 ? log.stdout.split('\n') : [];
-  for (const ref of tips) {
+    input: `${specs.join('\n')}\n`,
+  })`git cat-file ${'--batch-check=%(objectname) %(objecttype)'}`;
+  if (result.exitCode !== 0) {
+    throw new GitError(
+      `Cannot read mirror objects: ${result.stderr.trim()}`,
+      'git cat-file'
+    );
+  }
+  const lines = result.stdout.split('\n');
+  return specs.map((_, i) => {
+    const match = lines[i]?.match(/^([0-9a-f]{40,64}) (\S+)$/);
+    return match ? { oid: match[1] ?? '', type: match[2] ?? '' } : null;
+  });
+}
+
+/** Refs whose history holds the listed mirror-only paths. */
+interface HistoryGroup {
+  refs: readonly string[];
+  entries: readonly string[];
+  /** Warn when a remote-tracking ref among `refs` has an empty reflog. */
+  warnOnEmptyReflog: boolean;
+}
+
+/**
+ * Tree ids of the existing commits among `refs`, of their reflog entries (a
+ * forced push leaves the old tip only there) and of the history of both
+ * that `base` cannot reach, newest first, capped and deduplicated.
+ */
+async function mirrorTrees(
+  group: HistoryGroup,
+  base: string,
+  cap: number,
+  warnings: string[],
+  cwd: string
+): Promise<string[]> {
+  const resolved = await batchCheck(
+    group.refs.map((ref) => `${ref}^{commit}`),
+    cwd
+  );
+  const starts = new Set<string>();
+  for (const [i, ref] of group.refs.entries()) {
+    const commit = resolved[i];
+    if (!commit) continue;
+    starts.add(commit.oid);
+    if (!ref.startsWith('refs/')) continue;
     const reflog = await $({
       cwd,
       reject: false,
-    })`git log -g --format=%H --max-count=${HISTORY_COMMIT_CAP} ${ref}`;
-    if (reflog.exitCode === 0) found.push(...reflog.stdout.split('\n'));
+    })`git log -g --format=%H --max-count=${cap} ${ref}`;
+    const entries =
+      reflog.exitCode === 0 ? reflog.stdout.split('\n').filter(Boolean) : [];
+    for (const entry of entries) starts.add(entry);
+    if (entries.length >= cap) {
+      warnings.push(
+        `Read only the newest ${cap} reflog entries of ${ref}; mirror-only history older than that cannot be checked.`
+      );
+    } else if (
+      entries.length === 0 &&
+      group.warnOnEmptyReflog &&
+      ref.startsWith('refs/remotes/')
+    ) {
+      warnings.push(
+        `${ref} has no reflog; mirror-only history older than the reflog cannot be checked.`
+      );
+    }
   }
-  return [...new Set([...tips, ...found.filter(Boolean)])];
+  if (starts.size === 0) return [];
+  const log = await $({
+    cwd,
+    reject: false,
+    input: `${[...starts].join('\n')}\n`,
+  })`git log --format=%T --max-count=${cap} --stdin ${`^${base}`}`;
+  if (log.exitCode !== 0) {
+    throw new GitError(
+      `Cannot read mirror history: ${log.stderr.trim()}`,
+      'git log'
+    );
+  }
+  const trees = log.stdout.split('\n').filter(Boolean);
+  if (trees.length >= cap) {
+    warnings.push(
+      `Read only the newest ${cap} commits of mirror history; mirror-only history older than that cannot be checked.`
+    );
+  }
+  return [...new Set(trees)];
+}
+
+/** Every blob at or under each entry in each tree (a file entry yields itself). */
+async function blobsInTrees(
+  trees: readonly string[],
+  entries: readonly string[],
+  cwd: string
+): Promise<TreeBlob[]> {
+  const specs: Array<{ entry: string; spec: string }> = [];
+  for (const tree of trees) {
+    for (const entry of entries) {
+      specs.push({ entry, spec: `${tree}:${entry}` });
+    }
+  }
+  const found = await batchCheck(
+    specs.map(({ spec }) => spec),
+    cwd
+  );
+  const blobs: TreeBlob[] = [];
+  const subtrees = new Map<string, { oid: string; entry: string }>();
+  for (const [i, info] of found.entries()) {
+    const entry = specs[i]?.entry ?? '';
+    if (info?.type === 'blob') blobs.push({ path: entry, oid: info.oid });
+    if (info?.type === 'tree') {
+      subtrees.set(`${info.oid}\0${entry}`, { oid: info.oid, entry });
+    }
+  }
+  for (const { oid, entry } of subtrees.values()) {
+    const listing = await $({ cwd })`git ls-tree -r -z ${oid}`;
+    for (const blob of parseTreeEntries(listing.stdout)) {
+      blobs.push({ path: `${entry}/${blob.path}`, oid: blob.oid });
+    }
+  }
+  return blobs;
+}
+
+/**
+ * `<path>\0<oid>` for every version of `paths` at `base` and in its
+ * history: content upstream has already published.
+ */
+async function upstreamVersions(
+  paths: readonly string[],
+  base: string,
+  cwd: string
+): Promise<Set<string>> {
+  const versions = new Set<string>();
+  if (paths.length === 0) return versions;
+  const tip = await $({
+    cwd,
+  })`git --literal-pathspecs ls-tree -r -z ${base} -- ${paths}`;
+  for (const blob of parseTreeEntries(tip.stdout)) {
+    versions.add(`${blob.path}\0${blob.oid}`);
+  }
+  const history = await $({
+    cwd,
+  })`git --literal-pathspecs log --format= --raw -z --no-abbrev --no-renames --full-history ${base} -- ${paths}`;
+  const fields = history.stdout.split('\0');
+  for (let i = 0; i + 1 < fields.length; i++) {
+    const meta = fields[i]?.replace(/^\n+/, '') ?? '';
+    if (!meta.startsWith(':')) continue;
+    const [, , oldOid, newOid] = meta.slice(1).split(' ');
+    const file = fields[i + 1] ?? '';
+    for (const oid of [oldOid, newOid]) {
+      if (oid) versions.add(`${file}\0${oid}`);
+    }
+    i++;
+  }
+  return versions;
 }
 
 async function treeChanges(commit: string, cwd: string): Promise<TreeChange[]> {
@@ -165,59 +297,76 @@ async function treeChanges(commit: string, cwd: string): Promise<TreeChange[]> {
   return changes;
 }
 
+/** Options for {@link collectMirrorBlobs}. */
+export interface CollectMirrorBlobsOptions {
+  /** Most commits read per history, and most reflog entries read per ref. */
+  historyCap?: number;
+}
+
+/** Output of {@link collectMirrorBlobs}. */
+export interface MirrorBlobs {
+  /** Mirror-held blob id to the path it was found at. */
+  blobs: Map<string, string>;
+  /** History the scan could not cover, worded for the user. */
+  warnings: string[];
+}
+
 /**
  * Blob ids of the preserved files, the managed sync workflow and the
  * venfork config as the mirror holds or ever held them, mapped to the path
  * they were found at. A preserve entry that is a directory contributes every
- * file under it. A blob identical to upstream's file at the same path is
- * left out: it is upstream content, not mirror content.
+ * file under it. A blob that is a version of the same path at `base` or in
+ * its history is left out: it is upstream content, not mirror content.
  *
- * For each entry, `refs` are read at their tips, at up to 500 commits of
- * their history that touched it and at up to 500 reflog entries each; older
- * versions are not covered.
+ * `refs` (and the venfork-config refs) are read at their tips, at their
+ * reflog entries and in the history of both that `base` cannot reach, up to
+ * `historyCap` commits and reflog entries per ref. Older versions are not
+ * covered; {@link MirrorBlobs.warnings} says when that may matter.
  *
  * @param refs Mirror commits to read (missing refs are skipped).
  * @param preserve The preserve allowlist.
  * @param base `upstream/<default>`.
  * @param cwd Mirror checkout.
+ * @param options Scan limits.
  */
 export async function collectMirrorBlobs(
   refs: readonly string[],
   preserve: readonly string[],
   base: string,
-  cwd: string
-): Promise<Map<string, string>> {
-  const blobs = new Map<string, string>();
-  const upstreamBlobs = new Map<string, string | null>();
-
-  const collect = async (
-    from: readonly string[],
-    entry: string,
-    label?: string
-  ): Promise<void> => {
-    for (const commit of await commitsTouching(from, entry, cwd)) {
-      for (const blob of await blobsUnder(commit, entry, cwd)) {
-        if (!upstreamBlobs.has(blob.path)) {
-          upstreamBlobs.set(blob.path, await blobAt(base, blob.path, cwd));
-        }
-        if (
-          blob.oid !== upstreamBlobs.get(blob.path) &&
-          blob.oid !== EMPTY_BLOB
-        ) {
-          blobs.set(blob.oid, label ?? blob.path);
-        }
-      }
-    }
-  };
-
-  for (const entry of new Set([...preserve, SYNC_WORKFLOW_PATH])) {
-    await collect(refs, entry);
+  cwd: string,
+  options: CollectMirrorBlobsOptions = {}
+): Promise<MirrorBlobs> {
+  const cap = options.historyCap ?? HISTORY_COMMIT_CAP;
+  const warnings: string[] = [];
+  const groups: HistoryGroup[] = [
+    {
+      refs,
+      entries: [...new Set([...preserve, SYNC_WORKFLOW_PATH])],
+      warnOnEmptyReflog: true,
+    },
+    {
+      refs: ['refs/remotes/origin/venfork-config', 'refs/heads/venfork-config'],
+      entries: [CONFIG_PATH],
+      warnOnEmptyReflog: false,
+    },
+  ];
+  const found: TreeBlob[] = [];
+  for (const group of groups) {
+    const trees = await mirrorTrees(group, base, cap, warnings, cwd);
+    found.push(...(await blobsInTrees(trees, group.entries, cwd)));
   }
-  await collect(
-    ['refs/remotes/origin/venfork-config', 'refs/heads/venfork-config'],
-    CONFIG_PATH
+  const upstream = await upstreamVersions(
+    [...new Set(found.map((blob) => blob.path))],
+    base,
+    cwd
   );
-  return blobs;
+  const blobs = new Map<string, string>();
+  for (const blob of found) {
+    if (blob.oid === EMPTY_BLOB) continue;
+    if (upstream.has(`${blob.path}\0${blob.oid}`)) continue;
+    blobs.set(blob.oid, blob.path);
+  }
+  return { blobs, warnings };
 }
 
 /** Inputs for {@link assertPublishableCommits}. */

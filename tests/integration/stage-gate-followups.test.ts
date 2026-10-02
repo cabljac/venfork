@@ -249,7 +249,7 @@ describe('collectMirrorBlobs reads history', () => {
     await preserveCommand('add', [DOC]);
     await fx.git(fx.work, 'fetch', '--quiet', 'origin');
 
-    const blobs = await collectMirrorBlobs(
+    const { blobs } = await collectMirrorBlobs(
       ['refs/remotes/origin/main'],
       [],
       'upstream/main',

@@ -357,7 +357,7 @@ async function prepareStage(
     cwd
   );
   const denyList = await mirrorDenyList(cwd);
-  const mirrorBlobs = await collectMirrorBlobs(
+  const { blobs: mirrorBlobs, warnings } = await collectMirrorBlobs(
     [
       `refs/remotes/origin/${plan.upstreamDefaultBranch}`,
       `refs/heads/${plan.upstreamDefaultBranch}`,
@@ -367,6 +367,7 @@ async function prepareStage(
     base,
     cwd
   );
+  for (const warning of warnings) p.log.warn(warning);
   await assertPublishableCommits({
     branch: plan.branch,
     base,
