@@ -4,6 +4,7 @@ import * as p from '@clack/prompts';
 import { parseCloneCliArgs } from './clone-args.js';
 import {
   cloneCommand,
+  doctorCommand,
   issueCommand,
   preserveCommand,
   pullRequestCommand,
@@ -16,6 +17,7 @@ import {
   workflowsCommand,
 } from './commands.js';
 import { requiresGhAuth } from './dispatch.js';
+import { parseDoctorCliArgs, parseStatusCliArgs } from './doctor-args.js';
 import { ensureGhAuth } from './git.js';
 import { parseIssueCliArgs } from './issue-args.js';
 import { parsePreserveCliArgs } from './preserve-args.js';
@@ -89,9 +91,24 @@ async function main(): Promise<void> {
       });
       break;
     }
-    case 'status':
-      await statusCommand();
+    case 'status': {
+      const parsed = parseStatusCliArgs(args.slice(1));
+      if (parsed.check) {
+        if (!(await doctorCommand({ json: parsed.json }))) {
+          process.exitCode = 1;
+        }
+      } else {
+        await statusCommand();
+      }
       break;
+    }
+    case 'doctor': {
+      const parsed = parseDoctorCliArgs(args.slice(1));
+      if (!(await doctorCommand({ json: parsed.json }))) {
+        process.exitCode = 1;
+      }
+      break;
+    }
     case 'workflows': {
       const parsed = parseWorkflowsCliArgs(args.slice(1));
       await workflowsCommand(parsed.action, parsed.workflows);
