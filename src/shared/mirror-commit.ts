@@ -20,6 +20,11 @@ import {
 import { netExec, netFailureReason } from './net.js';
 import { compareSemver, pinnedVenforkVersion } from './semver.js';
 
+/** True for a `*.yml` / `*.yaml` file directly in `.github/workflows/`. */
+function isTopLevelWorkflow(file: string): boolean {
+  return path.posix.dirname(file) === WORKFLOWS_DIR && /\.ya?ml$/.test(file);
+}
+
 /** Basenames of `entries`, trimmed, de-duplicated and sorted. */
 export function normalizeWorkflowList(entries: string[]): string[] {
   return Array.from(
@@ -202,6 +207,7 @@ export async function buildMirrorTip(args: {
         ]);
         for (const workflowFile of listed.split('\0').filter(Boolean)) {
           if (workflowFile === SYNC_WORKFLOW_PATH) continue;
+          if (!isTopLevelWorkflow(workflowFile)) continue;
           const base = path.posix.basename(workflowFile);
           const keep =
             allowlist.length > 0
@@ -227,7 +233,25 @@ export async function buildMirrorTip(args: {
         );
       }
       for (const preservePath of preserve) {
-        if ((await treeEntriesAt(git, upstreamTip, preservePath)).length > 0) {
+        if (
+          preservePath === SYNC_WORKFLOW_PATH ||
+          preservePath === '.venfork' ||
+          preservePath.startsWith('.venfork/')
+        ) {
+          continue;
+        }
+        const upstreamEntries = await treeEntriesAt(
+          git,
+          upstreamTip,
+          preservePath
+        );
+        if (upstreamEntries.some((entry) => entry.type === 'tree')) {
+          throw new Error(
+            `Preserved file '${preservePath}' cannot be restored: upstream now has a directory at '${preservePath}'.\n` +
+              `Move the preserved file elsewhere, or remove the entry with:\n  venfork preserve remove ${preservePath}`
+          );
+        }
+        if (upstreamEntries.length > 0) {
           p.log.warn(
             `preserved file '${preservePath}' now exists upstream — using upstream version`
           );
@@ -319,6 +343,13 @@ async function preservedEntry(args: {
           `Move the preserved file elsewhere, or remove the entry with:\n  venfork preserve remove ${preservePath}`
       );
     }
+    const staged = await mustGit(git, ['ls-files', '-z', '--', ancestor]);
+    if (staged.split('\0').includes(ancestor)) {
+      throw new Error(
+        `Preserved file '${preservePath}' cannot be restored: a file exists at '${ancestor}' in the managed tree.\n` +
+          `Move the preserved file elsewhere, or remove the entry with:\n  venfork preserve remove ${preservePath}`
+      );
+    }
   }
 
   const entries = await treeEntriesAt(git, sourceTip, preservePath);
@@ -391,17 +422,18 @@ export async function resolveCommit(
 }
 
 /**
- * Moves `origin/<defaultBranch>` to the tip the config asks for: the
+ * The commit `origin/<defaultBranch>` should point at for `config`: the
  * upstream tip plus the managed commit when a schedule or preserve list is
- * active, else the plain upstream tip. One leased push at most.
+ * active, else the plain upstream tip. Refuses to downgrade a newer pinned
+ * workflow. Nothing is pushed.
  */
-export async function updateOriginTip(args: {
+export async function buildOriginTip(args: {
   config: VenforkConfig | null;
   defaultBranch: string;
   upstreamTip: string;
   previousMirrorTip: string;
   cwd?: string;
-}): Promise<{ tip: string; pushed: boolean }> {
+}): Promise<string> {
   const { config, defaultBranch, upstreamTip, previousMirrorTip, cwd } = args;
   assertNoInvalidPreserve(config);
   const schedule = config?.schedule;
@@ -411,16 +443,9 @@ export async function updateOriginTip(args: {
   }
   const preserve = config?.preserve ?? [];
   if (!scheduleActive && preserve.length === 0) {
-    const pushed = await pushBranchWithLease({
-      remote: 'origin',
-      branch: defaultBranch,
-      target: upstreamTip,
-      expected: previousMirrorTip,
-      cwd,
-    });
-    return { tip: upstreamTip, pushed };
+    return upstreamTip;
   }
-  return applyMirrorPlusOneCommit({
+  return buildMirrorTip({
     defaultBranch,
     upstreamTip,
     schedule:
@@ -436,6 +461,28 @@ export async function updateOriginTip(args: {
     previousMirrorTip,
     cwd,
   });
+}
+
+/**
+ * Moves `origin/<defaultBranch>` to {@link buildOriginTip}'s commit with
+ * one leased push at most.
+ */
+export async function updateOriginTip(args: {
+  config: VenforkConfig | null;
+  defaultBranch: string;
+  upstreamTip: string;
+  previousMirrorTip: string;
+  cwd?: string;
+}): Promise<{ tip: string; pushed: boolean }> {
+  const tip = await buildOriginTip(args);
+  const pushed = await pushBranchWithLease({
+    remote: 'origin',
+    branch: args.defaultBranch,
+    target: tip,
+    expected: args.previousMirrorTip,
+    cwd: args.cwd,
+  });
+  return { tip, pushed };
 }
 
 /**
@@ -458,23 +505,4 @@ export async function assertNoPinDowngrade(
       `origin pins venfork ${pinned}, you are running ${VENFORK_VERSION}; upgrade the CLI or set VENFORK_INSTALL_SPEC`
     );
   }
-}
-
-/**
- * Re-stamps `origin/<defaultBranch>` as the upstream tip plus at most one
- * deterministic venfork-managed commit (see {@link buildMirrorTip}) with a
- * single leased push. Returns the new tip and whether a push happened.
- */
-export async function applyMirrorPlusOneCommit(
-  args: Parameters<typeof buildMirrorTip>[0]
-): Promise<{ tip: string; pushed: boolean }> {
-  const tip = await buildMirrorTip(args);
-  const pushed = await pushBranchWithLease({
-    remote: 'origin',
-    branch: args.defaultBranch,
-    target: tip,
-    expected: args.previousMirrorTip,
-    cwd: args.cwd,
-  });
-  return { tip, pushed };
 }

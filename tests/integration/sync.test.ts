@@ -183,9 +183,9 @@ describe('sync with the managed commit', () => {
     expect(await fx.pushCount(fx.origin, 'refs/heads/main')).toBe(pushes);
   });
 
-  test('a commit with the Venfork-Managed trailer counts as managed whatever its subject', async () => {
+  test('a trailer commit that only changes the sync workflow counts as managed whatever its subject', async () => {
     const sha = await fx.commitOnOrigin(
-      { [WORKFLOW]: 'name: x\n', 'src/extra.txt': 'extra\n' },
+      { [WORKFLOW]: 'name: x\n' },
       'chore: something else\n\nVenfork-Managed: 1'
     );
 
@@ -371,7 +371,9 @@ describe('sync with the managed commit', () => {
     await preserveCommand('add', ['tools/a.sh', 'tools/b.sh']);
     await fx.commitOnOrigin({ 'tools/a.sh': 'a\n', 'tools/b.sh': 'b\n' });
     await sync();
-    await updateVenforkConfig(fx.work, { preserve: ['tools'] });
+    await updateVenforkConfig(fx.work, {
+      preserve: ['tools', 'tools/a.sh', 'tools/b.sh'],
+    });
     await fx.commitOnUpstream({ 'src/z.txt': 'z\n' });
 
     await expect(sync()).rejects.toThrow('process.exit(1)');

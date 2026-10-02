@@ -1,78 +1,11 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
-import {
-  assertNoInvalidPreserve,
-  readVenforkConfigFromRepo,
-  updateVenforkConfig,
-  type VenforkConfig,
-  type VenforkConfigPatch,
-} from '../config.js';
-import { SyncDivergenceError } from '../errors.js';
+import { readVenforkConfigFromRepo } from '../config.js';
 import { getDefaultBranch } from '../git.js';
+import { applyConfigChange } from '../shared/config-change.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
 import { isValidCronExpression } from '../shared/cron.js';
-import { checkDivergence } from '../shared/divergence.js';
-import { resolveCommit, updateOriginTip } from '../shared/mirror-commit.js';
-import { netFetch } from '../shared/net.js';
 import { parseRepoPath } from '../utils.js';
-
-/**
- * Applies a schedule config change and re-stamps origin/<defaultBranch> the
- * same way sync does, so the default branch is upstream plus at most one
- * deterministic managed commit. Refuses, before touching config, when
- * origin carries user commits that the re-stamp would discard.
- */
-async function applyScheduleChange(
-  repoDir: string,
-  defaultBranch: string,
-  patch: VenforkConfigPatch
-): Promise<VenforkConfig> {
-  await netFetch('upstream', repoDir);
-  await netFetch('origin', repoDir);
-  const current = await readVenforkConfigFromRepo(repoDir, {
-    allowInvalidCron: true,
-  });
-  if (!current) {
-    throw new Error('venfork-config branch not found or invalid');
-  }
-  assertNoInvalidPreserve(current);
-  const upstreamTip = await resolveCommit(`upstream/${defaultBranch}`, repoDir);
-  if (!upstreamTip) {
-    throw new Error(
-      `upstream/${defaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
-    );
-  }
-  const previousMirrorTip = await resolveCommit(
-    `origin/${defaultBranch}`,
-    repoDir
-  );
-  const originDivergence = await checkDivergence({
-    remote: 'origin',
-    defaultBranch,
-    allowPreserved: true,
-    preserveAllowed: new Set(current.preserve ?? []),
-    cwd: repoDir,
-  });
-  if (originDivergence.count > 0) {
-    throw new SyncDivergenceError(
-      defaultBranch,
-      { count: originDivergence.count, files: originDivergence.files },
-      {
-        count: 0,
-        files: [],
-      }
-    );
-  }
-  const updated = await updateVenforkConfig(repoDir, patch);
-  await updateOriginTip({
-    config: updated,
-    defaultBranch,
-    upstreamTip,
-    previousMirrorTip,
-    cwd: repoDir,
-  });
-  return updated;
-}
 
 /**
  * Schedule command: Configure automated sync via GitHub Actions workflow.
@@ -102,9 +35,12 @@ export async function scheduleCommand(
       }
 
       s.start('Updating schedule and the workflow on the default branch');
-      const updated = await applyScheduleChange(repoDir, defaultBranch, {
-        schedule: { enabled: true, cron },
-      });
+      const updated = await applyConfigChange(
+        repoDir,
+        { schedule: { enabled: true, cron } },
+        (current) => ({ schedule: current.schedule ?? null }),
+        { allowInvalidCron: true }
+      );
       s.stop('Schedule and workflow updated');
 
       let mirrorPath = '<owner>/<mirror>';
@@ -139,12 +75,19 @@ export async function scheduleCommand(
         throw new Error('venfork-config branch not found or invalid');
       }
       const currentCron = currentConfig.schedule?.cron ?? '';
-      await applyScheduleChange(repoDir, defaultBranch, {
-        schedule: {
-          enabled: false,
-          cron: isValidCronExpression(currentCron) ? currentCron : '0 * * * *',
+      await applyConfigChange(
+        repoDir,
+        {
+          schedule: {
+            enabled: false,
+            cron: isValidCronExpression(currentCron)
+              ? currentCron
+              : '0 * * * *',
+          },
         },
-      });
+        (current) => ({ schedule: current.schedule ?? null }),
+        { allowInvalidCron: true }
+      );
       s.stop('Schedule disabled and workflow removed');
 
       p.outro(

@@ -5,6 +5,7 @@ type MockResponse =
   | ((command: string) => Promise<unknown>);
 
 const execaCalls: string[] = [];
+const execaOptions: Array<{ command: string; options: unknown }> = [];
 const mockResponses: Map<string, MockResponse> = new Map();
 const writeFileCalls: Array<{ path: string; content: string }> = [];
 
@@ -21,6 +22,7 @@ mock.module('execa', () => ({
       return mock((strings: TemplateStringsArray, ...vals: any[]) => {
         command = String.raw({ raw: strings }, ...vals);
         execaCalls.push(command);
+        execaOptions.push({ command, options: stringsOrOptions });
         return getMockExecaResponse(command);
       });
     }
@@ -98,10 +100,23 @@ import {
 beforeEach(() => {
   execaCalls.length = 0;
   writeFileCalls.length = 0;
+  execaOptions.length = 0;
   mockResponses.clear();
 });
 
 describe('readVenforkConfigFromRepo', () => {
+  test('reads the config blob under the network timeout with prompts off', async () => {
+    await readVenforkConfigFromRepo('/tmp/repo');
+
+    const show = execaOptions.find(({ command }) =>
+      command.includes('git show FETCH_HEAD:.venfork/config.json')
+    );
+    expect(show?.options).toMatchObject({
+      timeout: expect.any(Number),
+      env: { GIT_TERMINAL_PROMPT: '0' },
+    });
+  });
+
   test('returns parsed config from orphan branch', async () => {
     const result = await readVenforkConfigFromRepo('/tmp/repo');
     expect(result).toEqual({

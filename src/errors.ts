@@ -103,12 +103,15 @@ export class SyncDivergenceError extends VenforkError {
  * having no config.
  */
 export class ConfigError extends VenforkError {
-  /** `'fetch'` when origin could not be read; `'invalid'` for bad content. */
-  public readonly reason: 'fetch' | 'invalid';
+  /**
+   * `'fetch'` when origin could not be read, `'invalid'` for bad content,
+   * `'exists'` when a create found the branch already there.
+   */
+  public readonly reason: 'fetch' | 'invalid' | 'exists';
 
   constructor(
     message: string,
-    options?: { cause?: unknown; reason?: 'fetch' | 'invalid' }
+    options?: { cause?: unknown; reason?: 'fetch' | 'invalid' | 'exists' }
   ) {
     super(message);
     this.name = 'ConfigError';

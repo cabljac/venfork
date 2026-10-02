@@ -100,7 +100,7 @@ export async function checkDivergence(args: {
   const files = new Set<string>();
   const weakManaged: DroppedManagedCommit[] = [];
   for (const commit of divergentCommits) {
-    const kind = await classifyManagedCommit(commit, cwd);
+    const kind = await classifyManagedCommit(commit, cwd, preserveAllowed);
     if (kind !== null) {
       if (isWeakManagedKind(kind)) weakManaged.push({ commit, kind });
       continue;

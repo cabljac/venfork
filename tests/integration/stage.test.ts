@@ -207,7 +207,7 @@ describe('stage refuses branches that are not upstream work', () => {
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining('venfork-config')
+      expect.stringContaining("holds venfork's private configuration")
     );
     expect(await refExists(pushTarget(), 'refs/heads/venfork-config')).toBe(
       false

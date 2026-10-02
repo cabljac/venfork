@@ -1,7 +1,7 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { GitError } from '../errors.js';
-import { GIT_NET_TIMEOUT_MS, NET_ENV } from './constants.js';
+import { gitNetTimeoutMs, NET_ENV } from './constants.js';
 
 /**
  * An execa `$` bound for a heavy network git/gh op: no stdin (any
@@ -27,7 +27,7 @@ export function netExec(
     ...(cwd ? { cwd } : {}),
     ...(opts?.input === undefined ? {} : { input: opts.input }),
     env: NET_ENV,
-    timeout: GIT_NET_TIMEOUT_MS,
+    timeout: gitNetTimeoutMs(),
     stdio:
       captureOutput || bufferOutput
         ? [stdin, 'pipe', 'pipe']
@@ -47,7 +47,7 @@ export function netFailureReason(result: {
   exitCode?: number;
 }): string {
   if (result.timedOut) {
-    return `timed out after ${GIT_NET_TIMEOUT_MS / 1000}s`;
+    return `timed out after ${gitNetTimeoutMs() / 1000}s`;
   }
   const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : '';
   return stderr || `exit ${result.exitCode ?? 'unknown'}`;
@@ -88,7 +88,7 @@ export async function runNetOp(
   } catch (err) {
     if ((err as { timedOut?: boolean })?.timedOut) {
       throw new GitError(
-        `${startMsg} timed out after ${GIT_NET_TIMEOUT_MS / 1000}s. ` +
+        `${startMsg} timed out after ${gitNetTimeoutMs() / 1000}s. ` +
           'Check network and GitHub auth, or raise VENFORK_GIT_TIMEOUT.',
         startMsg
       );

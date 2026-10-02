@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { chmod, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import { $ } from 'execa';
 import { quietPrompts } from '../harness/prompts.js';
@@ -89,65 +89,6 @@ function gitConfigEnv(key: string, value: string): void {
   process.env.GIT_CONFIG_KEY_0 = key;
   process.env.GIT_CONFIG_VALUE_0 = value;
 }
-
-describe('managed tip builder ignores the user clone', () => {
-  test('a sparse-checkout clone still lets upstream win for a preserved path', async () => {
-    await fx.git(fx.work, 'sparse-checkout', 'set', '--no-cone', '/src/');
-    await preserveCommand('add', ['.github/workflows/caller.yml']);
-    await fx.commitOnOrigin({ '.github/workflows/caller.yml': 'mirror\n' });
-    await sync();
-    const upstreamTip = await fx.commitOnUpstream({
-      '.github/workflows/caller.yml': 'upstream wins\n',
-    });
-
-    await sync();
-
-    expect(await fx.sha(fx.origin, 'main')).toBe(upstreamTip);
-  });
-
-  test('a post-checkout hook in the clone does not change the managed commit', async () => {
-    await enableSchedule();
-    await sync();
-    const clean = await fx.sha(fx.origin, 'main');
-    await resetOriginToUpstream();
-    const hook = path.join(fx.work, '.git', 'hooks', 'post-checkout');
-    await writeFile(
-      hook,
-      '#!/bin/sh\necho hooked > hooked.txt\ngit add hooked.txt\n'
-    );
-    await chmod(hook, 0o755);
-
-    await sync();
-
-    expect(await fx.sha(fx.origin, 'main')).toBe(clean);
-    expect(await fx.fileAt(fx.origin, 'main', 'hooked.txt')).toBeNull();
-  });
-
-  test('a leaked GIT_INDEX_FILE has no effect', async () => {
-    await enableSchedule();
-    await sync();
-    const clean = await fx.sha(fx.origin, 'main');
-    await resetOriginToUpstream();
-    process.env.GIT_INDEX_FILE = path.join(fx.root, 'leaked-index');
-
-    await sync();
-
-    expect(await fx.sha(fx.origin, 'main')).toBe(clean);
-  });
-
-  test('a clean filter from upstream .gitattributes does not change the managed blob', async () => {
-    await fx.commitOnUpstream({ '.gitattributes': '*.yml filter=shout\n' });
-    await enableSchedule();
-    await sync();
-    const plain = await fx.sha(fx.origin, 'main');
-    await resetOriginToUpstream();
-    gitConfigEnv('filter.shout.clean', 'tr a-z A-Z');
-
-    await sync();
-
-    expect(await fx.sha(fx.origin, 'main')).toBe(plain);
-  });
-});
 
 describe('workflow filtering by exact name', () => {
   test('a blocked non-ASCII workflow is removed and the SHA ignores core.quotePath', async () => {

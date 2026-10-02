@@ -5,6 +5,7 @@ import path from 'node:path';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { createConfigBranch } from '../config.js';
+import { ConfigError } from '../errors.js';
 import { getGitHubUsername, ghRepoExists, ghRepoIsForkOf } from '../git.js';
 import { pathExists } from '../shared/fs.js';
 import { netExec, runNetOp, seedMirrorInChunks } from '../shared/net.js';
@@ -382,13 +383,18 @@ export async function setupCommand(
 
     // Step 8: Venfork config branch
     s.start('Creating venfork configuration');
-    await createConfigBranch(
-      repoDir,
-      noPublic ? null : (publicForkUrl ?? null),
-      config.upstreamUrl,
-      noPublic ? 'no-public' : 'standard'
-    );
-    s.stop('Venfork configuration created');
+    try {
+      await createConfigBranch(
+        repoDir,
+        noPublic ? null : (publicForkUrl ?? null),
+        config.upstreamUrl,
+        noPublic ? 'no-public' : 'standard'
+      );
+      s.stop('Venfork configuration created');
+    } catch (err) {
+      if (!(err instanceof ConfigError && err.reason === 'exists')) throw err;
+      s.stop('Keeping the existing venfork configuration');
+    }
 
     const recovered = forkPreexisted || mirrorPreexisted;
     if (recovered) {

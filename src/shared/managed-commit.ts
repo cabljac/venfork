@@ -27,7 +27,15 @@ export const MANAGED_COMMIT_TRAILER_KEY = 'Venfork-Managed';
 /** Full trailer line written on every venfork-managed commit. */
 export const MANAGED_COMMIT_TRAILER = `${MANAGED_COMMIT_TRAILER_KEY}: 1`;
 
-async function hasManagedTrailer(ref: string, cwd?: string): Promise<boolean> {
+/**
+ * True when `ref` carries the `Venfork-Managed: 1` trailer, whatever it
+ * changes. Use {@link classifyManagedCommit} to decide whether sync may
+ * replace it.
+ */
+export async function hasManagedTrailer(
+  ref: string,
+  cwd?: string
+): Promise<boolean> {
   const result = await $({
     ...(cwd ? { cwd } : {}),
     reject: false,
@@ -80,6 +88,33 @@ async function commitTouchesWorkflowPath(
   return allUnderWorkflows && touchesManagedWorkflow;
 }
 
+/**
+ * True when every change `ref` makes against its first parent is one the
+ * managed commit may carry: the sync workflow, a `preserve` entry, or a
+ * deletion under `.github/workflows/` (workflow filtering).
+ */
+async function onlyManagedContent(
+  ref: string,
+  cwd: string | undefined,
+  preserve: ReadonlySet<string>
+): Promise<boolean> {
+  const result = await $({
+    ...(cwd ? { cwd } : {}),
+    reject: false,
+  })`git diff-tree -r -z --no-renames --root --no-commit-id --name-status ${ref}`;
+  if (result.exitCode !== 0) return false;
+  const fields = result.stdout.split('\0');
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const status = fields[i] ?? '';
+    const file = fields[i + 1] ?? '';
+    if (!status) continue;
+    if (file === SYNC_WORKFLOW_PATH || preserve.has(file)) continue;
+    if (status === 'D' && file.startsWith(`${WORKFLOWS_DIR}/`)) continue;
+    return false;
+  }
+  return true;
+}
+
 /** Which signal classified a commit as venfork-managed. */
 export type ManagedCommitKind =
   | 'trailer'
@@ -99,7 +134,10 @@ async function authorEmail(ref: string, cwd?: string): Promise<string | null> {
  * Classifies the venfork-managed "+1 commit" so sync's divergence check and
  * stage's cherry-pick filter can skip it without losing user work. Returns
  * the first matching signal, or null for a user commit:
- *  - `trailer`: a `Venfork-Managed: 1` trailer.
+ *  - `trailer`: a `Venfork-Managed: 1` trailer on a commit that changes
+ *    only the sync workflow, `preserve` entries, and deletions under
+ *    `.github/workflows/`. A trailer commit that changes anything else
+ *    (user work amended into it) is null.
  *  - `subject`: subject equals `MANAGED_COMMIT_MESSAGE`.
  *  - `legacy-subject`: subject is in `LEGACY_MANAGED_COMMIT_MESSAGES`.
  *  - `path-heuristic`: authored by the venfork bot, touches the managed
@@ -108,9 +146,14 @@ async function authorEmail(ref: string, cwd?: string): Promise<string | null> {
  */
 export async function classifyManagedCommit(
   ref: string,
-  cwd?: string
+  cwd?: string,
+  preserve: Iterable<string> = []
 ): Promise<ManagedCommitKind | null> {
-  if (await hasManagedTrailer(ref, cwd)) return 'trailer';
+  if (await hasManagedTrailer(ref, cwd)) {
+    return (await onlyManagedContent(ref, cwd, new Set(preserve)))
+      ? 'trailer'
+      : null;
+  }
   const subject = await commitSubject(ref, cwd);
   if (subject === MANAGED_COMMIT_MESSAGE) return 'subject';
   if (subject !== null && LEGACY_MANAGED_COMMIT_MESSAGES.includes(subject)) {
@@ -128,9 +171,10 @@ export async function classifyManagedCommit(
 /** True when {@link classifyManagedCommit} finds any managed signal. */
 export async function isManagedCommit(
   ref: string,
-  cwd?: string
+  cwd?: string,
+  preserve: Iterable<string> = []
 ): Promise<boolean> {
-  return (await classifyManagedCommit(ref, cwd)) !== null;
+  return (await classifyManagedCommit(ref, cwd, preserve)) !== null;
 }
 
 /**

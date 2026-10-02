@@ -137,7 +137,7 @@ async function rebuildLinearHead(
       const commitsToPick: string[] = [];
       const dropped: Array<{ commit: string; kind: ManagedCommitKind }> = [];
       for (const commit of branchCommits) {
-        const kind = await classifyManagedCommit(commit, repoDir);
+        const kind = await classifyManagedCommit(commit, repoDir, preserve);
         if (kind === null) commitsToPick.push(commit);
         else dropped.push({ commit, kind });
       }

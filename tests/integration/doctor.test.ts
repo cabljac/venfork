@@ -294,7 +294,7 @@ describe('doctor and the managed-commit invariant', () => {
   test('stacked managed commits ask for a sync to fold them, and sync clears it', async () => {
     await scheduledAndSynced();
     await fx.commitOnOrigin(
-      { 'docs/extra.md': 'stacked\n' },
+      { '.github/workflows/venfork-sync.yml': 'stacked\n' },
       'chore: venfork-managed mirror commit\n\nVenfork-Managed: 1'
     );
 

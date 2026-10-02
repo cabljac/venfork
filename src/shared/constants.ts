@@ -1,10 +1,14 @@
 import { getSyncWorkflowPath } from '../workflow.js';
 
-/** Hard cap for a single network git/gh op. Override with VENFORK_GIT_TIMEOUT
- *  (ms) for very large upstream repos. Defaults to 10 minutes. */
-export const GIT_NET_TIMEOUT_MS = Number(
-  process.env.VENFORK_GIT_TIMEOUT ?? 600_000
-);
+/**
+ * Hard cap in ms for a single network git/gh op: `VENFORK_GIT_TIMEOUT` when
+ * set to a positive number, else 10 minutes. Read on every call, so the
+ * value in effect when the command runs wins.
+ */
+export function gitNetTimeoutMs(): number {
+  const configured = Number(process.env.VENFORK_GIT_TIMEOUT);
+  return Number.isFinite(configured) && configured > 0 ? configured : 600_000;
+}
 
 /** Env applied to every network git/gh op so a misconfigured credential or
  *  SSH path fails fast instead of blocking on an invisible prompt. */

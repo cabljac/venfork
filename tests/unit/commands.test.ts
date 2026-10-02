@@ -3385,7 +3385,7 @@ describe('statusCommand - error paths', () => {
   });
 
   test('shows message when no remotes configured', async () => {
-    mockResponses.set('git remote -v', { exitCode: 0, stdout: '', stderr: '' });
+    mockResponses.set('git remote', { exitCode: 0, stdout: '', stderr: '' });
 
     try {
       await statusCommand();
@@ -3393,8 +3393,7 @@ describe('statusCommand - error paths', () => {
       // Expected - may exit
     }
 
-    // Command should run successfully
-    expect(execaCalls.some((cmd) => cmd.includes('git remote -v'))).toBe(true);
+    expect(execaCalls).toContain('git remote');
   });
 
   test('shows incomplete setup message when missing remotes', async () => {
