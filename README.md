@@ -217,7 +217,7 @@ venfork clone git@github.com:acme-corp/awesome-project-private.git
 - If public fork cannot be auto-detected, you'll be prompted for the URL
 - If upstream cannot be auto-detected (no parent), you'll be prompted for the URL
 
-### `venfork sync [branch]`
+### `venfork sync [branch] [--report-issues]`
 
 Update default branches from upstream. With scheduled sync or a preserve list enabled, the private mirror uses a managed `+0/+1` model:
 - `public/<default>` matches `upstream/<default>`
@@ -228,6 +228,7 @@ Normally you run this from your private mirror directory (or any subfolder of th
 
 **Arguments:**
 - `branch` - (Optional) Upstream branch to sync (default: auto-detected, usually `main` or `master`)
+- `--report-issues` - Open or refresh a `venfork-sync-blocked` issue on the mirror when sync is blocked, and close it after a successful sync. The scheduled workflow passes this flag (see "When a scheduled sync fails" below)
 
 **Examples:**
 ```bash
@@ -255,9 +256,9 @@ venfork sync develop   # Sync develop branch with upstream/develop
 - Workflow allow/block entries match file basenames exactly (no glob patterns)
 - A preserved file that upstream adds is replaced by upstream's version. If upstream later deletes that path again, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork preserve remove <path>` to let it go
 
-### `venfork status`
+### `venfork status [--check] [--json]`
 
-Check the current repository setup and configuration.
+Check the current repository setup and configuration. `--check` runs the `venfork doctor` health checks instead and exits 1 when one fails; add `--json` for machine-readable output.
 
 **What it shows:**
 - Current branch
@@ -268,6 +269,8 @@ Check the current repository setup and configuration.
 **Examples:**
 ```bash
 venfork status
+venfork status --check
+venfork status --check --json
 ```
 
 **Use this command to:**
@@ -421,15 +424,15 @@ Check that a mirror is healthy. Also available as `venfork status --check`. It o
 | `repo` | You are in a git repo and `venfork-config` is readable |
 | `remotes` | `origin`/`upstream`(/`public`) exist, match the config, and upstream push is `DISABLE` |
 | `mode` | The remotes match the recorded `standard` / `no-public` mode |
-| `invariant` | `origin/<default>` is an upstream commit plus at most one managed commit |
+| `invariant` | `origin/<default>` is an upstream commit plus at most one managed commit. Several managed or preserve-only commits with no real divergence ask you to run `venfork sync` to fold them |
 | `divergence` | No user commits on `origin`/`public` that would make sync abort |
-| `preserve` | Every preserved path exists on `origin/<default>` |
+| `preserve` | Every preserve entry is a valid single-file path and exists on `origin/<default>` |
 | `workflow` | The sync workflow on `origin/<default>` matches what this venfork version would write |
-| `token` | `VENFORK_PUSH_TOKEN` is set on the mirror (standard mode with a schedule) |
-| `last-run` | The last `venfork-sync.yml` run did not fail |
-| `cron-age` | The last run is not older than twice the cron interval |
+| `token` | `VENFORK_PUSH_TOKEN` is set on the mirror when a schedule is enabled, in both modes. Doctor can only see that the secret exists: the token itself needs the `workflow` scope (classic) or Workflows: write (fine-grained) |
+| `last-run` | The last `venfork-sync.yml` run, from any trigger, did not fail |
+| `cron-age` | The workflow is enabled, and the last scheduled run is not older than twice the cron interval, with a floor of 1 hour because GitHub delays scheduled runs |
 
-Each failing check prints a fix. GitHub checks show as skipped when `gh` is not authenticated. The command exits 1 when any check fails; `--json` prints the results for CI.
+Each failing check prints a fix. GitHub checks show as skipped when `gh` is not authenticated or origin is not a GitHub repository, and the summary counts skipped checks. If `git fetch` fails, the `remotes` row shows the reason and the checks that need fresh refs are skipped. The command exits 1 when any check fails; `--json` prints only the JSON results, for CI.
 
 ### `venfork schedule <status|set <cron>|disable>`
 
@@ -481,7 +484,7 @@ If `VENFORK_PUSH_TOKEN` is unset, the generated workflow falls back to the defau
 
 ### How scheduled sync behaves
 
-- **Cron is best-effort.** GitHub runs scheduled workflows only from the default branch, at most every 5 minutes, and may delay or skip runs when Actions is busy. Do not rely on exact timing. `venfork doctor` flags a last run older than twice the cron interval.
+- **Cron is best-effort.** GitHub runs scheduled workflows only from the default branch, at most every 5 minutes, and may delay or skip runs when Actions is busy. Do not rely on exact timing. `venfork doctor` flags a disabled workflow, and a last scheduled run older than twice the cron interval (at least 1 hour).
 - **Idle repositories.** GitHub disables scheduled workflows in a public repository after 60 days without activity. A private mirror is not affected by that rule, but if you make a mirror public, re-enable the workflow from the Actions tab when it stops.
 - **The workflow file must stay on the default branch.** It lives in the venfork-managed commit. Sync builds the new tip first and moves the default branch in a single leased push, so the file is never missing between runs.
 - **Token.** Both modes need the `VENFORK_PUSH_TOKEN` secret with the `workflow` scope (see above): the job token cannot push upstream workflow changes, nor push to the public fork. Runs with nothing to push succeed without it, so a missing token can go unnoticed until upstream changes a workflow. `venfork doctor` checks that the secret exists.
@@ -507,7 +510,28 @@ venfork workflows clear
 3. `block` sets the blocklist by workflow filename
 4. `clear` removes both lists
 5. Precedence: if `enabledWorkflows` is non-empty, it is used and `disabledWorkflows` is ignored
-6. Changes apply to the mirror default branch on next `venfork sync` (when schedule is enabled)
+6. Changes apply to the mirror default branch on next `venfork sync` (when the managed commit is in use: a schedule or a preserve list)
+
+### `venfork preserve <list|add|remove|clear> [path ...]`
+
+Keep mirror-only files (for example a caller workflow or an internal doc) on the mirror default branch across `venfork sync`. Sync normally makes `origin/<default>` equal to upstream; preserved files ride in the single venfork-managed commit instead.
+
+**Examples:**
+```bash
+venfork preserve add .github/workflows/internal-ci.yml docs/INTERNAL.md
+venfork preserve list
+venfork preserve remove docs/INTERNAL.md
+venfork preserve clear
+```
+
+**Rules:**
+- Each entry is a single file: a regular file, an executable or a symlink. Directories and glob patterns (`*`, `?`, `[`) are rejected; list each file instead.
+- Paths are clean repo-relative paths: no leading `/` or `-`, no `..` or `.` segments, no backslashes or whitespace.
+- Commit the file to `origin/<default>` before you sync. On every sync, venfork copies each preserved file from the previous origin tip into the new managed commit. If a preserved file is missing, sync aborts until you commit it or remove the entry.
+- Upstream wins. When upstream adds a file at a preserved path, sync uses upstream's version. If upstream later deletes that path, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork preserve remove <path>` to let it go. A preserved file also cannot be restored when upstream adds a file at one of its parent directories; sync aborts and names the path.
+- Commits that only touch preserved files do not count as divergence on origin, so sync folds them into the managed commit.
+
+**Invalid entries:** an entry written by an older venfork, or by hand, that is not a valid single-file path (for example `docs/*.md`) makes sync abort and shows up in `venfork preserve list` and `venfork doctor`. Remove it with `venfork preserve remove <entry>`, using the entry exactly as listed. `remove` works on invalid entries too.
 
 ## Environment Variables
 
@@ -557,6 +581,20 @@ VENFORK_NONINTERACTIVE=1 venfork stage feat/auth --pr
 ```
 
 The setup-time personal-account confirmation is intentionally **not** bypassed — that one's a safety net you almost certainly want when scripting setup.
+
+### `VENFORK_GIT_TIMEOUT`
+
+Cap in milliseconds for each network git or gh operation (default `600000`, 10 minutes). Raise it for very large upstream repositories.
+
+### `VENFORK_SEED_CHUNK` and `VENFORK_SEED_RETRY_MS`
+
+When `venfork setup` seeds a new mirror, it pushes the default branch in batches of `VENFORK_SEED_CHUNK` commits (default `1000`) and retries a failed push with a backoff based on `VENFORK_SEED_RETRY_MS` (default `8000`).
+
+### `GITHUB_REPOSITORY`
+
+GitHub Actions sets this. With `venfork sync --report-issues`, sync files the `venfork-sync-blocked` issue on that repository without a privacy lookup when it names `origin`. Otherwise sync asks gh whether origin is private first.
+
+The generated workflow also reads the `VENFORK_PUSH_TOKEN` secret and the `VENFORK_INSTALL_SPEC` repository variable; see `venfork schedule` above.
 
 ### Concurrency
 
@@ -699,10 +737,7 @@ After `venfork setup`, your local repository has three remotes:
 
 ### Check Your Setup
 
-If you encounter issues, run `venfork status` first to check:
-- Whether you're in a git repository
-- Which remotes are configured
-- If setup is complete
+If you encounter issues, run `venfork doctor` first. It checks the remotes, the layout mode, the managed-commit invariant, divergence, preserved files, the sync workflow, the push token and the last scheduled run, and prints a fix for each failing check. `venfork status` shows the current branch and the configured remotes.
 
 ### "GitHub CLI is not authenticated"
 
@@ -720,7 +755,7 @@ This usually means setup never finished for this clone, or the clone is not the 
 
 ### Divergent Commits Warning
 
-If `venfork sync` detects commits on your default branch that aren't in upstream:
+`venfork doctor` lists divergent commits and the files they touch. If `venfork sync` detects commits on your default branch that aren't in upstream:
 1. This suggests work was committed directly to main/master (not recommended)
 2. Sync will abort to prevent losing these commits
 3. To preserve: manually rebase or cherry-pick them to a feature branch

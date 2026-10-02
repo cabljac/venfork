@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { rename } from 'node:fs/promises';
 import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
@@ -286,5 +287,117 @@ describe('doctor and the pinned version', () => {
       `origin pins venfork 99.0.0, newer than this CLI (${VENFORK_VERSION})`
     );
     expect(checks.workflow.fix).toContain('Upgrade venfork');
+  });
+});
+
+describe('doctor and the managed-commit invariant', () => {
+  test('stacked managed commits ask for a sync to fold them, and sync clears it', async () => {
+    await scheduledAndSynced();
+    await fx.commitOnOrigin(
+      { 'docs/extra.md': 'stacked\n' },
+      'chore: venfork-managed mirror commit\n\nVenfork-Managed: 1'
+    );
+
+    let checks = byId(await runDoctorChecks({ cwd: fx.work }));
+    expect(checks.divergence.ok).toBe(true);
+    expect(checks.invariant).toEqual({
+      id: 'invariant',
+      ok: false,
+      detail:
+        'origin/main has 2 venfork-managed or preserve-only commits above upstream instead of one',
+      fix: 'Run `venfork sync` to fold the 2 commits into one managed commit.',
+    });
+
+    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+
+    checks = byId(await runDoctorChecks({ cwd: fx.work }));
+    expect(checks.invariant).toEqual({
+      id: 'invariant',
+      ok: true,
+      detail: 'upstream + 1 managed commit',
+    });
+  });
+
+  test('a hand-edited sync workflow by a non-bot author is divergence', async () => {
+    await scheduledAndSynced();
+    await fx.commitOnOrigin(
+      { '.github/workflows/venfork-sync.yml': 'name: hand edited\n' },
+      'ci: tweak the sync workflow'
+    );
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(checks.divergence.ok).toBe(false);
+    expect(checks.divergence.detail).toContain(
+      '.github/workflows/venfork-sync.yml'
+    );
+    expect(checks.invariant).toEqual({
+      id: 'invariant',
+      ok: false,
+      detail:
+        'origin/main is not an upstream commit plus at most one venfork-managed commit',
+      fix: 'Resolve the divergence below, then run `venfork sync`.',
+    });
+  });
+});
+
+describe('doctor and broken remotes', () => {
+  test('a missing upstream remote gets the exact add command and skips its dependents', async () => {
+    await fx.git(fx.work, 'remote', 'remove', 'upstream');
+    const config = await fx.readRawConfig();
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(checks.remotes.ok).toBe(false);
+    expect(checks.remotes.detail).toBe('upstream missing');
+    expect(checks.remotes.fix).toBe(
+      `git remote add upstream ${config.upstreamUrl} && git remote set-url --push upstream DISABLE`
+    );
+    for (const id of ['invariant', 'divergence', 'preserve', 'workflow']) {
+      expect(checks[id]).toEqual({
+        id,
+        ok: 'skipped',
+        detail: 'needs the origin and upstream remotes',
+      });
+    }
+  });
+
+  test('a fetch failure is one remotes row and skips its dependents', async () => {
+    await rename(fx.upstream, `${fx.upstream}.gone`);
+    let checks: Record<string, DoctorCheck>;
+    try {
+      checks = byId(await runDoctorChecks({ cwd: fx.work }));
+    } finally {
+      await rename(`${fx.upstream}.gone`, fx.upstream);
+    }
+
+    expect(checks.remotes.ok).toBe(false);
+    expect(checks.remotes.detail).toStartWith('git fetch failed: ');
+    expect(checks.remotes.detail).not.toContain('\n');
+    for (const id of ['invariant', 'divergence', 'preserve', 'workflow']) {
+      expect(checks[id]).toEqual({
+        id,
+        ok: 'skipped',
+        detail: 'needs a successful git fetch',
+      });
+    }
+  });
+
+  test('a missing config branch and a non-repo have different fixes', async () => {
+    const notRepo = byId(await runDoctorChecks({ cwd: fx.root }));
+    await fx.git(
+      fx.work,
+      'push',
+      '--quiet',
+      'origin',
+      ':refs/heads/venfork-config'
+    );
+    const noConfig = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(notRepo.repo.fix).toBe(
+      'Run from a clone made by `venfork setup` or `venfork clone`.'
+    );
+    expect(noConfig.repo.fix).toContain('venfork setup');
+    expect(noConfig.repo.fix).not.toBe(notRepo.repo.fix);
   });
 });

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import * as p from '@clack/prompts';
 import { parseCloneCliArgs } from './clone-args.js';
+import { commandHelp } from './commands/help.js';
 import {
   cloneCommand,
   doctorCommand,
@@ -47,6 +47,12 @@ async function main(): Promise<void> {
 
   if (command === '--version' || command === '-v' || command === 'version') {
     console.log(VENFORK_VERSION);
+    return;
+  }
+
+  const usage = commandHelp(command);
+  if (usage && args.slice(1).some((arg) => arg === '-h' || arg === '--help')) {
+    console.log(usage);
     return;
   }
 
@@ -138,13 +144,14 @@ async function main(): Promise<void> {
       break;
     }
     default:
-      p.log.error(`Unknown command: ${command}`);
-      showHelp();
+      console.error(`Unknown command: ${command}. Run \`venfork help\`.`);
       process.exit(1);
   }
 }
 
 main().catch((error) => {
-  p.log.error(error instanceof Error ? error.message : String(error));
+  console.error(
+    `Error: ${error instanceof Error ? error.message : String(error)}`
+  );
   process.exit(1);
 });

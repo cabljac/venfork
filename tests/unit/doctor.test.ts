@@ -25,6 +25,7 @@ mock.module('execa', () => ({
   },
 }));
 
+import { doctorSummary } from '../../src/commands/doctor.js';
 import { type DoctorCheck, runDoctorChecks } from '../../src/commands.js';
 import { generateSyncWorkflow } from '../../src/workflow.js';
 
@@ -75,7 +76,8 @@ function useMirror(mode: 'standard' | 'no-public'): void {
     [
       'git show origintip:.github/workflows/venfork-sync.yml',
       ok(generateSyncWorkflow(CRON, mode)),
-    ]
+    ],
+    ['gh workflow view', ok('{"state":"active"}')]
   );
 }
 
@@ -199,7 +201,7 @@ describe('doctor GitHub checks', () => {
     const stale = await ghChecks(new Date('2026-03-01T13:00:00Z'));
     expect(stale['cron-age'].ok).toBe(false);
     expect(stale['cron-age'].detail).toBe(
-      'last run 13h ago, but cron fires at least every 6h'
+      'last scheduled run 13h ago, but cron fires at least every 6h'
     );
   });
 
@@ -239,5 +241,97 @@ describe('doctor GitHub checks', () => {
       detail: 'cannot list runs: HTTP 502',
     });
     expect(checks['cron-age'].ok).toBe('skipped');
+  });
+});
+
+describe('doctor scheduled-run checks', () => {
+  beforeEach(() => {
+    responses.unshift([
+      'gh secret list',
+      ok('[{"name":"VENFORK_PUSH_TOKEN"}]'),
+    ]);
+  });
+
+  test('cron-age reads only scheduled runs', async () => {
+    lastRun('success');
+
+    await ghChecks(new Date('2026-03-01T01:00:00Z'));
+
+    expect(
+      ghCalls.some((cmd) =>
+        cmd.includes(
+          'gh run list --repo acme/widget-private --workflow venfork-sync.yml --event schedule --limit 1'
+        )
+      )
+    ).toBe(true);
+  });
+
+  test('cron-age fails with gh workflow enable when the workflow is disabled', async () => {
+    responses.unshift([
+      'gh workflow view',
+      ok('{"state":"disabled_inactivity"}'),
+    ]);
+    lastRun('success');
+
+    const checks = await ghChecks(new Date('2026-03-01T01:00:00Z'));
+
+    expect(checks['cron-age']).toEqual({
+      id: 'cron-age',
+      ok: false,
+      detail: 'venfork-sync.yml is disabled (disabled_inactivity)',
+      fix: 'gh workflow enable venfork-sync.yml --repo acme/widget-private',
+    });
+    expect(
+      ghCalls.some((cmd) =>
+        cmd.includes(
+          'gh workflow view venfork-sync.yml --repo acme/widget-private --json state'
+        )
+      )
+    ).toBe(true);
+  });
+
+  test('a stale cron-age fix does not recommend a manual dispatch', async () => {
+    lastRun('success');
+
+    const checks = await ghChecks(new Date('2026-03-01T13:00:00Z'));
+
+    expect(checks['cron-age'].ok).toBe(false);
+    expect(checks['cron-age'].fix).not.toContain('gh workflow run');
+  });
+
+  test('an in-progress last run says in progress', async () => {
+    lastRun('', 'in_progress');
+
+    const checks = await ghChecks(new Date('2026-03-01T01:00:00Z'));
+
+    expect(checks['last-run']).toEqual({
+      id: 'last-run',
+      ok: true,
+      detail: `last run in progress: ${RUN_URL}`,
+    });
+  });
+});
+
+describe('doctorSummary', () => {
+  const check = (ok: DoctorCheck['ok']): DoctorCheck => ({
+    id: 'x',
+    ok,
+    detail: '',
+  });
+
+  test('says all passed only when nothing was skipped', () => {
+    expect(doctorSummary([check(true), check(true)])).toBe('All checks passed');
+  });
+
+  test('counts skipped checks instead of claiming all passed', () => {
+    expect(doctorSummary([check(true), check(true), check('skipped')])).toBe(
+      '2 passed, 1 skipped'
+    );
+  });
+
+  test('counts failures first', () => {
+    expect(doctorSummary([check(false), check(true), check('skipped')])).toBe(
+      '1 failed, 1 passed, 1 skipped'
+    );
   });
 });

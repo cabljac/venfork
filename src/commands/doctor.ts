@@ -51,6 +51,15 @@ function sameRepo(a: string, b: string): boolean {
   return pa && pb ? pa === pb : a.trim() === b.trim();
 }
 
+/** First git error line of a multi-line stderr, so table rows stay one line. */
+function oneLine(text: string): string {
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.find((line) => /^(fatal|error):/.test(line)) ?? lines[0] ?? '';
+}
+
 function formatAge(minutes: number): string {
   if (minutes < 120) return `${Math.round(minutes)}m`;
   if (minutes < 48 * 60) return `${Math.round(minutes / 60)}h`;
@@ -88,16 +97,28 @@ export async function runDoctorChecks(
   const inRepo = await git(false)`git rev-parse --git-dir`;
   let config: VenforkConfig | null = null;
   let configProblem = '';
+  let configFix =
+    'Run from a clone made by `venfork setup` or `venfork clone`.';
   if (inRepo.exitCode !== 0) {
     configProblem = `${cwd} is not a git repository`;
   } else {
     try {
       config = await readVenforkConfigFromRepo(cwd, { allowInvalidCron: true });
-      if (!config) configProblem = 'venfork-config branch not found on origin';
+      if (!config) {
+        configProblem = 'venfork-config branch not found on origin';
+        configFix =
+          'Re-run `venfork setup <upstream> <mirror-name>` from the parent directory of this clone; for existing repos it repairs the clone and pushes the venfork-config branch.';
+      }
     } catch (err) {
       if (!(err instanceof ConfigError)) throw err;
-      configProblem =
-        err.reason === 'fetch' ? `fetch failed: ${err.message}` : err.message;
+      if (err.reason === 'fetch') {
+        configProblem = `fetch failed: ${oneLine(err.message)}`;
+        configFix = 'Check that origin is reachable: `git ls-remote origin`.';
+      } else {
+        configProblem = oneLine(err.message);
+        configFix =
+          'Fix .venfork/config.json on the venfork-config branch of origin.';
+      }
     }
   }
   if (!config) {
@@ -105,7 +126,7 @@ export async function runDoctorChecks(
       id: 'repo',
       ok: false,
       detail: configProblem,
-      fix: 'Run from a clone made by `venfork setup` or `venfork clone`.',
+      fix: configFix,
     });
     for (const id of laterIds) skip(id, 'needs a readable venfork config');
     return checks;
@@ -136,19 +157,28 @@ export async function runDoctorChecks(
   }
 
   const remoteProblems: string[] = [];
-  if (!remotes.origin) remoteProblems.push('origin missing');
+  const remoteFixes: string[] = [];
+  if (!remotes.origin) {
+    remoteProblems.push('origin missing');
+    remoteFixes.push('git remote add origin <private mirror URL>');
+  }
   if (!remotes.upstream) {
     remoteProblems.push('upstream missing');
+    remoteFixes.push(
+      `git remote add upstream ${config.upstreamUrl} && git remote set-url --push upstream DISABLE`
+    );
   } else {
     if (!sameRepo(remotes.upstream.fetch, config.upstreamUrl)) {
       remoteProblems.push(
         `upstream is ${remotes.upstream.fetch}, config says ${config.upstreamUrl}`
       );
+      remoteFixes.push(`git remote set-url upstream ${config.upstreamUrl}`);
     }
     if (remotes.upstream.push !== 'DISABLE') {
       remoteProblems.push(
         `upstream push URL is ${remotes.upstream.push}, expected DISABLE`
       );
+      remoteFixes.push('git remote set-url --push upstream DISABLE');
     }
   }
   if (
@@ -159,6 +189,28 @@ export async function runDoctorChecks(
     remoteProblems.push(
       `public is ${remotes.public.fetch}, config says ${config.publicForkUrl}`
     );
+    remoteFixes.push(`git remote set-url public ${config.publicForkUrl}`);
+  }
+
+  const fetchRemotes = [
+    'origin',
+    'upstream',
+    ...(noPublic ? [] : ['public']),
+  ].filter((name) => remotes[name]);
+  const haveBothRemotes = Boolean(remotes.origin && remotes.upstream);
+  const fetched = haveBothRemotes
+    ? await netExec(cwd, {
+        bufferOutput: true,
+      })`git fetch --quiet --multiple ${fetchRemotes}`
+    : null;
+  const fetchFailed = fetched !== null && fetched.exitCode !== 0;
+  if (fetched && fetchFailed) {
+    remoteProblems.push(
+      `git fetch failed: ${oneLine(netFailureReason(fetched))}`
+    );
+    remoteFixes.push(
+      `Check the remote URLs and your credentials, then retry \`git fetch --multiple ${fetchRemotes.join(' ')}\``
+    );
   }
   checks.push(
     remoteProblems.length === 0
@@ -167,7 +219,7 @@ export async function runDoctorChecks(
           id: 'remotes',
           ok: false,
           detail: remoteProblems.join('; '),
-          fix: 'Fix with `git remote set-url` (upstream push: `git remote set-url --push upstream DISABLE`).',
+          fix: remoteFixes.join('; '),
         }
   );
 
@@ -191,32 +243,63 @@ export async function runDoctorChecks(
         }
   );
 
-  const fetchRemotes = [
-    'origin',
-    'upstream',
-    ...(noPublic ? [] : ['public']),
-  ].filter((name) => remotes[name]);
-  const fetched = await netExec(cwd, {
-    bufferOutput: true,
-  })`git fetch --quiet --multiple ${fetchRemotes}`;
-  const defaultBranch = await getDefaultBranch('upstream', cwd);
+  const gitStateIds = ['invariant', 'divergence', 'preserve', 'workflow'];
   const revParse = async (ref: string): Promise<string> => {
     const result = await git(
       false
     )`git rev-parse --verify ${`${ref}^{commit}`}`;
     return result.exitCode === 0 ? result.stdout.trim() : '';
   };
-  const originTip = await revParse(`origin/${defaultBranch}`);
-  const upstreamTip = await revParse(`upstream/${defaultBranch}`);
-  if (fetched.exitCode !== 0 || !originTip || !upstreamTip) {
-    const detail =
-      fetched.exitCode !== 0
-        ? `git fetch failed: ${netFailureReason(fetched)}`
-        : `origin/${defaultBranch} or upstream/${defaultBranch} not found`;
-    for (const id of ['invariant', 'divergence', 'preserve', 'workflow']) {
+  const defaultBranch =
+    haveBothRemotes && !fetchFailed
+      ? await getDefaultBranch('upstream', cwd)
+      : '';
+  const originTip = defaultBranch
+    ? await revParse(`origin/${defaultBranch}`)
+    : '';
+  const upstreamTip = defaultBranch
+    ? await revParse(`upstream/${defaultBranch}`)
+    : '';
+  if (!haveBothRemotes) {
+    for (const id of gitStateIds) {
+      skip(id, 'needs the origin and upstream remotes');
+    }
+  } else if (fetchFailed) {
+    for (const id of gitStateIds) skip(id, 'needs a successful git fetch');
+  } else if (!originTip || !upstreamTip) {
+    const detail = `origin/${defaultBranch} or upstream/${defaultBranch} not found`;
+    for (const id of gitStateIds) {
       checks.push({ id, ok: false, detail });
     }
   } else {
+    const preserveAllowed = new Set(config.preserve ?? []);
+    const divergences: string[] = [];
+    const remotesToCheck: Array<[string, boolean]> = [['origin', true]];
+    if (!noPublic && remotes.public) remotesToCheck.push(['public', false]);
+    let divergenceError = '';
+    let originDiverged = true;
+    for (const [remote, allowPreserved] of remotesToCheck) {
+      try {
+        const result = await checkDivergence({
+          remote,
+          defaultBranch,
+          allowPreserved,
+          preserveAllowed,
+          cwd,
+        });
+        if (remote === 'origin') originDiverged = result.count > 0;
+        if (result.count > 0) {
+          divergences.push(
+            `${remote}/${defaultBranch}: ${result.count} commit(s) touching ${result.files.join(', ') || '(no files)'}`
+          );
+        }
+      } catch (err) {
+        divergenceError = oneLine(
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+
     const managed = await isManagedCommit(originTip, cwd);
     const base = managed ? await revParse(`${originTip}^`) : originTip;
     const onUpstream =
@@ -226,7 +309,21 @@ export async function runDoctorChecks(
           false
         )`git merge-base --is-ancestor ${base} ${`upstream/${defaultBranch}`}`
       ).exitCode === 0;
-    if (!onUpstream) {
+    if (!onUpstream && !originDiverged && !divergenceError) {
+      const stacked = Number(
+        (
+          await git(
+            false
+          )`git rev-list --count ${`upstream/${defaultBranch}..${originTip}`}`
+        ).stdout.trim()
+      );
+      checks.push({
+        id: 'invariant',
+        ok: false,
+        detail: `origin/${defaultBranch} has ${stacked} venfork-managed or preserve-only commits above upstream instead of one`,
+        fix: `Run \`venfork sync\` to fold the ${stacked} commits into one managed commit.`,
+      });
+    } else if (!onUpstream) {
       checks.push({
         id: 'invariant',
         ok: false,
@@ -255,29 +352,6 @@ export async function runDoctorChecks(
       });
     }
 
-    const preserveAllowed = new Set(config.preserve ?? []);
-    const divergences: string[] = [];
-    const remotesToCheck: Array<[string, boolean]> = [['origin', true]];
-    if (!noPublic && remotes.public) remotesToCheck.push(['public', false]);
-    let divergenceError = '';
-    for (const [remote, allowPreserved] of remotesToCheck) {
-      try {
-        const result = await checkDivergence({
-          remote,
-          defaultBranch,
-          allowPreserved,
-          preserveAllowed,
-          cwd,
-        });
-        if (result.count > 0) {
-          divergences.push(
-            `${remote}/${defaultBranch}: ${result.count} commit(s) touching ${result.files.join(', ') || '(no files)'}`
-          );
-        }
-      } catch (err) {
-        divergenceError = err instanceof Error ? err.message : String(err);
-      }
-    }
     if (divergenceError) {
       checks.push({ id: 'divergence', ok: false, detail: divergenceError });
     } else {
@@ -421,7 +495,7 @@ export async function runDoctorChecks(
   if (secrets.exitCode !== 0) {
     skip(
       'token',
-      `cannot list secrets on ${mirrorRepo}: ${netFailureReason(secrets)}`
+      `cannot list secrets on ${mirrorRepo}: ${oneLine(netFailureReason(secrets))}`
     );
   } else {
     let names: string[] = [];
@@ -452,7 +526,7 @@ export async function runDoctorChecks(
   })`gh run list --repo ${mirrorRepo} --workflow ${SYNC_WORKFLOW_FILE} --limit 1 --json conclusion,status,url,createdAt`;
   let lastRun: LastRun | null = null;
   if (runs.exitCode !== 0) {
-    skip('last-run', `cannot list runs: ${netFailureReason(runs)}`);
+    skip('last-run', `cannot list runs: ${oneLine(netFailureReason(runs))}`);
     skip('cron-age', 'needs the last run');
     return checks;
   }
@@ -470,27 +544,80 @@ export async function runDoctorChecks(
     skip('cron-age', 'no runs yet');
     return checks;
   }
+  const completed = lastRun.status === 'completed';
   const failed =
-    lastRun.status === 'completed' &&
+    completed &&
     lastRun.conclusion !== 'success' &&
     lastRun.conclusion !== 'skipped';
+  const outcome = completed
+    ? lastRun.conclusion || 'completed'
+    : lastRun.status.replaceAll('_', ' ');
   checks.push(
     failed
       ? {
           id: 'last-run',
           ok: false,
-          detail: `last run ${lastRun.conclusion ?? 'failed'}: ${lastRun.url}`,
+          detail: `last run ${lastRun.conclusion || 'failed'}: ${lastRun.url}`,
           fix: 'Open the run log; run `venfork sync` locally to see the same error.',
         }
       : {
           id: 'last-run',
           ok: true,
-          detail: `last run ${lastRun.conclusion ?? lastRun.status}: ${lastRun.url}`,
+          detail: `last run ${outcome}: ${lastRun.url}`,
         }
   );
 
+  const workflowView = await netExec(cwd, {
+    bufferOutput: true,
+  })`gh workflow view ${SYNC_WORKFLOW_FILE} --repo ${mirrorRepo} --json state`;
+  if (workflowView.exitCode !== 0) {
+    skip(
+      'cron-age',
+      `cannot read the workflow state: ${oneLine(netFailureReason(workflowView))}`
+    );
+    return checks;
+  }
+  let workflowState = '';
+  try {
+    workflowState =
+      (JSON.parse(workflowView.stdout ?? '') as { state?: string }).state ?? '';
+  } catch {
+    workflowState = '';
+  }
+  if (workflowState !== 'active') {
+    checks.push({
+      id: 'cron-age',
+      ok: false,
+      detail: `${SYNC_WORKFLOW_FILE} is ${workflowState ? `disabled (${workflowState})` : 'in an unknown state'}`,
+      fix: `gh workflow enable ${SYNC_WORKFLOW_FILE} --repo ${mirrorRepo}`,
+    });
+    return checks;
+  }
+
+  const scheduledRuns = await netExec(cwd, {
+    bufferOutput: true,
+  })`gh run list --repo ${mirrorRepo} --workflow ${SYNC_WORKFLOW_FILE} --event schedule --limit 1 --json conclusion,status,url,createdAt`;
+  if (scheduledRuns.exitCode !== 0) {
+    skip(
+      'cron-age',
+      `cannot list scheduled runs: ${oneLine(netFailureReason(scheduledRuns))}`
+    );
+    return checks;
+  }
+  let lastScheduled: LastRun | null = null;
+  try {
+    lastScheduled =
+      (JSON.parse(scheduledRuns.stdout ?? '') as LastRun[])[0] ?? null;
+  } catch {
+    lastScheduled = null;
+  }
+  if (!lastScheduled) {
+    skip('cron-age', 'no scheduled runs yet');
+    return checks;
+  }
+
   const interval = cronMaxIntervalMinutes(schedule.cron, now);
-  const createdAt = Date.parse(lastRun.createdAt);
+  const createdAt = Date.parse(lastScheduled.createdAt);
   if (interval === null || Number.isNaN(createdAt)) {
     skip('cron-age', 'cannot work out the cron interval');
     return checks;
@@ -503,13 +630,13 @@ export async function runDoctorChecks(
       ? {
           id: 'cron-age',
           ok: true,
-          detail: `last run ${formatAge(ageMinutes)} ago (cron fires at least every ${formatAge(interval)})`,
+          detail: `last scheduled run ${formatAge(ageMinutes)} ago (cron fires at least every ${formatAge(interval)})`,
         }
       : {
           id: 'cron-age',
           ok: false,
-          detail: `last run ${formatAge(ageMinutes)} ago, but cron fires at least every ${formatAge(interval)}`,
-          fix: 'Check the workflow is enabled in the Actions tab (GitHub disables schedules in public repos after 60 idle days), or run `gh workflow run venfork-sync.yml`.',
+          detail: `last scheduled run ${formatAge(ageMinutes)} ago, but cron fires at least every ${formatAge(interval)}`,
+          fix: `GitHub is delaying or dropping scheduled runs; check \`gh run list --repo ${mirrorRepo} --workflow ${SYNC_WORKFLOW_FILE} --event schedule\` and run \`venfork sync\` locally to catch up meanwhile.`,
         }
   );
   return checks;
@@ -539,6 +666,24 @@ export async function doctorCommand(
       : row;
   });
   p.note(lines.join('\n'), 'Checks');
-  p.outro(healthy ? '✨ All checks passed' : '❌ Some checks failed');
+  p.outro(`${healthy ? '✨' : '❌'} ${doctorSummary(checks)}`);
   return healthy;
+}
+
+/**
+ * One-line tally for the doctor outro. Says "All checks passed" only when
+ * every check passed; otherwise counts failed, passed and skipped checks.
+ */
+export function doctorSummary(checks: DoctorCheck[]): string {
+  const failed = checks.filter((check) => check.ok === false).length;
+  const passed = checks.filter((check) => check.ok === true).length;
+  const skipped = checks.length - failed - passed;
+  if (failed === 0 && skipped === 0) return 'All checks passed';
+  return [
+    failed > 0 ? `${failed} failed` : '',
+    `${passed} passed`,
+    skipped > 0 ? `${skipped} skipped` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
 }

@@ -561,7 +561,7 @@ export async function stageCommand(
   if (!branch) {
     p.log.error('Branch name is required');
     p.outro(
-      'Usage: venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>]. Run `venfork help` for the full list of supported options, including `--internal-pr <n>` and `--no-update-existing`.'
+      'Usage: venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>]. Run `venfork stage --help` for every option.'
     );
     process.exit(1);
   }
