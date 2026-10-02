@@ -192,7 +192,7 @@ describe('the gate scans published files for mirror references', () => {
     await featureFrom('upstream/main');
     await commitFile(
       'notes/c.json',
-      '{ "mode": "x", "upstreamUrl": "a", "publicForkUrl": "b" }\n',
+      '{ "version": "1", "mode": "x", "upstreamUrl": "https://x/a", "publicForkUrl": "git@x:b" }\n',
       'docs: notes'
     );
 

@@ -232,3 +232,38 @@ describe('the gate reads every text encoding', () => {
     await expectRefused('data/big.txt', 'too large to check');
   }, 120000);
 });
+
+describe('the config signature', () => {
+  const tsSource = (n: number) =>
+    `export interface VenforkConfig { upstreamUrl: string; publicForkUrl?: string }\nconst x = { "upstreamUrl": 1, "publicForkUrl": ${n} };\n`;
+
+  test('source code naming the config keys ships', async () => {
+    await featureFrom('upstream/main');
+    await commitFile('src/config.ts', tsSource(3), 'fix: tweak');
+
+    await expectShipped();
+  });
+
+  test('is skipped when self-reference is allowed', async () => {
+    process.env.VENFORK_ALLOW_SELF_REFERENCE = '1';
+    await featureFrom('upstream/main');
+    await commitFile(
+      'fixtures/config.json',
+      '{ "version": "1", "upstreamUrl": "git@github.com:a/b.git", "publicForkUrl": "git@github.com:c/b.git" }\n',
+      'test: fixture'
+    );
+
+    await expectShipped();
+  });
+
+  test('a config.json with other values is refused', async () => {
+    await featureFrom('upstream/main');
+    await commitFile(
+      'notes/c.json',
+      '{ "version": "1", "upstreamUrl": "git@github.com:a/b.git", "publicForkUrl": "git@github.com:c/b.git" }\n',
+      'docs: notes'
+    );
+
+    await expectRefused('notes/c.json');
+  });
+});

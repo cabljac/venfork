@@ -10,6 +10,7 @@ import {
   canonicalText,
   findDeniedText,
   mirrorLocationTerms,
+  selfReferenceAllowed,
 } from './deny-list.js';
 
 /** Git's object id for the empty blob; an empty file is not mirror content. */
@@ -63,10 +64,34 @@ function isPreservedPath(file: string, preserve: readonly string[]): boolean {
   });
 }
 
-/** True for text shaped like a venfork `config.json`, whatever its values. */
+function isUrlLike(value: unknown): boolean {
+  return typeof value === 'string' && /[/:]/.test(value) && !/\s/.test(value);
+}
+
+/**
+ * True for a JSON object shaped like a venfork `config.json`, whatever its
+ * values: a `version` key, a URL-valued `upstreamUrl` and, when present, a
+ * URL-valued `publicForkUrl`. Never true when self-reference is allowed.
+ */
 function looksLikeVenforkConfig(text: string): boolean {
-  const folded = canonicalText(text).toLowerCase();
-  return folded.includes('"upstreamurl"') && folded.includes('"publicforkurl"');
+  if (selfReferenceAllowed()) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(canonicalText(text));
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return false;
+  }
+  const fields = new Map(
+    Object.entries(parsed).map(([key, value]) => [key.toLowerCase(), value])
+  );
+  return (
+    fields.has('version') &&
+    isUrlLike(fields.get('upstreamurl')) &&
+    (!fields.has('publicforkurl') || isUrlLike(fields.get('publicforkurl')))
+  );
 }
 
 function parseTreeEntries(stdout: string): TreeBlob[] {
