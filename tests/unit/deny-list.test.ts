@@ -70,6 +70,75 @@ describe('findDeniedText with a bare repo name term', () => {
   });
 });
 
+describe('findDeniedText repo boundaries', () => {
+  const NAME_TERMS = [
+    'git@github.com:acme/widget-private.git',
+    'git@github.com:acme/widget-private',
+    'acme/widget-private',
+    'widget-private',
+    'venfork',
+  ];
+
+  test.each([
+    ['https://github.com/other/widget-private/', 'widget-private'],
+    ['https://github.com/other/widget-private/pull/3', 'widget-private'],
+    ['see other/widget-private.', 'widget-private'],
+    ['clone other/widget-private.git.', 'widget-private'],
+    ['acme/widget-private', 'acme/widget-private'],
+    ['acme/widget-private.git', 'acme/widget-private'],
+    ['acme/widget-private/pull/1', 'acme/widget-private'],
+    ['acme/widget-private#7', 'acme/widget-private'],
+    ['acme/widget-private?x', 'acme/widget-private'],
+  ])('finds %p', (text, term) => {
+    expect(findDeniedText(text, NAME_TERMS)).toBe(term);
+  });
+
+  test.each([
+    'acme/widget-private-public',
+    'acme/widget-private-oss',
+    'git@github.com:acme/widget-private-public.git',
+    'src/widget-private/',
+    'src/widget-private.ts',
+    'other/widget-private-v2',
+  ])('passes %p', (text) => {
+    expect(findDeniedText(text, NAME_TERMS)).toBeNull();
+  });
+
+  describe('with hostOnlyNames for file content', () => {
+    test.each([
+      'import x from "acme-ui/widget-private"',
+      'see someone/widget-private',
+      'packages/widget-private',
+      'other/widget-private.git',
+    ])('a bare name without a host passes %p', (text) => {
+      expect(
+        findDeniedText(text, NAME_TERMS, { hostOnlyNames: true })
+      ).toBeNull();
+    });
+
+    test.each([
+      'github.com/other/widget-private',
+      'github.com:other/widget-private',
+      'git@gitlab.com:other/widget-private.git',
+      'ssh://git@example.com/other/widget-private',
+      'https://example.com/other/widget-private/pull/3',
+      'clone https://github.com/other/widget-private.',
+    ])('a bare name after a host is found in %p', (text) => {
+      expect(findDeniedText(text, NAME_TERMS, { hostOnlyNames: true })).toBe(
+        'widget-private'
+      );
+    });
+
+    test('the mirror owner/name still matches without a host', () => {
+      expect(
+        findDeniedText('see acme/widget-private', NAME_TERMS, {
+          hostOnlyNames: true,
+        })
+      ).toBe('acme/widget-private');
+    });
+  });
+});
+
 describe('assertNoMirrorReference', () => {
   test('names where the term was found', () => {
     expect(() =>

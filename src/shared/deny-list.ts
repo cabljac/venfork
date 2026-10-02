@@ -86,16 +86,32 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** `github.com/`, `github.com:`, `git@<host>:`, `ssh://<host>/` or `http(s)://<host>/`. */
+const HOST_PREFIX =
+  '(?:github\\.com[:/]|git@[^\\s/:]+:|ssh://[^\\s/]+/|https?://[^\\s/]+/)';
+
+/** Not followed by more of a repo name or by a file extension. */
+const NAME_END = '(?![a-z0-9_-])(?!\\.[a-z0-9_])';
+
 /**
- * True when `name` appears as the repo segment of an `owner/name` or URL:
- * after a `/` or `:` and an owner, optionally with `.git`, and not followed
- * by more of a path. `src/backend/` and `src/backend.ts` do not match.
+ * Matches `name` as the repo segment of an `owner/name` or URL, optionally
+ * with `.git`. After a host any path may follow (`/pull/3`); without one a
+ * further `/` means a directory, so `src/backend/` and `src/backend.ts` do
+ * not match. With `hostOnly`, only the hosted form matches.
  */
-function hasRepoName(folded: string, name: string): boolean {
-  const pattern = new RegExp(
-    `[a-z0-9_.-]+[/:]${escapeRegExp(name)}(?:\\.git)?(?![a-z0-9_./-])`
-  );
-  return pattern.test(folded);
+function repoNamePattern(name: string, hostOnly: boolean): RegExp {
+  const repo = `[a-z0-9_.-]+[/:]${escapeRegExp(name)}(?:\\.git)?`;
+  const hosted = `${HOST_PREFIX}${repo}${NAME_END}`;
+  return new RegExp(hostOnly ? hosted : `${hosted}|${repo}(?!/)${NAME_END}`);
+}
+
+/** Options for {@link findDeniedText}. */
+export interface FindDeniedTextOptions {
+  /**
+   * Match a bare repo name term only after a host. For file content, where
+   * a package or directory of the same name is common.
+   */
+  hostOnlyNames?: boolean;
 }
 
 /**
@@ -103,22 +119,33 @@ function hasRepoName(folded: string, name: string): boolean {
  * text and terms both passed through {@link canonicalText}), or null when
  * the text is clean. A term with no `/`, `:` or `@` other than `venfork` is
  * a bare repo name and matches only as the repo of an `owner/name` or URL.
+ * Every other term but `venfork` must not run on into more of a repo name:
+ * `acme/widget-public` does not match the term `acme/widget`.
  *
  * @param text Text bound for the public side.
  * @param terms Output of {@link mirrorDenyList}.
+ * @param options Matching options.
  */
 export function findDeniedText(
   text: string,
-  terms: readonly string[]
+  terms: readonly string[],
+  options: FindDeniedTextOptions = {}
 ): string | null {
   const folded = canonicalText(text).toLowerCase();
   for (const term of terms) {
     const needle = canonicalText(term).toLowerCase();
     if (!needle) continue;
-    const bareName = term !== SELF_REFERENCE_TERM && !/[/:@]/.test(term);
-    if (bareName ? hasRepoName(folded, needle) : folded.includes(needle)) {
-      return term;
+    let found: boolean;
+    if (term === SELF_REFERENCE_TERM) {
+      found = folded.includes(needle);
+    } else if (!/[/:@]/.test(term)) {
+      found = repoNamePattern(needle, options.hostOnlyNames === true).test(
+        folded
+      );
+    } else {
+      found = new RegExp(`${escapeRegExp(needle)}(?![a-z0-9_-])`).test(folded);
     }
+    if (found) return term;
   }
   return null;
 }

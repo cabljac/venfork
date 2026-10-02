@@ -499,7 +499,8 @@ function findTermInBytes(
  *    identical to mirror-held content at any path.
  *  - {@link MirrorReferenceError} when an added or modified text file, or
  *    any file name, contains a mirror deny-list term (never the bare word
- *    `venfork`) or looks like a venfork `config.json`; or when the venfork
+ *    `venfork`; in file content the bare repo name only after a host) or
+ *    looks like a venfork `config.json`; or when the venfork
  *    bot authored or committed the commit, or its author, committer or
  *    message contains a deny-list term. Text is read as UTF-8, or UTF-16
  *    when it starts with a byte order mark. Every file, text or binary, is
@@ -579,7 +580,7 @@ export async function assertPublishableCommits(
             ? null
             : looksLikeVenforkConfig(text)
               ? CONFIG_SIGNATURE
-              : findDeniedText(text, locationTerms);
+              : findDeniedText(text, locationTerms, { hostOnlyNames: true });
         hit = textHit ?? findTermInBytes(bytes, locationTerms);
         scanned.set(change.newOid, hit);
       }

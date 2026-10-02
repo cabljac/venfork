@@ -7,7 +7,10 @@ import { quietPrompts } from '../harness/prompts.js';
 mock.module('@clack/prompts', quietPrompts);
 
 import { stageCommand, syncCommand } from '../../src/commands.js';
-import { collectMirrorBlobs } from '../../src/shared/stage-gate.js';
+import {
+  assertPublishableCommits,
+  collectMirrorBlobs,
+} from '../../src/shared/stage-gate.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
@@ -342,6 +345,48 @@ describe('the gate reads every text encoding', () => {
 
     await expectRefused('data/big.txt', 'too large to check');
   }, 120000);
+});
+
+describe('file content needs a host before the bare mirror name', () => {
+  const NAME_TERMS = [
+    'git@github.com:acme/widget-private.git',
+    'git@github.com:acme/widget-private',
+    'acme/widget-private',
+    'widget-private',
+  ];
+
+  async function gate(file: string, content: string): Promise<string[]> {
+    await featureFrom('upstream/main');
+    await commitFile(file, content, 'feat: x');
+    return assertPublishableCommits({
+      branch: 'feature',
+      base: 'upstream/main',
+      head: 'feature',
+      preserve: [],
+      mirrorBlobs: new Map(),
+      denyList: NAME_TERMS,
+      originalOf: new Map(),
+      cwd: fx.work,
+    });
+  }
+
+  test('a package path with the mirror name passes', async () => {
+    expect(
+      await gate('src/a.ts', 'import x from "acme-ui/widget-private";\n')
+    ).toEqual(['src/a.ts']);
+  });
+
+  test('another owner URL with the mirror name is refused', async () => {
+    await expect(
+      gate('docs/a.md', 'see https://github.com/other/widget-private/pull/3\n')
+    ).rejects.toThrow("contains 'widget-private'");
+  });
+
+  test('a file name with another owner and the mirror name is refused', async () => {
+    await expect(gate('other/widget-private', 'x\n')).rejects.toThrow(
+      "contains 'widget-private'"
+    );
+  });
 });
 
 describe('the config signature', () => {
