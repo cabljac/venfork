@@ -58,7 +58,7 @@ describe('mirror fixture isolation', () => {
       GIT_CONFIG_KEY_0: undefined,
       GIT_CONFIG_VALUE_0: undefined,
     });
-    expect(author).toBe('Venfork Test');
+    expect(author).toBe('Fixture Dev');
     expect(process.env.GIT_DIR).toBe(sentinel);
     expect(process.env.GIT_CONFIG_VALUE_0).toBe('Leaked Identity');
     const refs = await $({

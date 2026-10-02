@@ -83,12 +83,19 @@ describe('stage against real repos', () => {
     );
   });
 
-  test('stage pushes a branch with no managed commit unchanged', async () => {
-    const featureSha = await cutFeatureBranch('upstream/main');
+  test('stage rebuilds a branch with no managed commit on upstream, so its SHA changes but its tree does not', async () => {
+    await cutFeatureBranch('upstream/main');
+    await fx.commitOnUpstream({ 'src/later.txt': 'later\n' });
 
     await stageCommand('feature');
 
-    expect(await fx.sha(fx.publicFork ?? '', 'feature')).toBe(featureSha);
+    const publicFork = fx.publicFork ?? '';
+    expect(await fx.sha(publicFork, 'feature~1')).toBe(
+      await fx.sha(fx.upstream, 'main')
+    );
+    expect(await fx.fileAt(publicFork, 'feature', 'src/feature.txt')).toBe(
+      'feature\n'
+    );
   });
 
   test('stage re-pushes a rebuilt branch when the public tracking ref is missing', async () => {
@@ -225,10 +232,12 @@ describe('stage refuses branches that are not upstream work', () => {
 describe('stage in no-public mode', () => {
   test('pushes a clean branch straight to upstream', async () => {
     await useMode('no-public');
-    const featureSha = await cutFeatureBranch('upstream/main');
+    await cutFeatureBranch('upstream/main');
 
     await stageCommand('feature');
 
-    expect(await fx.sha(fx.upstream, 'feature')).toBe(featureSha);
+    expect(await fx.git(fx.upstream, 'rev-parse', 'feature^{tree}')).toBe(
+      await fx.git(fx.work, 'rev-parse', 'feature^{tree}')
+    );
   });
 });
