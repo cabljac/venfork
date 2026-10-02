@@ -35,17 +35,18 @@ async function gh(
 }
 
 /**
- * The mirror repo to file the issue on: `GITHUB_REPOSITORY` inside Actions,
- * otherwise origin's GitHub repo, but only when gh confirms it is private.
+ * The mirror repo to file the issue on: origin's GitHub repo. Inside
+ * Actions, `GITHUB_REPOSITORY` is trusted without asking gh only when it
+ * names that same repo; otherwise gh must confirm origin is private.
  * Returns null (after a warning) when no safe target exists, so mirror
  * details never land on a public repository.
  */
 export async function resolveReportRepo(cwd: string): Promise<string | null> {
-  const fromActions = process.env.GITHUB_REPOSITORY?.trim();
-  if (fromActions) return fromActions;
-
   const origin = await $({ cwd, reject: false })`git remote get-url origin`;
   const repo = origin.exitCode === 0 ? parseRepoPath(origin.stdout.trim()) : '';
+  const fromActions = process.env.GITHUB_REPOSITORY?.trim();
+  if (repo && fromActions === repo) return repo;
+
   if (!repo) {
     p.log.warn(
       'Not reporting the sync result: origin is not a GitHub repository.'

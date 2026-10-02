@@ -91,8 +91,20 @@ afterEach(() => {
 });
 
 describe('resolveReportRepo', () => {
+  test('ignores a GITHUB_REPOSITORY that is not origin and checks origin instead', async () => {
+    Object.assign(process.env, RUN_ENV);
+    useOrigin('git@github.com:acme/other.git');
+    responses.push(['gh repo view acme/other', ok('false')]);
+
+    expect(await resolveReportRepo('/m')).toBeNull();
+    expect(ghCalls()[0].command).toBe(
+      'gh repo view acme/other --json isPrivate -q .isPrivate'
+    );
+  });
+
   test('uses GITHUB_REPOSITORY inside Actions without asking gh', async () => {
     Object.assign(process.env, RUN_ENV);
+    useOrigin('https://github.com/acme/widget-private.git');
 
     expect(await resolveReportRepo('/m')).toBe('acme/widget-private');
     expect(ghCalls()).toEqual([]);
@@ -144,6 +156,7 @@ describe('resolveReportRepo', () => {
 describe('reportSyncBlocked', () => {
   beforeEach(() => {
     Object.assign(process.env, RUN_ENV);
+    useOrigin('git@github.com:acme/widget-private.git');
   });
 
   test('creates the label only when missing, then opens the issue', async () => {
@@ -241,6 +254,7 @@ describe('syncBlockedBody', () => {
 describe('resolveSyncBlocked', () => {
   beforeEach(() => {
     Object.assign(process.env, RUN_ENV);
+    useOrigin('git@github.com:acme/widget-private.git');
   });
 
   test('closes every open labelled issue with the run URL', async () => {

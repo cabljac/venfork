@@ -4,6 +4,7 @@ import {
   assertNoInvalidPreserve,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
+  type VenforkConfig,
   type VenforkConfigPatch,
 } from '../config.js';
 import { SyncDivergenceError } from '../errors.js';
@@ -25,7 +26,7 @@ async function applyScheduleChange(
   repoDir: string,
   defaultBranch: string,
   patch: VenforkConfigPatch
-): Promise<void> {
+): Promise<VenforkConfig> {
   await netFetch('upstream', repoDir);
   await netFetch('origin', repoDir);
   const current = await readVenforkConfigFromRepo(repoDir, {
@@ -70,6 +71,7 @@ async function applyScheduleChange(
     previousMirrorTip,
     cwd: repoDir,
   });
+  return updated;
 }
 
 /**
@@ -100,7 +102,7 @@ export async function scheduleCommand(
       }
 
       s.start('Updating schedule and the workflow on the default branch');
-      await applyScheduleChange(repoDir, defaultBranch, {
+      const updated = await applyScheduleChange(repoDir, defaultBranch, {
         schedule: { enabled: true, cron },
       });
       s.stop('Schedule and workflow updated');
@@ -118,8 +120,12 @@ export async function scheduleCommand(
         // Best-effort: fall back to placeholder.
       }
 
+      const tokenPurpose =
+        updated.mode === 'no-public'
+          ? 'so the workflow can push upstream commits that change .github/workflows (the job token cannot)'
+          : 'so the workflow can push to the public fork and push upstream commits that change .github/workflows (the job token can do neither)';
       p.outro(
-        `✨ Scheduled sync enabled\n\nBranch: ${defaultBranch}\nCron: ${cron}\nWorkflow: ${SYNC_WORKFLOW_PATH}\n\nNext: set the cross-repo push token so the workflow can push to the public fork:\n  gh secret set VENFORK_PUSH_TOKEN --repo ${mirrorPath} --body "$(gh auth token)"\n(skip if VENFORK_PUSH_TOKEN is already configured)`
+        `✨ Scheduled sync enabled\n\nBranch: ${defaultBranch}\nCron: ${cron}\nWorkflow: ${SYNC_WORKFLOW_PATH}\n\nNext: set VENFORK_PUSH_TOKEN ${tokenPurpose}. The token needs the \`workflow\` scope (classic) or Workflows: write (fine-grained):\n  gh secret set VENFORK_PUSH_TOKEN --repo ${mirrorPath} --body "$(gh auth token)"\n(skip if VENFORK_PUSH_TOKEN is already configured)`
       );
       return;
     }

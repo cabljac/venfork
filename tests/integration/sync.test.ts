@@ -10,6 +10,8 @@ import { ConfigError, SyncDivergenceError } from '../../src/errors.js';
 import { getDefaultBranch } from '../../src/git.js';
 import { checkDivergence } from '../../src/shared/divergence.js';
 import { isManagedCommit } from '../../src/shared/managed-commit.js';
+import { VENFORK_VERSION } from '../../src/version.js';
+import { generateSyncWorkflow } from '../../src/workflow.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
@@ -399,5 +401,42 @@ describe('divergence check errors', () => {
       })
     ).rejects.toThrow();
     expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
+  });
+});
+
+describe('pinned version downgrade guard', () => {
+  test('sync refuses to rewrite a workflow pinned to a newer venfork', async () => {
+    await enableSchedule();
+    await sync();
+    await fx.commitOnOrigin(
+      { [WORKFLOW]: generateSyncWorkflow('0 * * * *', 'standard', '99.0.0') },
+      `${MANAGED_SUBJECT}\n\nVenfork-Managed: 1`
+    );
+    await fx.commitOnUpstream({ 'src/new.txt': 'new\n' });
+    const originBefore = await fx.sha(fx.origin, 'main');
+
+    await expect(sync()).rejects.toThrow('process.exit(1)');
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `origin pins venfork 99.0.0, you are running ${VENFORK_VERSION}`
+      )
+    );
+    expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
+  });
+
+  test('sync rewrites a workflow pinned to an older venfork', async () => {
+    await enableSchedule();
+    await sync();
+    await fx.commitOnOrigin(
+      { [WORKFLOW]: generateSyncWorkflow('0 * * * *', 'standard', '0.0.1') },
+      `${MANAGED_SUBJECT}\n\nVenfork-Managed: 1`
+    );
+
+    await sync();
+
+    expect(await fx.fileAt(fx.origin, 'main', WORKFLOW)).toBe(
+      generateSyncWorkflow('0 * * * *', 'standard')
+    );
   });
 });

@@ -42,6 +42,14 @@ const REAL_DISPATCH = process.env.VENFORK_E2E_REAL_DISPATCH === '1';
 
 const e2eDescribe = E2E_ENABLED ? describe : describe.skip;
 
+let installUrlPromise: Promise<string> | undefined;
+
+/** Publishes the code under test once per run and returns its install URL. */
+function codeUnderTestUrl(): Promise<string> {
+  installUrlPromise ??= packCodeUnderTest().then(publishTarballOnUpstream);
+  return installUrlPromise;
+}
+
 e2eDescribe('venfork e2e — scheduled sync flow', () => {
   beforeAll(async () => {
     await ensureGhAuth();
@@ -132,7 +140,9 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     const wf = await readWorkflowFromOrigin(localMirrorPath, defaultBranch);
     expect(wf).toContain(`cron: '${cron}'`);
     expect(wf).toContain('workflow_dispatch:');
-    expect(wf).toContain(`npm install -g "\${VENFORK_INSTALL_SPEC:-venfork@`);
+    expect(wf).toContain(
+      `npm install -g --ignore-scripts "\${VENFORK_INSTALL_SPEC:-venfork@`
+    );
     expect(wf).toContain('venfork sync');
 
     const scheduledConfig = await readVenforkConfigFromRepo(localMirrorPath);
@@ -230,8 +240,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
 
       // The published venfork lags this checkout, so install the build
       // from beforeAll through the workflow's VENFORK_INSTALL_SPEC override.
-      const tarball = await packCodeUnderTest();
-      const installUrl = await publishTarballOnUpstream(tarball);
+      const installUrl = await codeUnderTestUrl();
       await setRepoVariable(
         GITHUB_ORG,
         names.mirrorBare,
@@ -529,4 +538,90 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     void getIssueMeta;
     void getPrMeta;
   }, 300_000);
+
+  test.skipIf(!REAL_DISPATCH)(
+    'tier 6: no-public sync without VENFORK_PUSH_TOKEN cannot push an upstream workflow change and files an issue',
+    async () => {
+      // Pins that the job's GITHUB_TOKEN alone cannot push an upstream
+      // commit that edits .github/workflows/ to the mirror, and that the
+      // failure step reports it.
+      const defaultBranch = await getRepoDefaultBranch(
+        UPSTREAM_OWNER,
+        names.upstream
+      );
+      const mirrorPath = `${tmpRoot}/${names.noPublicMirror}`;
+      await runVenfork(
+        [
+          'setup',
+          `${UPSTREAM_OWNER}/${names.upstream}`,
+          names.noPublicMirror,
+          '--org',
+          GITHUB_ORG,
+          '--no-public',
+        ],
+        { cwd: tmpRoot, env: { VENFORK_ORG: GITHUB_ORG }, input: 'y\n' }
+      );
+      await runVenfork(['schedule', 'set', '*/5 * * * *'], {
+        cwd: mirrorPath,
+      });
+      await setRepoVariable(
+        GITHUB_ORG,
+        names.noPublicMirror,
+        'VENFORK_INSTALL_SPEC',
+        await codeUnderTestUrl()
+      );
+
+      await pokeUpstream(
+        '.github/workflows/ci.yml',
+        `name: ci ${RUN_ID}\non: workflow_dispatch\njobs:\n  noop:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${Date.now()}\n`
+      );
+      const upstreamSha = await getDefaultBranchSha(
+        UPSTREAM_OWNER,
+        names.upstream,
+        defaultBranch
+      );
+
+      const dispatchedAt = new Date();
+      await $`gh workflow run venfork-sync.yml --repo ${GITHUB_ORG}/${names.noPublicMirror} --ref ${defaultBranch}`;
+      const runId = await waitForDispatchedRun(
+        GITHUB_ORG,
+        names.noPublicMirror,
+        'venfork-sync.yml',
+        dispatchedAt,
+        90_000
+      );
+      const { conclusion, url } = await waitForRunCompletion(
+        GITHUB_ORG,
+        names.noPublicMirror,
+        runId,
+        300_000
+      );
+      const logs = await $({
+        reject: false,
+      })`gh run view ${runId} --repo ${GITHUB_ORG}/${names.noPublicMirror} --log-failed`;
+      console.log(
+        `[venfork-e2e] tier 6 conclusion=${conclusion} url=${url}\n--- gh run view --log-failed ---\n${logs.stdout}${logs.stderr}`
+      );
+
+      expect(conclusion).toBe('failure');
+      expect(logs.stdout).toContain(
+        'refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows` permission'
+      );
+      expect(
+        await getDefaultBranchSha(
+          GITHUB_ORG,
+          names.noPublicMirror,
+          defaultBranch
+        )
+      ).not.toBe(upstreamSha);
+      expect(
+        await listOpenIssuesWithLabel(
+          GITHUB_ORG,
+          names.noPublicMirror,
+          'venfork-sync-blocked'
+        )
+      ).toHaveLength(1);
+    },
+    600_000
+  );
 });

@@ -30,6 +30,7 @@ export const names = {
   upstream: `${TEST_PREFIX}-src-${RUN_ID}`,
   mirrorBare: `${TEST_PREFIX}-${RUN_ID}-private`,
   fork: `${TEST_PREFIX}-${RUN_ID}-fork`,
+  noPublicMirror: `${TEST_PREFIX}-${RUN_ID}-np-private`,
 };
 
 export const tmpRoot = path.join(REPO_ROOT, 'tmp', `${TEST_PREFIX}-${RUN_ID}`);
@@ -478,6 +479,7 @@ export async function cleanupAll(): Promise<void> {
     deleteRepo(UPSTREAM_OWNER, names.upstream),
     deleteRepo(GITHUB_ORG, names.fork),
     deleteRepo(GITHUB_ORG, names.mirrorBare),
+    deleteRepo(GITHUB_ORG, names.noPublicMirror),
   ]);
   await fs.rm(tmpRoot, { recursive: true, force: true });
 }

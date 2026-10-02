@@ -11,6 +11,7 @@ import {
 import { checkDivergence } from '../shared/divergence.js';
 import { isManagedCommit } from '../shared/managed-commit.js';
 import { netExec, netFailureReason } from '../shared/net.js';
+import { compareSemver, pinnedVenforkVersion } from '../shared/semver.js';
 import { parseRepoPath } from '../utils.js';
 import { VENFORK_VERSION } from '../version.js';
 import { generateSyncWorkflow } from '../workflow.js';
@@ -350,12 +351,24 @@ export async function runDoctorChecks(
           fix: 'Run `venfork sync`.',
         });
       } else if (workflowOnOrigin !== expected) {
-        checks.push({
-          id: 'workflow',
-          ok: false,
-          detail: `${SYNC_WORKFLOW_PATH} is stale (config or venfork ${VENFORK_VERSION} would write different YAML)`,
-          fix: 'Run `venfork sync`.',
-        });
+        const pinned = pinnedVenforkVersion(workflowOnOrigin);
+        const newer =
+          pinned !== null && (compareSemver(pinned, VENFORK_VERSION) ?? 0) > 0;
+        checks.push(
+          newer
+            ? {
+                id: 'workflow',
+                ok: false,
+                detail: `origin pins venfork ${pinned}, newer than this CLI (${VENFORK_VERSION}); sync refuses to downgrade it`,
+                fix: `Upgrade venfork to ${pinned} or later.`,
+              }
+            : {
+                id: 'workflow',
+                ok: false,
+                detail: `${SYNC_WORKFLOW_PATH} is stale (origin pins venfork ${pinned ?? 'unknown'}; config or venfork ${VENFORK_VERSION} would write different YAML)`,
+                fix: 'Run `venfork sync`.',
+              }
+        );
       } else {
         checks.push({
           id: 'workflow',
@@ -402,41 +415,36 @@ export async function runDoctorChecks(
     return checks;
   }
 
-  if (noPublic) {
-    checks.push({
-      id: 'token',
-      ok: true,
-      detail: 'not needed in no-public mode',
-    });
+  const secrets = await netExec(cwd, {
+    bufferOutput: true,
+  })`gh secret list --repo ${mirrorRepo} --json name`;
+  if (secrets.exitCode !== 0) {
+    skip(
+      'token',
+      `cannot list secrets on ${mirrorRepo}: ${netFailureReason(secrets)}`
+    );
   } else {
-    const secrets = await netExec(cwd, {
-      bufferOutput: true,
-    })`gh secret list --repo ${mirrorRepo} --json name`;
-    if (secrets.exitCode !== 0) {
-      skip(
-        'token',
-        `cannot list secrets on ${mirrorRepo}: ${netFailureReason(secrets)}`
+    let names: string[] = [];
+    try {
+      names = (JSON.parse(secrets.stdout ?? '') as Array<{ name: string }>).map(
+        (entry) => entry.name
       );
-    } else {
-      let names: string[] = [];
-      try {
-        names = (
-          JSON.parse(secrets.stdout ?? '') as Array<{ name: string }>
-        ).map((entry) => entry.name);
-      } catch {
-        names = [];
-      }
-      checks.push(
-        names.includes('VENFORK_PUSH_TOKEN')
-          ? { id: 'token', ok: true, detail: 'VENFORK_PUSH_TOKEN is set' }
-          : {
-              id: 'token',
-              ok: false,
-              detail: `VENFORK_PUSH_TOKEN is not set on ${mirrorRepo}; scheduled pushes to the public fork will fail`,
-              fix: `gh secret set VENFORK_PUSH_TOKEN --repo ${mirrorRepo} --body "$(gh auth token)"`,
-            }
-      );
+    } catch {
+      names = [];
     }
+    const consequence = noPublic
+      ? 'pushes of upstream commits that change .github/workflows will fail'
+      : 'scheduled pushes to the public fork, and of upstream commits that change .github/workflows, will fail';
+    checks.push(
+      names.includes('VENFORK_PUSH_TOKEN')
+        ? { id: 'token', ok: true, detail: 'VENFORK_PUSH_TOKEN is set' }
+        : {
+            id: 'token',
+            ok: false,
+            detail: `VENFORK_PUSH_TOKEN is not set on ${mirrorRepo}; ${consequence} (the token needs the workflow scope, or Workflows: write for a fine-grained token)`,
+            fix: `gh secret set VENFORK_PUSH_TOKEN --repo ${mirrorRepo} --body "$(gh auth token)"`,
+          }
+    );
   }
 
   const runs = await netExec(cwd, {
