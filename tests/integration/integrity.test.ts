@@ -12,6 +12,7 @@ import {
   preserveCommand,
   runDoctorChecks,
   scheduleCommand,
+  stageCommand,
   syncCommand,
 } from '../../src/commands.js';
 import {
@@ -95,6 +96,33 @@ describe('managed commit content check', () => {
     );
   });
 
+  test('a commit with the managed subject and user work is divergence, not dropped', async () => {
+    await fx.commitOnOrigin(
+      { [WF]: 'name: old\n', 'src/user-work.txt': 'important\n' },
+      'chore: venfork-managed mirror commit'
+    );
+    await fx.commitOnUpstream({ 'src/up.txt': 'u\n' });
+
+    await expect(sync()).rejects.toBeInstanceOf(SyncDivergenceError);
+
+    expect(await fx.fileAt(fx.origin, 'main', 'src/user-work.txt')).toBe(
+      'important\n'
+    );
+  });
+
+  test('a commit with a legacy managed subject and user work is divergence, not dropped', async () => {
+    await fx.commitOnOrigin(
+      { 'src/user-work.txt': 'important\n' },
+      'chore: add/update scheduled sync workflow (venfork)'
+    );
+
+    await expect(sync()).rejects.toBeInstanceOf(SyncDivergenceError);
+
+    expect(await fx.fileAt(fx.origin, 'main', 'src/user-work.txt')).toBe(
+      'important\n'
+    );
+  });
+
   test('removing a preserve entry re-stamps origin, so the next sync is not divergence', async () => {
     await preserveCommand('add', ['tools/m.txt', 'tools/n.txt']);
     await fx.commitOnOrigin({ 'tools/m.txt': 'm\n', 'tools/n.txt': 'n\n' });
@@ -122,6 +150,84 @@ describe('managed commit content check', () => {
 
     expect(await fx.sha(fx.origin, 'main')).toBe(
       await fx.sha(fx.upstream, 'main')
+    );
+  });
+});
+
+describe('managed commit left behind by a preserve removal', () => {
+  /** Origin's managed commit carries m and n; the config names only m. */
+  async function staleManagedCommit(): Promise<void> {
+    await preserveCommand('add', ['tools/m.txt', 'tools/n.txt']);
+    await fx.commitOnOrigin({ 'tools/m.txt': 'm\n', 'tools/n.txt': 'n\n' });
+    await sync();
+    await updateVenforkConfig(fx.work, { preserve: ['tools/m.txt'] });
+  }
+
+  test('sync re-stamps the managed commit without the dropped file', async () => {
+    await staleManagedCommit();
+
+    await sync();
+
+    expect(prompts.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('(stale-trailer)')
+    );
+    expect(await fx.fileAt(fx.origin, 'main', 'tools/m.txt')).toBe('m\n');
+    expect(await fx.fileAt(fx.origin, 'main', 'tools/n.txt')).toBeNull();
+    expect(
+      await fx.git(
+        fx.origin,
+        'rev-list',
+        '--count',
+        `${await fx.sha(fx.upstream, 'main')}..main`
+      )
+    ).toBe('1');
+  });
+
+  test('preserve remove of the dropped file re-stamps origin', async () => {
+    await staleManagedCommit();
+
+    await preserveCommand('remove', ['tools/n.txt']);
+
+    expect(await fx.fileAt(fx.origin, 'main', 'tools/n.txt')).toBeNull();
+    expect(await fx.fileAt(fx.origin, 'main', 'tools/m.txt')).toBe('m\n');
+  });
+
+  test('stage does not publish the dropped file', async () => {
+    await staleManagedCommit();
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+    await fx.git(
+      fx.work,
+      'checkout',
+      '--quiet',
+      '-b',
+      'feature',
+      'origin/main'
+    );
+    await writeFile(path.join(fx.work, 'src/a.txt'), 'a\n');
+    await fx.git(fx.work, 'add', 'src/a.txt');
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: a');
+
+    await stageCommand('feature');
+
+    expect(await fx.fileAt(fx.publicFork ?? '', 'feature', 'src/a.txt')).toBe(
+      'a\n'
+    );
+    expect(
+      await fx.fileAt(fx.publicFork ?? '', 'feature', 'tools/n.txt')
+    ).toBeNull();
+  });
+
+  test('a managed commit amended by a user is still divergence', async () => {
+    await staleManagedCommit();
+    const dev = await originDev();
+    await writeFile(path.join(dev, 'tools/n.txt'), 'n edited\n');
+    await fx.git(dev, 'commit', '--quiet', '-a', '--amend', '--no-edit');
+    await fx.git(dev, 'push', '--quiet', '--force', 'origin', 'main');
+
+    await expect(sync()).rejects.toBeInstanceOf(SyncDivergenceError);
+
+    expect(await fx.fileAt(fx.origin, 'main', 'tools/n.txt')).toBe(
+      'n edited\n'
     );
   });
 });

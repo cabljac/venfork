@@ -88,79 +88,104 @@ async function commitTouchesWorkflowPath(
   return allUnderWorkflows && touchesManagedWorkflow;
 }
 
+/** One path a commit changes against its first parent. */
+interface PathChange {
+  status: string;
+  file: string;
+}
+
 /**
- * True when every change `ref` makes against its first parent is one the
- * managed commit may carry: the sync workflow, a `preserve` entry, or a
- * deletion under `.github/workflows/` (workflow filtering).
+ * The changes `ref` makes against its first parent that the managed commit
+ * may not carry: anything except the sync workflow, a `preserve` entry, or
+ * a deletion under `.github/workflows/` (workflow filtering). Null when git
+ * cannot list the changes.
  */
-async function onlyManagedContent(
+async function unmanagedChanges(
   ref: string,
   cwd: string | undefined,
   preserve: ReadonlySet<string>
-): Promise<boolean> {
+): Promise<PathChange[] | null> {
   const result = await $({
     ...(cwd ? { cwd } : {}),
     reject: false,
   })`git diff-tree -r -z --no-renames --root --no-commit-id --name-status ${ref}`;
-  if (result.exitCode !== 0) return false;
+  if (result.exitCode !== 0) return null;
   const fields = result.stdout.split('\0');
+  const extra: PathChange[] = [];
   for (let i = 0; i + 1 < fields.length; i += 2) {
     const status = fields[i] ?? '';
     const file = fields[i + 1] ?? '';
     if (!status) continue;
     if (file === SYNC_WORKFLOW_PATH || preserve.has(file)) continue;
     if (status === 'D' && file.startsWith(`${WORKFLOWS_DIR}/`)) continue;
-    return false;
+    extra.push({ status, file });
   }
-  return true;
+  return extra;
 }
 
 /** Which signal classified a commit as venfork-managed. */
 export type ManagedCommitKind =
   | 'trailer'
+  | 'stale-trailer'
   | 'subject'
   | 'legacy-subject'
   | 'path-heuristic';
 
-async function authorEmail(ref: string, cwd?: string): Promise<string | null> {
+async function identityEmails(
+  ref: string,
+  cwd?: string
+): Promise<{ author: string; committer: string } | null> {
   const result = await $({
     ...(cwd ? { cwd } : {}),
     reject: false,
-  })`git log -1 --format=%ae ${ref}`;
-  return result.exitCode === 0 ? result.stdout.trim() : null;
+  })`git log -1 --format=%ae%n%ce ${ref}`;
+  if (result.exitCode !== 0) return null;
+  const [author = '', committer = ''] = result.stdout.trim().split('\n');
+  return { author, committer };
 }
 
 /**
  * Classifies the venfork-managed "+1 commit" so sync's divergence check and
- * stage's cherry-pick filter can skip it without losing user work. Returns
- * the first matching signal, or null for a user commit:
- *  - `trailer`: a `Venfork-Managed: 1` trailer on a commit that changes
- *    only the sync workflow, `preserve` entries, and deletions under
- *    `.github/workflows/`. A trailer commit that changes anything else
- *    (user work amended into it) is null.
+ * stage's cherry-pick filter can skip it without losing user work. Every
+ * kind except `stale-trailer` requires that the commit changes only the
+ * sync workflow, `preserve` entries, and deletions under
+ * `.github/workflows/`; a commit that changes anything else is null.
+ * Returns the first matching signal, or null for a user commit:
+ *  - `trailer`: a `Venfork-Managed: 1` trailer.
+ *  - `stale-trailer`: a trailer commit authored and committed by the
+ *    venfork bot whose only other changes add files that are no longer in
+ *    `preserve` (a removal whose re-stamp never reached origin). Replacing
+ *    it drops those files from origin; nothing is published.
  *  - `subject`: subject equals `MANAGED_COMMIT_MESSAGE`.
  *  - `legacy-subject`: subject is in `LEGACY_MANAGED_COMMIT_MESSAGES`.
  *  - `path-heuristic`: authored by the venfork bot, touches the managed
- *    `venfork-sync.yml` and nothing outside `.github/workflows/`. This
- *    rescues historical rollouts that bundled extra workflow files.
+ *    `venfork-sync.yml` and nothing outside `.github/workflows/`.
  */
 export async function classifyManagedCommit(
   ref: string,
   cwd?: string,
   preserve: Iterable<string> = []
 ): Promise<ManagedCommitKind | null> {
+  const extra = await unmanagedChanges(ref, cwd, new Set(preserve));
+  if (extra === null) return null;
   if (await hasManagedTrailer(ref, cwd)) {
-    return (await onlyManagedContent(ref, cwd, new Set(preserve)))
-      ? 'trailer'
+    if (extra.length === 0) return 'trailer';
+    const emails = await identityEmails(ref, cwd);
+    const botMade =
+      emails?.author === VENFORK_BOT_EMAIL &&
+      emails.committer === VENFORK_BOT_EMAIL;
+    return botMade && extra.every((change) => change.status === 'A')
+      ? 'stale-trailer'
       : null;
   }
+  if (extra.length > 0) return null;
   const subject = await commitSubject(ref, cwd);
   if (subject === MANAGED_COMMIT_MESSAGE) return 'subject';
   if (subject !== null && LEGACY_MANAGED_COMMIT_MESSAGES.includes(subject)) {
     return 'legacy-subject';
   }
   if (
-    (await authorEmail(ref, cwd)) === VENFORK_BOT_EMAIL &&
+    (await identityEmails(ref, cwd))?.author === VENFORK_BOT_EMAIL &&
     (await commitTouchesWorkflowPath(ref, cwd))
   ) {
     return 'path-heuristic';
