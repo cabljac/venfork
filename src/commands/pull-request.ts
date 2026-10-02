@@ -35,7 +35,7 @@ function resolvePullRequestArg(
   const [, sourceRepoPath, num] = match;
   if (sourceRepoPath !== upstreamRepoPath) {
     throw new Error(
-      `Refused to use PR URL ${pr}: it points to ${sourceRepoPath}, but the upstream remote is ${upstreamRepoPath}. If this is intentional, pass the PR number directly (\`venfork pull-request ${num}\`).`
+      `Refused to use PR URL ${pr}: it points to ${sourceRepoPath}, but the upstream remote is ${upstreamRepoPath}. If this is intentional, pass the PR number directly (\`venfork pull pr ${num}\`).`
     );
   }
   return { number: Number(num), sourceRepoPath };
@@ -88,7 +88,7 @@ export async function pullRequestCommand(
   if (!pr) {
     p.log.error('PR number or URL is required');
     p.outro(
-      'Usage: venfork pull-request <pr-number-or-url> [--branch-name <override>] [--no-push]'
+      'Usage: venfork pull pr <pr-number-or-url> [--branch-name <override>] [--no-push]'
     );
     process.exit(1);
   }

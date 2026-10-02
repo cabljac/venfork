@@ -18,9 +18,8 @@ import {
 import { requiresGhAuth } from './dispatch.js';
 import { parseDoctorCliArgs } from './doctor-args.js';
 import { ensureGhAuth } from './git.js';
-import { parseIssueCliArgs } from './issue-args.js';
 import { parsePreserveCliArgs } from './preserve-args.js';
-import { parsePullRequestCliArgs } from './pull-request-args.js';
+import { parsePullCliArgs } from './pull-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
 import { parseStageCliArgs } from './stage-args.js';
 import { parseSyncCliArgs } from './sync-args.js';
@@ -49,7 +48,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const usage = commandHelp(command);
+  const usage = commandHelp(command, args.slice(1));
   if (usage && args.slice(1).some((arg) => arg === '-h' || arg === '--help')) {
     console.log(usage);
     return;
@@ -89,6 +88,10 @@ async function main(): Promise<void> {
       break;
     case 'stage': {
       const parsed = parseStageCliArgs(args.slice(1));
+      if (parsed.kind === 'issue') {
+        await issueCommand('stage', parsed.ref, { title: parsed.title });
+        break;
+      }
       await stageCommand(parsed.branch, {
         createPr: parsed.createPr,
         draft: parsed.draft,
@@ -116,19 +119,16 @@ async function main(): Promise<void> {
       await preserveCommand(parsed.action, parsed.paths);
       break;
     }
-    case 'pull-request': {
-      const parsed = parsePullRequestCliArgs(args.slice(1));
-      await pullRequestCommand(parsed.pr, {
-        branchName: parsed.branchName,
-        push: parsed.push,
-      });
-      break;
-    }
-    case 'issue': {
-      const parsed = parseIssueCliArgs(args.slice(1));
-      await issueCommand(parsed.action, parsed.target, {
-        title: parsed.title,
-      });
+    case 'pull': {
+      const parsed = parsePullCliArgs(args.slice(1));
+      if (parsed.kind === 'pr') {
+        await pullRequestCommand(parsed.ref, {
+          branchName: parsed.branchName,
+          push: parsed.push,
+        });
+      } else {
+        await issueCommand('pull', parsed.ref, { title: parsed.title });
+      }
       break;
     }
     default:

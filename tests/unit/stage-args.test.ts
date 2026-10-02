@@ -1,5 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { parseStageCliArgs } from '../../src/stage-args.js';
+import {
+  type ParsedStageArgs,
+  type ParsedStageBranchArgs,
+  parseStageCliArgs as parseStageUnion,
+} from '../../src/stage-args.js';
+
+function parseStageCliArgs(args: string[]): ParsedStageBranchArgs {
+  const parsed = parseStageUnion(args);
+  if (parsed.kind !== 'branch') throw new Error('expected a branch parse');
+  return parsed;
+}
 
 describe('parseStageCliArgs', () => {
   test('parses positional branch with no flags', () => {
@@ -110,4 +120,77 @@ describe('parseStageCliArgs', () => {
     const parsed = parseStageCliArgs(['feat/auth', '--pr']);
     expect(parsed.noUpdateExisting).toBe(false);
   });
+
+  test('bare form is a branch parse', () => {
+    expect(parseStageUnion(['feat/auth']).kind).toBe('branch');
+  });
+
+  test('`stage branch <name>` stages a branch with flags', () => {
+    const parsed = parseStageCliArgs(['branch', 'feat/auth', '--pr']);
+    expect(parsed.branch).toBe('feat/auth');
+    expect(parsed.createPr).toBe(true);
+  });
+
+  test('`stage branch issue` stages a branch named issue', () => {
+    expect(parseStageCliArgs(['branch', 'issue']).branch).toBe('issue');
+    expect(parseStageCliArgs(['branch', 'branch']).branch).toBe('branch');
+  });
+
+  test('bare `stage issue` refuses and points at `stage branch issue`', () => {
+    expect(() => parseStageUnion(['issue'])).toThrow(
+      'venfork stage branch issue'
+    );
+    expect(() => parseStageUnion(['issue', '--pr'])).toThrow(
+      'venfork stage branch issue'
+    );
+  });
+
+  test('bare `stage branch` refuses and points at `stage branch branch`', () => {
+    expect(() => parseStageUnion(['branch'])).toThrow(
+      'venfork stage branch branch'
+    );
+  });
+});
+
+describe('parseStageCliArgs issue', () => {
+  test('parses `issue <n>`', () => {
+    const parsed: ParsedStageArgs = parseStageUnion(['issue', '7']);
+    expect(parsed).toEqual({ kind: 'issue', ref: '7', title: undefined });
+  });
+
+  test('parses --title in both forms', () => {
+    expect(parseStageUnion(['issue', '7', '--title', 'Override'])).toEqual({
+      kind: 'issue',
+      ref: '7',
+      title: 'Override',
+    });
+    expect(parseStageUnion(['issue', '7', '--title=Override'])).toEqual({
+      kind: 'issue',
+      ref: '7',
+      title: 'Override',
+    });
+  });
+
+  test('throws when --title has no value', () => {
+    expect(() => parseStageUnion(['issue', '7', '--title'])).toThrow(
+      '--title requires a value'
+    );
+  });
+});
+
+describe('parseStageCliArgs issue rejects branch-only flags', () => {
+  const cases: string[][] = [
+    ['--pr'],
+    ['--draft'],
+    ['--base', 'develop'],
+    ['--internal-pr', '3'],
+    ['--no-update-existing'],
+  ];
+  for (const flags of cases) {
+    test(`refuses ${flags[0]} on stage issue`, () => {
+      expect(() => parseStageCliArgs(['issue', '12', ...flags])).toThrow(
+        /only applies to stage branch/
+      );
+    });
+  }
 });

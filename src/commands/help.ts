@@ -71,7 +71,11 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   [
     'stage',
     `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing]
-  Push branch to public fork for PR to upstream
+venfork stage branch <name> [same options]
+venfork stage issue <number-or-url> [--title <text>]
+  Push a branch (or an issue) from the mirror outward, to the public fork or upstream
+  Branch names \`issue\` and \`branch\` need the explicit form: venfork stage branch issue
+  Branch: push to public fork for PR to upstream
   Rebuilds the branch as linear history on upstream (merges and venfork-managed
     commits dropped, new SHAs) and refuses commits that carry mirror-only files or
     mention the mirror or venfork in their author, committer or message
@@ -80,23 +84,18 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   Options:
   • --internal-pr <n>      Pin a specific internal review PR number (skips most-recent-open lookup)
   • --no-update-existing   Do not update an already-open upstream PR body when staging
+  Issue: read the internal mirror issue, strip venfork:internal blocks, open the
+    upstream counterpart, record linkage in venfork-config
   This is when your work becomes visible to the client`,
   ],
   [
-    'pull-request',
-    `venfork pull-request <pr-number-or-url> [--branch-name <name>] [--no-push]
-  Bring a third-party upstream PR into the mirror for internal review
-  Fetches pull/<n>/head from upstream into a new branch (default: upstream-pr/<n>)
-  Pushes the branch to origin so the team can see it
-  Refresh later with: venfork sync <branch>`,
-  ],
-  [
-    'issue',
-    `venfork issue <stage|pull> <number-or-url> [--title <text>]
-  Move issue context between the private mirror and upstream
-  • stage: read internal mirror issue, strip venfork:internal blocks,
-    open the upstream counterpart, record linkage in venfork-config
-  • pull: read upstream issue, open an internal triage issue on the mirror,
+    'pull',
+    `venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push]
+venfork pull issue <number-or-url> [--title <text>]
+  Bring upstream content into the private mirror
+  • pr: fetch pull/<n>/head from upstream into a new branch (default: upstream-pr/<n>)
+    and push it to origin so the team can review it. Refresh later with: venfork sync <branch>
+  • issue: read the upstream issue, open an internal triage issue on the mirror,
     record linkage. No comment sync; the linkage is one-shot.`,
   ],
   [
@@ -115,12 +114,46 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
 ];
 
+const SUBCOMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
+  [
+    'pull pr',
+    `venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push]
+  Bring a third-party upstream PR into the mirror for internal review
+  Fetches pull/<n>/head from upstream into a new branch (default: upstream-pr/<n>)
+  Pushes the branch to origin so the team can see it
+  Refresh later with: venfork sync <branch>`,
+  ],
+  [
+    'pull issue',
+    `venfork pull issue <number-or-url> [--title <text>]
+  Read an upstream issue and open an internal triage issue on the mirror
+  Records linkage in venfork-config. No comment sync; the linkage is one-shot.`,
+  ],
+  [
+    'stage issue',
+    `venfork stage issue <number-or-url> [--title <text>]
+  Read an internal mirror issue, strip venfork:internal blocks,
+  open the upstream counterpart, record linkage in venfork-config`,
+  ],
+];
+
 /**
  * Usage text for one command (`venfork <command> --help`), or null when
- * the command has no help entry.
+ * the command has no help entry. A known subcommand (`pull pr`,
+ * `stage issue`) in `rest` selects its own entry.
  */
-export function commandHelp(command: string): string | null {
+export function commandHelp(
+  command: string,
+  rest: string[] = []
+): string | null {
   if (command.startsWith('-')) return null;
+  const sub = rest.find((arg) => !arg.startsWith('-'));
+  if (sub) {
+    const subHelp = SUBCOMMAND_HELP.find(
+      ([name]) => name === `${command} ${sub}`
+    );
+    if (subHelp) return subHelp[1];
+  }
   return COMMAND_HELP.find(([name]) => name === command)?.[1] ?? null;
 }
 
@@ -160,7 +193,7 @@ venfork stage feature/new-thing --pr
 # NOW visible on public fork; upstream PR is opened with your internal review body
 
 # Bring a third-party upstream PR in for internal review
-venfork pull-request 1234
+venfork pull pr 1234
 # Refresh as the contributor pushes updates: venfork sync upstream-pr/1234`,
     'Example Workflow'
   );

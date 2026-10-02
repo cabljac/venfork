@@ -1,4 +1,8 @@
-export type ParsedStageArgs = {
+import { consumeValue } from './shared/args.js';
+
+/** Parsed `venfork stage [branch] <name> ...` arguments. */
+export type ParsedStageBranchArgs = {
+  kind: 'branch';
   branch?: string;
   /** When true, also open an upstream PR after staging. */
   createPr: boolean;
@@ -22,28 +26,22 @@ export type ParsedStageArgs = {
   noUpdateExisting: boolean;
 };
 
-function consumeValue(
-  flag: string,
-  args: string[],
-  i: number
-): { value: string; consumed: number } {
-  const equalsForm = `${flag}=`;
-  const a = args[i];
-  if (a === flag) {
-    const v = args[i + 1];
-    if (!v || v.startsWith('--')) throw new Error(`${flag} requires a value`);
-    return { value: v, consumed: 1 };
-  }
-  if (a.startsWith(equalsForm)) {
-    const v = a.slice(equalsForm.length);
-    if (!v) throw new Error(`${flag} requires a value`);
-    return { value: v, consumed: 0 };
-  }
-  throw new Error(`internal: consumeValue called for non-matching arg ${a}`);
-}
+/** Parsed `venfork stage issue ...` arguments. */
+export type ParsedStageIssueArgs = {
+  kind: 'issue';
+  /** Internal issue number or URL. */
+  ref: string;
+  /** Override the upstream issue title. */
+  title?: string;
+};
+
+export type ParsedStageArgs = ParsedStageBranchArgs | ParsedStageIssueArgs;
 
 /**
  * Parse `venfork stage ...` argv after the `stage` token.
+ * Forms: `stage <branch>`, `stage branch <name>`, `stage issue <n-or-url>`.
+ * The first positional selects the form, so a branch named `issue` or
+ * `branch` must use `stage branch <name>`.
  */
 export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   const positional: string[] = [];
@@ -94,8 +92,41 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     positional.push(a);
   }
 
+  const [first, ...rest] = positional;
+  if (first === 'issue') {
+    if (rest.length === 0) {
+      throw new Error(
+        "venfork stage issue requires an issue number or URL. To stage a branch named 'issue', run `venfork stage branch issue`."
+      );
+    }
+    const branchOnly = [
+      createPr && '--pr',
+      draft && '--draft',
+      base !== undefined && '--base',
+      internalPrNumber !== undefined && '--internal-pr',
+      noUpdateExisting && '--no-update-existing',
+    ].filter((flag): flag is string => typeof flag === 'string');
+    if (branchOnly.length > 0) {
+      throw new Error(
+        `${branchOnly.join(', ')} only applies to stage branch, not stage issue`
+      );
+    }
+    return { kind: 'issue', ref: rest[0], title };
+  }
+
+  let branch = first;
+  if (first === 'branch') {
+    if (rest.length === 0) {
+      throw new Error(
+        "venfork stage branch requires a branch name. To stage a branch named 'branch', run `venfork stage branch branch`."
+      );
+    }
+    branch = rest[0];
+  }
+
   return {
-    branch: positional[0],
+    kind: 'branch',
+    branch,
     createPr,
     draft,
     title,
