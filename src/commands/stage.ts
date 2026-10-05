@@ -22,6 +22,7 @@ import {
   classifyManagedCommit,
   type ManagedCommitKind,
 } from '../shared/managed-commit.js';
+import { resolveCommit } from '../shared/mirror-commit.js';
 import { netExec, netFailureReason, netFetch } from '../shared/net.js';
 import {
   findInternalPr,
@@ -73,12 +74,13 @@ async function mergeCommitEvilFiles(
 async function assertNoEvilMerges(
   ref: string,
   branch: string,
+  base: string,
   defaultBranch: string,
   cwd: string
 ): Promise<void> {
   const mergeListResult = await $({
     cwd,
-  })`git rev-list --merges upstream/${defaultBranch}..${ref}`;
+  })`git rev-list --merges ${`${base}..${ref}`}`;
   const mergeCommits = mergeListResult.stdout
     .split('\n')
     .map((line) => line.trim())
@@ -108,32 +110,33 @@ interface RebuiltHead {
 }
 
 /**
- * Rebuilds `branch` as a linear head on `upstream/<defaultBranch>` in a
- * hooks-disabled worktree: every non-merge, non-managed commit in
- * `upstream/<defaultBranch>..refs/heads/<branch>` is cherry-picked in
- * topological order. Merge commits never ship; one with a manual conflict
+ * Rebuilds `branch` as a linear head on `base` (the commit id of
+ * `refs/remotes/upstream/<defaultBranch>`) in a hooks-disabled worktree:
+ * every non-merge, non-managed commit in `base..refs/heads/<branch>` is
+ * cherry-picked in topological order. Merge commits never ship; one with a manual conflict
  * resolution outside `.github/workflows/` is refused, since dropping it
  * would lose work.
  */
 async function rebuildLinearHead(
   branch: string,
+  base: string,
   defaultBranch: string,
   preserve: string[],
   repoDir: string
 ): Promise<RebuiltHead> {
   const ref = `refs/heads/${branch}`;
-  await assertNoEvilMerges(ref, branch, defaultBranch, repoDir);
+  await assertNoEvilMerges(ref, branch, base, defaultBranch, repoDir);
 
   return withDetachedWorktree(
     repoDir,
-    `upstream/${defaultBranch}`,
+    base,
     'venfork-stage-',
     async (tempDir, hooksDir) => {
       // --topo-order: committer dates can be skewed, and parents must be
       // picked before their children.
       const revListResult = await $({
         cwd: repoDir,
-      })`git rev-list --reverse --topo-order --no-merges upstream/${defaultBranch}..${ref}`;
+      })`git rev-list --reverse --topo-order --no-merges ${`${base}..${ref}`}`;
       const branchCommits = revListResult.stdout
         .split('\n')
         .map((line) => line.trim())
@@ -219,6 +222,12 @@ export interface StagingPlan {
   upstreamUrl: string;
   upstreamRepoPath: string;
   upstreamDefaultBranch: string;
+  /**
+   * Commit id of `refs/remotes/upstream/<upstreamDefaultBranch>`. The gate,
+   * the rebuild and the preview all use this id: a local branch or tag
+   * named `upstream/<default>` would shadow the short name.
+   */
+  upstreamTip: string;
   /** Mirror-only paths from the preserve allowlist. */
   preserve: string[];
   /** True when the head and base of the upstream PR live in the same repo (no-public mode). */
@@ -302,6 +311,15 @@ async function planStaging(
   await netFetch('upstream', cwd);
   await netFetch('origin', cwd);
   const upstreamDefaultBranch = await getDefaultBranch('upstream');
+  const upstreamTip = await resolveCommit(
+    `refs/remotes/upstream/${upstreamDefaultBranch}`,
+    cwd
+  );
+  if (!upstreamTip) {
+    throw new Error(
+      `upstream/${upstreamDefaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
+    );
+  }
   if (branch === upstreamDefaultBranch) {
     throw new Error(
       `Refusing to stage '${branch}': it is upstream's default branch, and staging it would overwrite ${branch} on ${noPublic ? 'upstream' : 'the public fork'}. Stage a feature branch instead.`
@@ -318,7 +336,7 @@ async function planStaging(
   const mergeBase = await $({
     cwd,
     reject: false,
-  })`git merge-base ${`upstream/${upstreamDefaultBranch}`} ${`refs/heads/${branch}`}`;
+  })`git merge-base ${upstreamTip} ${`refs/heads/${branch}`}`;
   if (mergeBase.exitCode === 1) {
     throw new Error(
       `Refusing to stage '${branch}': it has no history in common with upstream/${upstreamDefaultBranch}.`
@@ -340,6 +358,7 @@ async function planStaging(
     upstreamUrl,
     upstreamRepoPath,
     upstreamDefaultBranch,
+    upstreamTip,
     preserve: config?.preserve ?? [],
     noPublic,
     recordedUrls: [
@@ -378,9 +397,10 @@ async function prepareStage(
   plan: StagingPlan,
   cwd: string
 ): Promise<PreparedStage> {
-  const base = `upstream/${plan.upstreamDefaultBranch}`;
+  const base = plan.upstreamTip;
   const rebuilt = await rebuildLinearHead(
     plan.branch,
+    base,
     plan.upstreamDefaultBranch,
     plan.preserve,
     cwd

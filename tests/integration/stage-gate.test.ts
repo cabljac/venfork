@@ -294,3 +294,59 @@ describe.each(['standard', 'no-public'] as const)(
     });
   }
 );
+
+describe('the gate trusts refs/remotes/upstream, not the short name', () => {
+  beforeEach(async () => {
+    fx = await createMirrorFixture();
+    active = fx;
+    process.chdir(fx.work);
+    await fx.commitOnOrigin({ [DOC]: 'internal\n' }, 'chore: add internal');
+    await seedPreserve(fx, [DOC]);
+    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+  });
+
+  test.each([
+    ['a local branch', ['branch', 'upstream/main', 'origin/main']],
+    ['a tag', ['tag', 'upstream/main', 'origin/main']],
+  ])(
+    '%s named upstream/main pointing at the mirror tip does not publish it',
+    async (_label, shadow) => {
+      await fx.git(fx.work, ...shadow);
+      await featureFrom('refs/remotes/upstream/main');
+      await commitFile('src/a.txt', 'a\n', 'feat: a');
+
+      await stageCommand('feature');
+
+      expect(await fx.fileAt(target(), 'feature', DOC)).toBeNull();
+      expect(await fx.subjects(target(), 'feature', 'main..feature')).toEqual([
+        'feat: a',
+      ]);
+      expect(await publishedText(target(), 'main..feature')).not.toContain(
+        'venfork-bot'
+      );
+    }
+  );
+
+  test('a tracking branch named upstream/main that merged origin/main does not publish it', async () => {
+    await fx.git(
+      fx.work,
+      'checkout',
+      '--quiet',
+      '-b',
+      'upstream/main',
+      '--track',
+      'refs/remotes/upstream/main'
+    );
+    await fx.git(fx.work, 'merge', '--quiet', '--ff-only', 'origin/main');
+    await featureFrom('refs/remotes/upstream/main');
+    await commitFile('src/a.txt', 'a\n', 'feat: a');
+
+    await stageCommand('feature');
+
+    expect(await fx.fileAt(target(), 'feature', DOC)).toBeNull();
+    expect(await fx.subjects(target(), 'feature', 'main..feature')).toEqual([
+      'feat: a',
+    ]);
+  });
+});
