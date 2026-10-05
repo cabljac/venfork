@@ -5,7 +5,7 @@ import {
   readVenforkConfigFromRepo,
   type VenforkConfig,
 } from '../config.js';
-import { ConfigError } from '../errors.js';
+import { ConfigError, PinDowngradeError } from '../errors.js';
 import { checkGhAuth, getDefaultBranch, getRemotes } from '../git.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
 import {
@@ -14,6 +14,7 @@ import {
 } from '../shared/cron.js';
 import { checkDivergence } from '../shared/divergence.js';
 import { isManagedCommit } from '../shared/managed-commit.js';
+import { buildOriginTip } from '../shared/mirror-commit.js';
 import { netExec, netFailureReason } from '../shared/net.js';
 import { compareSemver, pinnedVenforkVersion } from '../shared/semver.js';
 import { parseRepoPath } from '../utils.js';
@@ -388,39 +389,55 @@ async function collectChecks(
 
     const preserveList = config.preserve ?? [];
     const invalidPreserve = config.invalidPreserve ?? [];
-    const missing: string[] = [];
-    for (const preservePath of preserveList) {
-      const exists = await git(
-        false
-      )`git cat-file -e ${`${originTip}:${preservePath}`}`;
-      if (exists.exitCode !== 0) missing.push(preservePath);
-    }
-    checks.push(
-      invalidPreserve.length > 0
-        ? {
+    if (invalidPreserve.length > 0) {
+      checks.push({
+        id: 'preserve',
+        ok: false,
+        detail: `invalid entries (single files only): ${invalidPreserve.join(', ')}`,
+        fix: invalidPreserve
+          .map((entry) => preserveRemoveHint(entry))
+          .join('; '),
+      });
+    } else {
+      // The same builder sync runs, so doctor cannot pass what sync refuses.
+      // Nothing is pushed; the objects it writes are unreachable.
+      try {
+        await buildOriginTip({
+          config,
+          defaultBranch,
+          upstreamTip,
+          previousMirrorTip: originTip,
+          cwd,
+        });
+        checks.push({
+          id: 'preserve',
+          ok: true,
+          detail:
+            preserveList.length === 0
+              ? 'no preserved paths'
+              : `${preserveList.length} preserved path(s) restorable on the next sync`,
+        });
+      } catch (err) {
+        if (err instanceof PinDowngradeError) {
+          skip(
+            'preserve',
+            'needs a venfork at least as new as the pin on origin'
+          );
+        } else {
+          const message = err instanceof Error ? err.message : String(err);
+          checks.push({
             id: 'preserve',
             ok: false,
-            detail: `invalid entries (single files only): ${invalidPreserve.join(', ')}`,
-            fix: invalidPreserve
-              .map((entry) => preserveRemoveHint(entry))
-              .join('; '),
-          }
-        : missing.length === 0
-          ? {
-              id: 'preserve',
-              ok: true,
-              detail:
-                preserveList.length === 0
-                  ? 'no preserved paths'
-                  : `${preserveList.length} preserved path(s) present`,
-            }
-          : {
-              id: 'preserve',
-              ok: false,
-              detail: `missing on origin/${defaultBranch}: ${missing.join(', ')}`,
-              fix: `Commit the file(s) to origin/${defaultBranch}, or \`${preserveRemoveHint(...missing)}\`. Sync aborts until then.`,
-            }
-    );
+            detail: message
+              .split('\n')
+              .map((line) => line.trim())
+              .filter(Boolean)
+              .join(' '),
+            fix: 'Fix the entry as the detail says, then run `venfork sync`. Sync aborts until then.',
+          });
+        }
+      }
+    }
 
     const schedule = config.schedule;
     const scheduleActive = Boolean(schedule?.enabled && schedule.cron);

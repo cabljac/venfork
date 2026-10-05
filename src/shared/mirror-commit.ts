@@ -8,7 +8,7 @@ import {
   preserveRemoveHint,
   type VenforkConfig,
 } from '../config.js';
-import { GitError, VenforkError } from '../errors.js';
+import { GitError, PinDowngradeError } from '../errors.js';
 import { VENFORK_VERSION } from '../version.js';
 import { generateSyncWorkflow } from '../workflow.js';
 import {
@@ -513,8 +513,6 @@ export async function assertNoPinDowngrade(
   if (shown.exitCode !== 0) return;
   const pinned = pinnedVenforkVersion(shown.stdout);
   if (pinned && (compareSemver(pinned, VENFORK_VERSION) ?? 0) > 0) {
-    throw new VenforkError(
-      `origin pins venfork ${pinned}, you are running ${VENFORK_VERSION}; upgrade the CLI or set VENFORK_INSTALL_SPEC`
-    );
+    throw new PinDowngradeError(pinned, VENFORK_VERSION);
   }
 }

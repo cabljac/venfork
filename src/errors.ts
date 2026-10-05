@@ -173,3 +173,19 @@ export class StageLeakError extends VenforkError {
     this.name = 'StageLeakError';
   }
 }
+
+/**
+ * Thrown when the sync workflow on origin pins a newer venfork than the
+ * running CLI, so an older CLI never rewrites a newer pin.
+ */
+export class PinDowngradeError extends VenforkError {
+  constructor(
+    public readonly pinned: string,
+    public readonly running: string
+  ) {
+    super(
+      `origin pins venfork ${pinned}, you are running ${running}; upgrade the CLI or set VENFORK_INSTALL_SPEC`
+    );
+    this.name = 'PinDowngradeError';
+  }
+}

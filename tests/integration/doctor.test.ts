@@ -26,6 +26,7 @@ import {
   createMirrorFixture,
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
+import { seedPreserve } from '../harness/preserve.js';
 
 let fx: MirrorFixture;
 let active: MirrorFixture | undefined;
@@ -469,5 +470,59 @@ describe('doctor and broken remotes', () => {
     );
     expect(noConfig.repo.fix).toContain('venfork setup');
     expect(noConfig.repo.fix).not.toBe(notRepo.repo.fix);
+  });
+});
+
+describe('the preserve check asks the tip builder sync uses', () => {
+  async function preservedAndSynced(entry: string): Promise<void> {
+    await seedPreserve(fx, [entry]);
+    await fx.commitOnOrigin({ [entry]: 'mirror\n' });
+    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+  }
+
+  test('a directory entry fails as it does in sync', async () => {
+    await fx.commitOnUpstream({ 'docs/a.md': 'a\n' });
+    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await seedPreserve(fx, ['docs']);
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(checks.preserve.ok).toBe(false);
+    expect(checks.preserve.detail).toContain("venfork preserve remove 'docs'");
+  });
+
+  test('an upstream directory at a preserved path fails as it does in sync', async () => {
+    await preservedAndSynced('MIRROR.md');
+    await fx.commitOnUpstream({ 'MIRROR.md/inner.md': 'x\n' });
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(checks.preserve.ok).toBe(false);
+    expect(checks.preserve.detail).toContain('directory');
+    await expect(
+      syncCommand(undefined, { cwd: fx.work, quiet: true })
+    ).rejects.toThrow('process.exit(1)');
+  });
+
+  test('an upstream file at an ancestor of a preserved path fails as it does in sync', async () => {
+    await preservedAndSynced('ci/local.yml');
+    await fx.commitOnUpstream({ ci: 'file\n' });
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(checks.preserve.ok).toBe(false);
+    expect(checks.preserve.detail).toContain("file at 'ci'");
+  });
+
+  test('a preserved path missing on origin but present upstream passes, as sync does', async () => {
+    await seedPreserve(fx, ['docs/X.md']);
+    await fx.commitOnUpstream({ 'docs/X.md': 'upstream\n' });
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(checks.preserve.ok).toBe(true);
+    await expect(
+      syncCommand(undefined, { cwd: fx.work, quiet: true })
+    ).resolves.toBeUndefined();
   });
 });
