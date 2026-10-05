@@ -63,11 +63,13 @@ export async function applyConfigChange(
     `refs/remotes/origin/${defaultBranch}`,
     repoDir
   );
+  // Allow only what the patched list preserves: a commit allowed by an
+  // entry this change removes would be dropped by the re-stamp.
   const originDivergence = await checkDivergence({
     base: upstreamTip,
     tip: previousMirrorTip,
     allowPreserved: true,
-    preserveAllowed: new Set(current.preserve ?? []),
+    preserveAllowed: new Set(next.preserve ?? []),
     cwd: repoDir,
   });
   if (originDivergence.count > 0) {

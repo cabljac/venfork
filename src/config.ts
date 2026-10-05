@@ -151,7 +151,16 @@ export type VenforkConfigPatch = Omit<
   schedule?: VenforkConfig['schedule'] | null;
   enabledWorkflows?: string[] | null;
   disabledWorkflows?: string[] | null;
+  /** Replaces the whole list; `null` clears it. */
   preserve?: string[] | null;
+  /**
+   * Entries to add to the list as read at write time. A delta survives a
+   * concurrent writer where a replacement list computed from an earlier
+   * read would not.
+   */
+  preserveAdd?: string[];
+  /** Entries to drop from the list as read at write time, invalid ones included. */
+  preserveRemove?: string[];
   /**
    * Shallow merge into the existing map. Pass `null` for an entry to delete
    * just that branch, or `null` for the whole field to clear the map.
@@ -828,6 +837,8 @@ export function applyPatchAndNormalize(
     enabledWorkflows: _enabledWorkflowsPatch,
     disabledWorkflows: _disabledWorkflowsPatch,
     preserve: _preservePatch,
+    preserveAdd: _preserveAddPatch,
+    preserveRemove: _preserveRemovePatch,
     shippedBranches: _shippedBranchesPatch,
     pulledPrs: _pulledPrsPatch,
     shippedIssues: _shippedIssuesPatch,
@@ -865,6 +876,16 @@ export function applyPatchAndNormalize(
     delete merged.preserve;
   } else if (patch.preserve !== undefined) {
     merged.preserve = patch.preserve;
+  }
+  if (patch.preserveAdd || patch.preserveRemove) {
+    const entries = new Set(merged.preserve ?? []);
+    for (const entry of patch.preserveRemove ?? []) entries.delete(entry);
+    for (const entry of patch.preserveAdd ?? []) entries.add(entry);
+    if (entries.size > 0) {
+      merged.preserve = [...entries];
+    } else {
+      delete merged.preserve;
+    }
   }
 
   if (patch.shippedBranches === null) {

@@ -63,18 +63,30 @@ async function managedCommitCarrying(
 }
 
 /**
- * Writes a preserve-list change that drops `removed`. When origin's managed
- * commit still carries a dropped file, origin is re-stamped in the same step
- * so the managed commit never holds a file the list no longer names. When
- * user commits sit on top of that managed commit, only the config is
- * written and a warning says sync drops the file once origin is back in line.
+ * Writes a preserve-list change that drops `removed`. An entry that is
+ * neither in `listed` nor carried by origin's managed commit is refused
+ * before anything is written. When origin's managed commit still carries a
+ * dropped file, origin is re-stamped in the same step so the managed commit
+ * never holds a file the list no longer names. When user commits sit on top
+ * of that managed commit, only the config is written and a warning says
+ * sync drops the file once origin is back in line.
  */
 async function writeRemoval(
   repoDir: string,
   patch: VenforkConfigPatch,
-  removed: string[]
+  removed: string[],
+  listed: string[]
 ): Promise<void> {
   const carrying = await managedCommitCarrying(repoDir, removed);
+  const unknown = removed.filter(
+    (entry) =>
+      !listed.includes(entry) && !(carrying?.carried.includes(entry) ?? false)
+  );
+  if (unknown.length > 0) {
+    throw new Error(
+      `Not in the preserve list: ${unknown.map((entry) => `'${entry}'`).join(', ')}. Run \`venfork preserve list\` to see the entries.`
+    );
+  }
   if (carrying?.where === 'tip') {
     await applyConfigChange(repoDir, patch);
     return;
@@ -135,9 +147,11 @@ export async function preserveCommand(
 
     if (action === 'clear') {
       const config = await readVenforkConfigFromRepo(repoDir);
-      await writeRemoval(repoDir, { preserve: null }, [
+      const listed = [
         ...(config?.preserve ?? []),
-      ]);
+        ...(config?.invalidPreserve ?? []),
+      ];
+      await writeRemoval(repoDir, { preserve: null }, listed, listed);
       p.outro('✨ Preserve list cleared.');
       return;
     }
@@ -149,17 +163,17 @@ export async function preserveCommand(
     ];
 
     if (action === 'remove') {
-      const toRemove = new Set(
-        paths.map((entry) => normalizePreservePath(entry) ?? entry)
-      );
-      const filtered = current.filter((entry) => !toRemove.has(entry));
+      const toRemove = [
+        ...new Set(paths.map((entry) => normalizePreservePath(entry) ?? entry)),
+      ];
       await writeRemoval(
         repoDir,
-        { preserve: filtered.length > 0 ? filtered : null },
-        [...toRemove]
+        { preserveRemove: toRemove },
+        toRemove,
+        current
       );
       p.note(
-        [...toRemove].map((entry) => `- ${entry}`).join('\n'),
+        toRemove.map((entry) => `- ${entry}`).join('\n'),
         'Removed from preserve list'
       );
       p.outro('✨ Preserve list updated.');
@@ -178,8 +192,7 @@ export async function preserveCommand(
     }
 
     await assertPreserveEntriesAreFiles(validated, repoDir);
-    const merged = Array.from(new Set([...current, ...validated]));
-    await updateVenforkConfig(repoDir, { preserve: merged });
+    await updateVenforkConfig(repoDir, { preserveAdd: validated });
     p.note(
       validated.map((entry) => `- ${entry}`).join('\n'),
       'Added to preserve list'

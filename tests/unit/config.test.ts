@@ -216,6 +216,40 @@ describe('updateVenforkConfig', () => {
     );
   });
 
+  test('preserveAdd and preserveRemove apply to the list as read, so a concurrent entry survives', async () => {
+    mockResponses.set(
+      'git show FETCH_HEAD:.venfork/config.json',
+      mockReadResponse({
+        ...baseConfig,
+        preserve: ['tools/a.txt', 'tools/b.txt', 'bad/*.txt'],
+      })
+    );
+
+    const updated = await updateVenforkConfig('/tmp/repo', {
+      preserveAdd: ['tools/c.txt', 'tools/a.txt'],
+      preserveRemove: ['tools/b.txt', 'bad/*.txt'],
+    });
+
+    expect(updated.preserve).toEqual(['tools/a.txt', 'tools/c.txt']);
+    expect(updated.invalidPreserve).toBeUndefined();
+    const written = JSON.parse(writeFileCalls.at(-1)?.content ?? '{}');
+    expect(written.preserve).toEqual(['tools/a.txt', 'tools/c.txt']);
+  });
+
+  test('preserveRemove of the last entry drops the field', async () => {
+    mockResponses.set(
+      'git show FETCH_HEAD:.venfork/config.json',
+      mockReadResponse({ ...baseConfig, preserve: ['tools/a.txt'] })
+    );
+
+    const updated = await updateVenforkConfig('/tmp/repo', {
+      preserveRemove: ['tools/a.txt'],
+    });
+
+    expect(updated.preserve).toBeUndefined();
+    expect(writeFileCalls.at(-1)?.content).not.toContain('"preserve"');
+  });
+
   test('keeps invalid preserve paths apart and writes them back', async () => {
     const invalid = [
       '/abs/path',
