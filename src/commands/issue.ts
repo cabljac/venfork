@@ -4,6 +4,10 @@ import { updateVenforkConfig } from '../config.js';
 import { RemoteNotFoundError } from '../errors.js';
 import { confirmOrAutoYes } from '../shared/confirm.js';
 import {
+  assertNoMirrorReference,
+  mirrorDenyList,
+} from '../shared/deny-list.js';
+import {
   translateInternalBody,
   translateInternalTitle,
 } from '../shared/redaction.js';
@@ -185,6 +189,17 @@ export async function issueCommand(
       const translatedBody = translateInternalBody(internal.body);
       const upstreamTitle = translateInternalTitle(
         options.title ?? internal.title
+      );
+      const denyList = await mirrorDenyList(repoDir);
+      assertNoMirrorReference(
+        upstreamTitle,
+        'the upstream issue title',
+        denyList
+      );
+      assertNoMirrorReference(
+        translatedBody,
+        'the upstream issue body',
+        denyList
       );
 
       p.note(

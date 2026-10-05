@@ -3908,6 +3908,38 @@ describe('issueCommand', () => {
     ).toBe(true);
   });
 
+  test('stage: refuses a body or title that names the mirror and opens nothing', async () => {
+    setupCommonRemotes();
+    confirmResponse = true;
+    for (const [title, body] of [
+      ['Bug: things break', 'Context in owner/mirror#3.'],
+      ['Bug: things break', 'See https://github.com/owner/mirror/pull/4'],
+      ['Port of owner/mirror#9', 'Public summary.'],
+    ]) {
+      execaCalls.length = 0;
+      mockResponses.set('gh issue view 7 --repo owner/mirror', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          number: 7,
+          url: 'https://github.com/owner/mirror/issues/7',
+          title,
+          body,
+          state: 'OPEN',
+          author: { login: 'me' },
+        }),
+        stderr: '',
+      });
+
+      await expect(issueCommand('stage', '7')).rejects.toThrow(
+        'process.exit(1)'
+      );
+
+      expect(execaCalls.some((cmd) => cmd.includes('gh issue create'))).toBe(
+        false
+      );
+    }
+  });
+
   test('pull: reads upstream issue, posts internal, records linkage', async () => {
     setupCommonRemotes();
     confirmResponse = true;
