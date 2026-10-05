@@ -114,6 +114,17 @@ function getMockExecaResponse(
   if (command.includes('git branch --show-current')) {
     return Promise.resolve({ exitCode: 0, stdout: 'main', stderr: '' });
   }
+  // Remote tips resolve to stable fake ids so rev-list ranges are predictable.
+  const remoteTip = command.match(
+    /git rev-parse --verify (?:--quiet )?refs\/remotes\/(upstream|origin|public)\//
+  );
+  if (remoteTip) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: `${remoteTip[1]}0tip`,
+      stderr: '',
+    });
+  }
   if (command.includes('git rev-parse --verify upstream/')) {
     return Promise.resolve({ exitCode: 0, stdout: 'upstream0tip', stderr: '' });
   }
@@ -334,7 +345,7 @@ function mockManagedCommitOnBranch(
   sha = 'managed0'
 ): void {
   mockResponses.set(
-    `git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/${branch}`,
+    `git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/${branch}`,
     { exitCode: 0, stdout: sha, stderr: '' }
   );
   mockResponses.set(`git log -1 --format=%s ${sha}`, {
@@ -916,7 +927,7 @@ describe('syncCommand', () => {
 
     // Should call git rev-list to check divergence
     const revListCalls = execaCalls.filter((cmd) =>
-      cmd.includes('git rev-list upstream/main..')
+      cmd.includes('git rev-list upstream0tip..')
     );
     expect(revListCalls.length).toBeGreaterThanOrEqual(2); // Check origin and public
   });
@@ -1004,11 +1015,14 @@ describe('syncCommand', () => {
       }),
       stderr: '',
     });
-    mockResponses.set('git rev-parse --verify origin/main', {
-      exitCode: 0,
-      stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/main^{commit}',
+      {
+        exitCode: 0,
+        stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+        stderr: '',
+      }
+    );
 
     try {
       await syncCommand('main');
@@ -1056,11 +1070,14 @@ describe('syncCommand', () => {
       }),
       stderr: '',
     });
-    mockResponses.set('git rev-parse --verify origin/main', {
-      exitCode: 0,
-      stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/main^{commit}',
+      {
+        exitCode: 0,
+        stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+        stderr: '',
+      }
+    );
     // Pretend the upstream tree already has the file.
     accessExists = (p) => p.includes('.github/workflows/ci.yml');
 
@@ -1092,11 +1109,14 @@ describe('syncCommand', () => {
       }),
       stderr: '',
     });
-    mockResponses.set('git rev-parse --verify origin/main', {
-      exitCode: 0,
-      stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/main^{commit}',
+      {
+        exitCode: 0,
+        stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+        stderr: '',
+      }
+    );
     mockResponses.set(
       'ls-tree -z aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/missing.yml',
       { exitCode: 0, stdout: '', stderr: '' }
@@ -1138,18 +1158,24 @@ describe('syncCommand', () => {
       stderr: '',
     });
     // Local origin/main (post-fetch) is the SHA of the user's v2 commit.
-    mockResponses.set('git rev-parse --verify origin/main', {
-      exitCode: 0,
-      stdout: 'v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/main^{commit}',
+      {
+        exitCode: 0,
+        stdout: 'v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2',
+        stderr: '',
+      }
+    );
     // Divergence check: the v2 commit is on origin (the user's commit).
-    mockResponses.set('git rev-list upstream/main..origin/main', {
-      exitCode: 0,
-      stdout: 'v2v2v2v2v2v2v2v2\n',
-      stderr: '',
-    });
-    mockResponses.set('git rev-list upstream/main..public/main', {
+    mockResponses.set(
+      'git rev-list upstream0tip..v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2',
+      {
+        exitCode: 0,
+        stdout: 'v2v2v2v2v2v2v2v2\n',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git rev-list upstream0tip..public0tip', {
       exitCode: 0,
       stdout: '',
       stderr: '',
@@ -1205,12 +1231,12 @@ describe('syncCommand', () => {
       }),
       stderr: '',
     });
-    mockResponses.set('git rev-list upstream/main..origin/main', {
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
       exitCode: 0,
       stdout: 'orphancommit11111\n',
       stderr: '',
     });
-    mockResponses.set('git rev-list upstream/main..public/main', {
+    mockResponses.set('git rev-list upstream0tip..public0tip', {
       exitCode: 0,
       stdout: '',
       stderr: '',
@@ -1260,12 +1286,12 @@ describe('syncCommand', () => {
       }),
       stderr: '',
     });
-    mockResponses.set('git rev-list upstream/main..origin/main', {
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
       exitCode: 0,
       stdout: 'legacycommit11111\n',
       stderr: '',
     });
-    mockResponses.set('git rev-list upstream/main..public/main', {
+    mockResponses.set('git rev-list upstream0tip..public0tip', {
       exitCode: 0,
       stdout: '',
       stderr: '',
@@ -1306,12 +1332,12 @@ describe('syncCommand', () => {
       stderr: '',
     });
     // origin has 1 commit ahead of upstream — the user's preserve commit.
-    mockResponses.set('git rev-list upstream/main..origin/main', {
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
       exitCode: 0,
       stdout: 'feedfacecafebabe\n',
       stderr: '',
     });
-    mockResponses.set('git rev-list upstream/main..public/main', {
+    mockResponses.set('git rev-list upstream0tip..public0tip', {
       exitCode: 0,
       stdout: '',
       stderr: '',
@@ -1331,11 +1357,14 @@ describe('syncCommand', () => {
       stdout: 'mirror: add caller workflow\n',
       stderr: '',
     });
-    mockResponses.set('git rev-parse --verify origin/main', {
-      exitCode: 0,
-      stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/main^{commit}',
+      {
+        exitCode: 0,
+        stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+        stderr: '',
+      }
+    );
 
     try {
       await syncCommand('main');
@@ -1416,14 +1445,13 @@ describe('stageCommand', () => {
     expect(
       execaCalls.some(
         (cmd) =>
-          cmd.includes(' worktree add --detach') &&
-          cmd.includes('upstream/main')
+          cmd.includes(' worktree add --detach') && cmd.includes('upstream0tip')
       )
     ).toBe(true);
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch'
+          'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch'
         )
       )
     ).toBe(true);
@@ -1446,7 +1474,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
       { exitCode: 0, stdout: 'mgd111\nfeat222', stderr: '' }
     );
     mockResponses.set('git log -1 --format=%s mgd111', {
@@ -1504,7 +1532,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
       { exitCode: 0, stdout: 'feat222', stderr: '' }
     );
     mockResponses.set('git log -1 --format=%s feat222', {
@@ -1546,7 +1574,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
       () => Promise.reject(new Error('fatal: bad revision'))
     );
 
@@ -1576,7 +1604,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
       {
         exitCode: 0,
         stdout: 'feat111\nwf222\nfeat333',
@@ -1663,7 +1691,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
       {
         exitCode: 0,
         stdout: 'userci1',
@@ -1706,7 +1734,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --merges upstream/main..refs/heads/feature-branch',
+      'git rev-list --merges upstream0tip..refs/heads/feature-branch',
       {
         exitCode: 0,
         stdout: 'evilmrg\n',
@@ -1746,7 +1774,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --merges upstream/main..refs/heads/feature-branch',
+      'git rev-list --merges upstream0tip..refs/heads/feature-branch',
       {
         exitCode: 0,
         stdout: 'bad-merge-commit\n',
@@ -1789,7 +1817,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --merges upstream/main..refs/heads/feature-branch',
+      'git rev-list --merges upstream0tip..refs/heads/feature-branch',
       {
         exitCode: 0,
         stdout: 'wfmrg42\n',
@@ -1802,7 +1830,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
       {
         exitCode: 0,
         stdout: 'feat111',
@@ -1854,7 +1882,7 @@ describe('stageCommand', () => {
     // `--no-merges` makes git omit the merge commit from the list. We assert
     // venfork passes that flag and only cherry-picks the non-merge commits.
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
       {
         exitCode: 0,
         stdout: 'feat111\nfeat222',
@@ -1883,7 +1911,7 @@ describe('stageCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git rev-list --reverse --topo-order --no-merges upstream/main..refs/heads/feature-branch'
+          'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch'
         )
       )
     ).toBe(true);
@@ -2948,13 +2976,11 @@ describe('cloneCommand - error paths', () => {
 
 describe('syncCommand - error paths', () => {
   test('a failing divergence range aborts sync without pushing', async () => {
-    const stderr = 'fatal: bad revision upstream/main..origin/main';
-    mockResponses.set(
-      'git rev-list upstream/main..origin/main',
-      (_cmd, opts) =>
-        opts.reject === false
-          ? Promise.resolve({ exitCode: 128, stdout: '', stderr })
-          : Promise.reject(new Error(stderr))
+    const stderr = 'fatal: bad revision upstream0tip..origin0tip';
+    mockResponses.set('git rev-list upstream0tip..origin0tip', (_cmd, opts) =>
+      opts.reject === false
+        ? Promise.resolve({ exitCode: 128, stdout: '', stderr })
+        : Promise.reject(new Error(stderr))
     );
 
     await expect(syncCommand('main')).rejects.toThrow('process.exit(1)');
@@ -2963,7 +2989,7 @@ describe('syncCommand - error paths', () => {
 
   test('aborts when origin has divergent commits', async () => {
     // Mock rev-list to show origin has divergent commits
-    mockResponses.set('git rev-list upstream/main..origin/main', {
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
       exitCode: 0,
       stdout: 'abc123\n',
       stderr: '',
@@ -2977,7 +3003,7 @@ describe('syncCommand - error paths', () => {
 
   test('aborts when public has divergent commits', async () => {
     // Mock rev-list to show public has divergent commits
-    mockResponses.set('git rev-list upstream/main..public/main', {
+    mockResponses.set('git rev-list upstream0tip..public0tip', {
       exitCode: 0,
       stdout: 'def456\n',
       stderr: '',
@@ -2990,7 +3016,7 @@ describe('syncCommand - error paths', () => {
   });
 
   test('a bot commit that also adds another workflow file is divergence', async () => {
-    mockResponses.set('git rev-list upstream/main..origin/main', {
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
       exitCode: 0,
       stdout: 'abc123\n',
       stderr: '',
@@ -3031,7 +3057,7 @@ describe('syncCommand - error paths', () => {
   });
 
   test('still aborts when divergent commit touches files outside .github/workflows', async () => {
-    mockResponses.set('git rev-list upstream/main..origin/main', {
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
       exitCode: 0,
       stdout: 'deadbee\n',
       stderr: '',
@@ -3064,7 +3090,7 @@ describe('syncCommand - error paths', () => {
     // managed venfork-sync.yml. The narrowed isWorkflowCommit must classify
     // this as user-authored — sync should refuse to clobber it, not silently
     // filter it as a managed commit.
-    mockResponses.set('git rev-list upstream/main..origin/main', {
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
       exitCode: 0,
       stdout: 'userci1\n',
       stderr: '',
@@ -3092,17 +3118,20 @@ describe('syncCommand - error paths', () => {
   });
 
   test('treats a missing origin branch as a first sync', async () => {
-    mockResponses.set('git rev-parse --verify origin/main', {
-      exitCode: 128,
-      stdout: '',
-      stderr: 'fatal: Needed a single revision',
-    });
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/main^{commit}',
+      {
+        exitCode: 128,
+        stdout: '',
+        stderr: 'fatal: Needed a single revision',
+      }
+    );
 
     await syncCommand('main');
 
     expect(
       execaCalls.some((cmd) =>
-        cmd.includes('git rev-list upstream/main..origin/main')
+        cmd.includes('git rev-list upstream0tip..origin0tip')
       )
     ).toBe(false);
     expect(
@@ -3115,7 +3144,7 @@ describe('syncCommand - error paths', () => {
   });
 
   test('aborts when the divergence check itself fails', async () => {
-    mockResponses.set('git rev-list upstream/main..origin/main', () =>
+    mockResponses.set('git rev-list upstream0tip..origin0tip', () =>
       Promise.reject(new Error('fatal: bad revision'))
     );
 
@@ -3126,14 +3155,17 @@ describe('syncCommand - error paths', () => {
   });
 
   test('reports a missing upstream branch before checking divergence', async () => {
-    mockResponses.set('git rev-parse --verify upstream/main', {
-      exitCode: 128,
-      stdout: '',
-      stderr: 'fatal: Needed a single revision',
-    });
-    mockResponses.set('git rev-list upstream/main..', () =>
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/upstream/main^{commit}',
+      {
+        exitCode: 128,
+        stdout: '',
+        stderr: 'fatal: Needed a single revision',
+      }
+    );
+    mockResponses.set('git rev-list upstream0tip..', () =>
       Promise.reject(
-        new Error("fatal: bad revision 'upstream/main..origin/main'")
+        new Error("fatal: bad revision 'upstream0tip..origin0tip'")
       )
     );
 
@@ -3149,7 +3181,7 @@ describe('syncCommand - error paths', () => {
     delete process.env.GITHUB_REPOSITORY;
     try {
       useDistinctRemotes();
-      mockResponses.set('git rev-list upstream/main..origin/main', {
+      mockResponses.set('git rev-list upstream0tip..origin0tip', {
         exitCode: 0,
         stdout: 'abc123\n',
         stderr: '',
@@ -3287,7 +3319,7 @@ describe('stageCommand --pr payload', () => {
       'gh pr list --repo owner/repo-private --head feature-branch',
       { exitCode: 0, stdout: '[]', stderr: '' }
     );
-    mockResponses.set('git log --reverse --format=%s upstream/main..', {
+    mockResponses.set('git log --reverse --format=%s upstream0tip..', {
       exitCode: 0,
       stdout: 'feat: real work (#42)\nfix: edge case',
       stderr: '',
@@ -3650,11 +3682,14 @@ describe('syncCommand - pulled PR branches', () => {
       stdout: 'newsha\n',
       stderr: '',
     });
-    mockResponses.set('git rev-parse --verify origin/upstream-pr/7^{commit}', {
-      exitCode: 0,
-      stdout: 'mirrorsha\n',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/upstream-pr/7^{commit}',
+      {
+        exitCode: 0,
+        stdout: 'mirrorsha\n',
+        stderr: '',
+      }
+    );
 
     try {
       await syncCommand('upstream-pr/7');
