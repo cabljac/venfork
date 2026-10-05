@@ -16,6 +16,10 @@ import { checkDivergence } from '../shared/divergence.js';
 import { isManagedCommit } from '../shared/managed-commit.js';
 import { buildOriginTip } from '../shared/mirror-commit.js';
 import { netExec, netFailureReason } from '../shared/net.js';
+import {
+  OPEN_WORKFLOWS_WARNING,
+  pushTokenCommand,
+} from '../shared/push-token.js';
 import { compareSemver, pinnedVenforkVersion } from '../shared/semver.js';
 import { parseRepoPath } from '../utils.js';
 import { VENFORK_VERSION } from '../version.js';
@@ -545,14 +549,24 @@ async function collectChecks(
     const consequence = noPublic
       ? 'pushes of upstream commits that change .github/workflows will fail'
       : 'scheduled pushes to the public fork, and of upstream commits that change .github/workflows, will fail';
+    const openWorkflows =
+      (config.enabledWorkflows ?? []).length === 0 &&
+      (config.disabledWorkflows ?? []).length === 0;
     checks.push(
       names.includes('VENFORK_PUSH_TOKEN')
-        ? { id: 'token', ok: true, detail: 'VENFORK_PUSH_TOKEN is set' }
+        ? {
+            id: 'token',
+            ok: true,
+            detail: openWorkflows
+              ? 'VENFORK_PUSH_TOKEN is set; every upstream workflow on the mirror can read it'
+              : 'VENFORK_PUSH_TOKEN is set',
+            ...(openWorkflows ? { fix: OPEN_WORKFLOWS_WARNING } : {}),
+          }
         : {
             id: 'token',
             ok: false,
-            detail: `VENFORK_PUSH_TOKEN is not set on ${mirrorRepo}; ${consequence} (the token needs the workflow scope, or Workflows: write for a fine-grained token)`,
-            fix: `gh secret set VENFORK_PUSH_TOKEN --repo ${mirrorRepo} --body "$(gh auth token)"`,
+            detail: `VENFORK_PUSH_TOKEN is not set on ${mirrorRepo}; ${consequence} (a fine-grained token limited to the mirror${noPublic ? '' : ' and the public fork'} with Contents and Workflows write; never \`gh auth token\`)`,
+            fix: pushTokenCommand(mirrorRepo),
           }
     );
   }

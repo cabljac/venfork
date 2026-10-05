@@ -2489,13 +2489,44 @@ describe('scheduleCommand', () => {
         (clack.outro as ReturnType<typeof mock>).mock.calls.at(-1)?.[0]
       );
       expect(outro).toContain('gh secret set VENFORK_PUSH_TOKEN');
-      expect(outro).toContain('`workflow` scope');
-      expect(outro).toContain('Workflows: write');
+      expect(outro).toContain('fine-grained personal access token');
+      expect(outro).toContain('Workflows: read and write');
+      expect(outro).not.toContain('$(gh auth token)');
       if (mode === 'no-public') {
         expect(outro).not.toContain('public fork');
       } else {
         expect(outro).toContain('public fork');
       }
+    }
+  );
+
+  test.each([
+    ['warns', {}, true],
+    ['stays quiet', { disabledWorkflows: ['deploy.yml'] }, false],
+    ['stays quiet', { enabledWorkflows: ['ci.yml'] }, false],
+  ])(
+    'set %s about upstream workflows reading the token (%j)',
+    async (_label, lists, warns) => {
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          version: '1',
+          publicForkUrl: 'git@github.com:test/repo.git',
+          upstreamUrl: 'git@github.com:upstream/repo.git',
+          ...lists,
+        }),
+        stderr: '',
+      });
+      (clack.log.warn as ReturnType<typeof mock>).mockClear();
+
+      await scheduleCommand('set', '0 */6 * * *');
+
+      const warned = (
+        clack.log.warn as ReturnType<typeof mock>
+      ).mock.calls.some((call) =>
+        String(call[0]).includes('can read VENFORK_PUSH_TOKEN')
+      );
+      expect(warned).toBe(warns);
     }
   );
 

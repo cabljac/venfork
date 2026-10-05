@@ -5,6 +5,10 @@ import { getDefaultBranch } from '../git.js';
 import { applyConfigChange } from '../shared/config-change.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
 import { isValidCronExpression } from '../shared/cron.js';
+import {
+  OPEN_WORKFLOWS_WARNING,
+  pushTokenAdvice,
+} from '../shared/push-token.js';
 import { parseRepoPath } from '../utils.js';
 
 /**
@@ -59,8 +63,14 @@ export async function scheduleCommand(
         updated.mode === 'no-public'
           ? 'so the workflow can push upstream commits that change .github/workflows (the job token cannot)'
           : 'so the workflow can push to the public fork and push upstream commits that change .github/workflows (the job token can do neither)';
+      if (
+        (updated.enabledWorkflows ?? []).length === 0 &&
+        (updated.disabledWorkflows ?? []).length === 0
+      ) {
+        p.log.warn(OPEN_WORKFLOWS_WARNING);
+      }
       p.outro(
-        `✨ Scheduled sync enabled\n\nBranch: ${defaultBranch}\nCron: ${cron}\nWorkflow: ${SYNC_WORKFLOW_PATH}\n\nNext: set VENFORK_PUSH_TOKEN ${tokenPurpose}. The token needs the \`workflow\` scope (classic) or Workflows: write (fine-grained):\n  gh secret set VENFORK_PUSH_TOKEN --repo ${mirrorPath} --body "$(gh auth token)"\n(skip if VENFORK_PUSH_TOKEN is already configured)`
+        `✨ Scheduled sync enabled\n\nBranch: ${defaultBranch}\nCron: ${cron}\nWorkflow: ${SYNC_WORKFLOW_PATH}\n\nNext: set VENFORK_PUSH_TOKEN ${tokenPurpose}.\n${pushTokenAdvice(mirrorPath, updated.mode === 'no-public')}\n(skip if VENFORK_PUSH_TOKEN is already configured)`
       );
       return;
     }

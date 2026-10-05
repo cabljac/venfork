@@ -41,7 +41,10 @@ function fail(stderr = 'failed'): MockResponse {
   return { exitCode: 1, stdout: '', stderr };
 }
 
-function useMirror(mode: 'standard' | 'no-public'): void {
+function useMirror(
+  mode: 'standard' | 'no-public',
+  extra: Record<string, unknown> = {}
+): void {
   responses.length = 0;
   ghCalls.length = 0;
   const config = {
@@ -51,6 +54,7 @@ function useMirror(mode: 'standard' | 'no-public'): void {
       ? { publicForkUrl: 'git@github.com:vendor/widget.git' }
       : { mode: 'no-public' }),
     schedule: { enabled: true, cron: CRON },
+    ...extra,
   };
   const remotes: Array<[string, string, string]> = [
     [
@@ -138,8 +142,9 @@ describe('doctor GitHub checks', () => {
 
     expect(checks.token.ok).toBe(false);
     expect(checks.token.fix).toBe(
-      'gh secret set VENFORK_PUSH_TOKEN --repo acme/widget-private --body "$(gh auth token)"'
+      'gh secret set VENFORK_PUSH_TOKEN --repo acme/widget-private --body "<fine-grained token>"'
     );
+    expect(checks.token.detail).toContain('never `gh auth token`');
     expect(
       ghCalls.some((cmd) =>
         cmd.includes('gh secret list --repo acme/widget-private --json name')
@@ -147,7 +152,24 @@ describe('doctor GitHub checks', () => {
     ).toBe(true);
   });
 
-  test('token passes when the secret exists', async () => {
+  test('token passes when the secret exists and warns while every upstream workflow can read it', async () => {
+    responses.unshift([
+      'gh secret list',
+      ok('[{"name":"VENFORK_PUSH_TOKEN"}]'),
+    ]);
+    lastRun('success');
+
+    const checks = await ghChecks(new Date('2026-03-01T01:00:00Z'));
+
+    expect(checks.token.ok).toBe(true);
+    expect(checks.token.detail).toBe(
+      'VENFORK_PUSH_TOKEN is set; every upstream workflow on the mirror can read it'
+    );
+    expect(checks.token.fix).toContain('venfork workflows block');
+  });
+
+  test('token passes quietly when a workflow list filters upstream workflows', async () => {
+    useMirror('standard', { disabledWorkflows: ['deploy.yml'] });
     responses.unshift([
       'gh secret list',
       ok('[{"name":"VENFORK_PUSH_TOKEN"}]'),
@@ -174,7 +196,9 @@ describe('doctor GitHub checks', () => {
     expect(checks.token.detail).toContain(
       'pushes of upstream commits that change .github/workflows will fail'
     );
-    expect(checks.token.detail).toContain('workflow scope');
+    expect(checks.token.detail).toContain('Workflows write');
+    expect(checks.token.detail).toContain('never `gh auth token`');
+    expect(checks.token.detail).not.toContain('public fork');
   });
 
   test('last-run fails and links the run when the last sync failed', async () => {
