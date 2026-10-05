@@ -31,12 +31,19 @@ async function managedCommitCarrying(
   await netFetch('upstream', repoDir);
   await netFetch('origin', repoDir);
   const defaultBranch = await getDefaultBranch('upstream', repoDir);
-  const tip = await resolveCommit(`origin/${defaultBranch}`, repoDir);
-  if (!tip) return null;
+  const tip = await resolveCommit(
+    `refs/remotes/origin/${defaultBranch}`,
+    repoDir
+  );
+  const upstreamTip = await resolveCommit(
+    `refs/remotes/upstream/${defaultBranch}`,
+    repoDir
+  );
+  if (!tip || !upstreamTip) return null;
   const ahead = (
     await $({
       cwd: repoDir,
-    })`git rev-list ${`upstream/${defaultBranch}..${tip}`}`
+    })`git rev-list ${`${upstreamTip}..${tip}`}`
   ).stdout
     .split('\n')
     .filter(Boolean);

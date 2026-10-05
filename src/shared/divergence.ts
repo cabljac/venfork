@@ -57,7 +57,7 @@ export interface DroppedManagedCommit {
   kind: ManagedCommitKind;
 }
 
-/** Commits on `<remote>/<defaultBranch>` that upstream does not have. */
+/** Commits on a mirror tip that upstream does not have. */
 export interface DivergenceResult {
   count: number;
   files: string[];
@@ -65,32 +65,46 @@ export interface DivergenceResult {
   weakManaged: DroppedManagedCommit[];
 }
 
+/** Blob id of `path` at `commit`, or null when the path is not a blob there. */
+async function blobAt(
+  commit: string,
+  file: string,
+  cwd?: string
+): Promise<string | null> {
+  const result = await $({
+    ...(cwd ? { cwd } : {}),
+    reject: false,
+  })`git rev-parse --verify --quiet ${`${commit}:${file}`}`;
+  return result.exitCode === 0 ? result.stdout.trim() : null;
+}
+
 /**
- * Counts user-authored commits on `<remote>/<defaultBranch>` that are not in
- * `upstream/<defaultBranch>`, skipping the venfork-managed commit and, when
- * `allowPreserved` is set, commits that only touch preserved paths. A missing
- * remote branch counts as no divergence; any other git failure throws.
+ * Counts user-authored commits in `base..tip`, skipping the venfork-managed
+ * commit and, when `allowPreserved` is set, commits that only touch
+ * preserved paths whose content the managed commit will carry forward. A
+ * preserved path that upstream also has is upstream's: when `tip` holds a
+ * different blob for it, the commit that changed it counts as divergence,
+ * since a re-stamp would discard that change.
+ *
+ * `base` and `tip` are commit ids, never ref names, so the range checked is
+ * exactly the range the caller later leases on. An empty `tip` (no remote
+ * branch yet) counts as no divergence; any git failure throws.
  */
 export async function checkDivergence(args: {
-  remote: string;
-  defaultBranch: string;
+  base: string;
+  tip: string;
   allowPreserved: boolean;
   preserveAllowed: Set<string>;
   cwd?: string;
 }): Promise<DivergenceResult> {
-  const { remote, defaultBranch, allowPreserved, preserveAllowed, cwd } = args;
-  const cwdOpt = cwd ? { cwd } : {};
-  const remoteRef = await $({
-    ...cwdOpt,
-    reject: false,
-  })`git rev-parse --verify ${`${remote}/${defaultBranch}`}`;
-  if (remoteRef.exitCode !== 0) {
-    // First sync: the remote has no default branch yet.
+  const { base, tip, allowPreserved, preserveAllowed, cwd } = args;
+  if (!tip) {
     return { count: 0, files: [], weakManaged: [] };
   }
+  const cwdOpt = cwd ? { cwd } : {};
   const result = await $({
     ...cwdOpt,
-  })`git rev-list upstream/${defaultBranch}..${remote}/${defaultBranch}`;
+  })`git rev-list ${`${base}..${tip}`}`;
   const divergentCommits = result.stdout
     .split('\n')
     .map((line) => line.trim())
@@ -99,6 +113,7 @@ export async function checkDivergence(args: {
   let count = 0;
   const files = new Set<string>();
   const weakManaged: DroppedManagedCommit[] = [];
+  const upstreamOwned = new Map<string, boolean>();
   for (const commit of divergentCommits) {
     const kind = await classifyManagedCommit(commit, cwd, preserveAllowed);
     if (kind !== null) {
@@ -110,7 +125,22 @@ export async function checkDivergence(args: {
     // `git diff-tree` isn't free.
     const commitFiles = await changedFilesInCommit(commit, cwd);
     if (allowPreserved && isPreservedCommit(commitFiles, preserveAllowed)) {
-      continue;
+      let discarded = false;
+      for (const file of commitFiles) {
+        if (!upstreamOwned.has(file)) {
+          const upstreamBlob = await blobAt(base, file, cwd);
+          const tipBlob =
+            upstreamBlob === null ? null : await blobAt(tip, file, cwd);
+          upstreamOwned.set(
+            file,
+            upstreamBlob !== null &&
+              tipBlob !== null &&
+              tipBlob !== upstreamBlob
+          );
+        }
+        if (upstreamOwned.get(file)) discarded = true;
+      }
+      if (!discarded) continue;
     }
     count += 1;
     for (const file of commitFiles) {

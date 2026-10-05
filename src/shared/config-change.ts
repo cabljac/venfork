@@ -50,19 +50,22 @@ export async function applyConfigChange(
   }
   const { config: current, sha: readSha } = read;
   const next = applyPatchAndNormalize(current, patch);
-  const upstreamTip = await resolveCommit(`upstream/${defaultBranch}`, repoDir);
+  const upstreamTip = await resolveCommit(
+    `refs/remotes/upstream/${defaultBranch}`,
+    repoDir
+  );
   if (!upstreamTip) {
     throw new Error(
       `upstream/${defaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
     );
   }
   const previousMirrorTip = await resolveCommit(
-    `origin/${defaultBranch}`,
+    `refs/remotes/origin/${defaultBranch}`,
     repoDir
   );
   const originDivergence = await checkDivergence({
-    remote: 'origin',
-    defaultBranch,
+    base: upstreamTip,
+    tip: previousMirrorTip,
     allowPreserved: true,
     preserveAllowed: new Set(current.preserve ?? []),
     cwd: repoDir,

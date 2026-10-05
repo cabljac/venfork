@@ -384,16 +384,15 @@ describe('sync with the managed commit', () => {
 });
 
 describe('divergence check errors', () => {
-  test('an unresolvable upstream ref throws instead of reporting no divergence', async () => {
+  test('an unresolvable base throws instead of reporting no divergence', async () => {
     await fx.commitOnOrigin({ 'src/mirror.txt': 'mirror\n' });
     await fx.git(fx.work, 'fetch', '--quiet', 'origin');
-    await fx.git(fx.work, 'update-ref', '-d', 'refs/remotes/upstream/main');
     const originBefore = await fx.sha(fx.origin, 'main');
 
     await expect(
       checkDivergence({
-        remote: 'origin',
-        defaultBranch: 'main',
+        base: '0'.repeat(40),
+        tip: originBefore,
         allowPreserved: true,
         preserveAllowed: new Set(),
         cwd: fx.work,

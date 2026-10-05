@@ -81,7 +81,7 @@ async function syncPulledPr(
       remote: 'origin',
       branch,
       target: headSha,
-      expected: await resolveCommit(`origin/${branch}`, cwd),
+      expected: await resolveCommit(`refs/remotes/origin/${branch}`, cwd),
       cwd,
     });
   } catch (err) {
@@ -172,14 +172,15 @@ export async function syncCommand(
       }
     }
 
-    const config = await readVenforkConfigFromRepo(repoDir);
-    assertNoInvalidPreserve(config);
-    const noPublic = config?.mode === 'no-public';
-
-    // Step 1: Fetch from upstream
+    // Fetch before reading the config: config writers write the config
+    // before they push the tip, so a tip fetched after the config was read
+    // can carry preserve entries the config does not name yet.
     s.start('Fetching from upstream');
     await netFetch('upstream', options?.cwd);
     await netFetch('origin', options?.cwd);
+    const config = await readVenforkConfigFromRepo(repoDir);
+    assertNoInvalidPreserve(config);
+    const noPublic = config?.mode === 'no-public';
     if (!noPublic) {
       await netFetch('public', options?.cwd);
     }
@@ -190,7 +191,7 @@ export async function syncCommand(
       targetBranch || (await getDefaultBranch('upstream', options?.cwd));
     const preserveList = config?.preserve ?? [];
     const upstreamTip = await resolveCommit(
-      `upstream/${defaultBranch}`,
+      `refs/remotes/upstream/${defaultBranch}`,
       options?.cwd
     );
     if (!upstreamTip) {
@@ -198,17 +199,25 @@ export async function syncCommand(
         `upstream/${defaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
       );
     }
+    // Resolved once: this id is the range the divergence check reads, the
+    // source of the preserved blobs and the lease for the origin push.
+    const previousMirrorTip = await resolveCommit(
+      `refs/remotes/origin/${defaultBranch}`,
+      options?.cwd
+    );
+    const publicTip = noPublic
+      ? ''
+      : await resolveCommit(
+          `refs/remotes/public/${defaultBranch}`,
+          options?.cwd
+        );
 
     if (config === null) {
-      const originTip = await resolveCommit(
-        `origin/${defaultBranch}`,
-        options?.cwd
-      );
       if (
-        originTip &&
-        originTip !== upstreamTip &&
-        ((await hasManagedTrailer(originTip, options?.cwd)) ||
-          (await isManagedCommit(originTip, options?.cwd)))
+        previousMirrorTip &&
+        previousMirrorTip !== upstreamTip &&
+        ((await hasManagedTrailer(previousMirrorTip, options?.cwd)) ||
+          (await isManagedCommit(previousMirrorTip, options?.cwd)))
       ) {
         throw new Error(
           `The venfork-config branch is missing but origin/${defaultBranch} carries venfork state (a managed commit). Restore the venfork-config branch, or run \`venfork setup\` only on a fresh mirror.`
@@ -218,7 +227,7 @@ export async function syncCommand(
 
     await assertPreserveEntriesAreNotDirectories(
       preserveList,
-      [`refs/remotes/origin/${defaultBranch}`],
+      previousMirrorTip ? [previousMirrorTip] : [],
       repoDir
     );
 
@@ -235,8 +244,8 @@ export async function syncCommand(
     // divergent commits each remote has.
     const preserveAllowed = new Set(preserveList);
     const originDivergence = await checkDivergence({
-      remote: 'origin',
-      defaultBranch,
+      base: upstreamTip,
+      tip: previousMirrorTip,
       allowPreserved: true,
       preserveAllowed,
       cwd: options?.cwd,
@@ -244,8 +253,8 @@ export async function syncCommand(
     const publicDivergence = noPublic
       ? { count: 0, files: [] as string[], weakManaged: [] }
       : await checkDivergence({
-          remote: 'public',
-          defaultBranch,
+          base: upstreamTip,
+          tip: publicTip,
           allowPreserved: false,
           preserveAllowed,
           cwd: options?.cwd,
@@ -274,13 +283,6 @@ export async function syncCommand(
       ...publicDivergence.weakManaged,
     ]);
 
-    // Read before anything is pushed: preserved files come from this tip, and
-    // it is the lease for the origin push.
-    const previousMirrorTip = await resolveCommit(
-      `origin/${defaultBranch}`,
-      options?.cwd
-    );
-
     s.start(`Syncing ${defaultBranch} to origin`);
     const { pushed: originPushed } = await updateOriginTip({
       config,
@@ -301,7 +303,7 @@ export async function syncCommand(
         remote: 'public',
         branch: defaultBranch,
         target: upstreamTip,
-        expected: await resolveCommit(`public/${defaultBranch}`, options?.cwd),
+        expected: publicTip,
         cwd: options?.cwd,
       });
       s.stop(

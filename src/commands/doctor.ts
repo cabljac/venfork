@@ -269,11 +269,15 @@ async function collectChecks(
       ? await getDefaultBranch('upstream', cwd)
       : '';
   const originTip = defaultBranch
-    ? await revParse(`origin/${defaultBranch}`)
+    ? await revParse(`refs/remotes/origin/${defaultBranch}`)
     : '';
   const upstreamTip = defaultBranch
-    ? await revParse(`upstream/${defaultBranch}`)
+    ? await revParse(`refs/remotes/upstream/${defaultBranch}`)
     : '';
+  const publicTip =
+    defaultBranch && !noPublic && remotes.public
+      ? await revParse(`refs/remotes/public/${defaultBranch}`)
+      : '';
   if (!haveBothRemotes) {
     for (const id of gitStateIds) {
       skip(id, 'needs the origin and upstream remotes');
@@ -288,15 +292,19 @@ async function collectChecks(
   } else {
     const preserveAllowed = new Set(config.preserve ?? []);
     const divergences: string[] = [];
-    const remotesToCheck: Array<[string, boolean]> = [['origin', true]];
-    if (!noPublic && remotes.public) remotesToCheck.push(['public', false]);
+    const remotesToCheck: Array<[string, string, boolean]> = [
+      ['origin', originTip, true],
+    ];
+    if (!noPublic && remotes.public) {
+      remotesToCheck.push(['public', publicTip, false]);
+    }
     let divergenceError = '';
     let originDiverged = true;
-    for (const [remote, allowPreserved] of remotesToCheck) {
+    for (const [remote, tip, allowPreserved] of remotesToCheck) {
       try {
         const result = await checkDivergence({
-          remote,
-          defaultBranch,
+          base: upstreamTip,
+          tip,
           allowPreserved,
           preserveAllowed,
           cwd,
@@ -318,17 +326,14 @@ async function collectChecks(
     const base = managed ? await revParse(`${originTip}^`) : originTip;
     const onUpstream =
       base !== '' &&
-      (
-        await git(
-          false
-        )`git merge-base --is-ancestor ${base} ${`upstream/${defaultBranch}`}`
-      ).exitCode === 0;
+      (await git(false)`git merge-base --is-ancestor ${base} ${upstreamTip}`)
+        .exitCode === 0;
     if (!onUpstream && !originDiverged && !divergenceError) {
       const stacked = Number(
         (
           await git(
             false
-          )`git rev-list --count ${`upstream/${defaultBranch}..${originTip}`}`
+          )`git rev-list --count ${`${upstreamTip}..${originTip}`}`
         ).stdout.trim()
       );
       checks.push({
@@ -352,7 +357,7 @@ async function collectChecks(
               (
                 await git(
                   false
-                )`git rev-list --count ${`${base}..upstream/${defaultBranch}`}`
+                )`git rev-list --count ${`${base}..${upstreamTip}`}`
               ).stdout.trim()
             );
       const shape = managed ? 'upstream + 1 managed commit' : 'upstream (+0)';
