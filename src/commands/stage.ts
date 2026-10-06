@@ -406,7 +406,7 @@ async function prepareStage(
     cwd
   );
   const denyList = await mirrorDenyList(cwd);
-  const { blobs: mirrorBlobs } = await collectMirrorBlobs(
+  const { blobs: mirrorBlobs, texts: mirrorTexts } = await collectMirrorBlobs(
     [
       `refs/remotes/origin/${plan.upstreamDefaultBranch}`,
       `refs/heads/${plan.upstreamDefaultBranch}`,
@@ -422,6 +422,7 @@ async function prepareStage(
     head: rebuilt.head,
     preserve: plan.preserve,
     mirrorBlobs,
+    mirrorTexts,
     denyList,
     recordedUrls: plan.recordedUrls,
     originalOf: rebuilt.originalOf,

@@ -1,9 +1,19 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { assertPublishableCommits } from '../../src/shared/stage-gate.js';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { quietPrompts } from '../harness/prompts.js';
+
+mock.module('@clack/prompts', quietPrompts);
+
+import { syncCommand } from '../../src/commands.js';
+import {
+  assertPublishableCommits,
+  collectMirrorBlobs,
+  type MirrorText,
+} from '../../src/shared/stage-gate.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
+import { seedPreserve } from '../harness/preserve.js';
 
 let fx: MirrorFixture;
 const originalCwd = process.cwd();
@@ -40,6 +50,7 @@ async function commitFile(
 interface GateOptions {
   denyList?: readonly string[];
   mirrorBlobs?: ReadonlyMap<string, string>;
+  mirrorTexts?: readonly MirrorText[];
   preserve?: readonly string[];
   gitArgs?: string[];
 }
@@ -63,6 +74,7 @@ function runGate(options: GateOptions = {}): Promise<string[]> {
     head: 'feature',
     preserve: options.preserve ?? [],
     mirrorBlobs: options.mirrorBlobs ?? new Map(),
+    mirrorTexts: options.mirrorTexts ?? [],
     denyList: options.denyList ?? [],
     recordedUrls: [],
     originalOf: new Map(),
@@ -117,5 +129,97 @@ describe('internal markers never ship in published text', () => {
     expect(
       await gate('docs/a.md', 'We use venfork for mirrors.\n', 'docs: venfork')
     ).toEqual(['docs/a.md']);
+  });
+});
+
+const DOC = 'docs/internal.md';
+const ROADMAP = [
+  'Client ACME wants the billing export by March',
+  'Invoice numbers follow the ACME-2024 scheme',
+  'Do not mention the migration to the public repo',
+  'Escalation contact is the account manager',
+  'Budget approved for two additional engineers',
+  'Short line',
+].join('\n');
+
+/** Preserves DOC on the mirror, syncs it, and returns what the gate reads. */
+async function mirrorWithRoadmap(): Promise<GateOptions> {
+  await fx.commitOnOrigin({ [DOC]: `${ROADMAP}\n` }, 'docs: notes');
+  await seedPreserve(fx, [DOC]);
+  await syncCommand(undefined, { cwd: fx.work, quiet: true });
+  await git('fetch', '--quiet', 'origin');
+  const scan = await collectMirrorBlobs(
+    ['refs/remotes/origin/main', 'refs/heads/main'],
+    [DOC],
+    'upstream/main',
+    fx.work
+  );
+  return {
+    mirrorBlobs: scan.blobs,
+    mirrorTexts: scan.texts,
+    preserve: [DOC],
+  };
+}
+
+describe('preserved text is refused when a copy only differs in form', () => {
+  const lines = ROADMAP.split('\n');
+  const variants: Array<[string, () => string | Buffer]> = [
+    ['one letter changed', () => `${ROADMAP.replace('March', 'Marsh')}\n`],
+    ['a line prepended', () => `# Notes\n${ROADMAP}\n`],
+    ['a line removed', () => `${lines.slice(1).join('\n')}\n`],
+    ['CRLF line endings', () => `${ROADMAP.replaceAll('\n', '\r\n')}\r\n`],
+    ['trailing whitespace', () => `${lines.map((l) => `${l}  `).join('\n')}\n`],
+    ['a UTF-8 byte order mark', () => `﻿${ROADMAP}\n`],
+    [
+      'UTF-16LE with a byte order mark',
+      () =>
+        Buffer.concat([
+          Buffer.from([0xff, 0xfe]),
+          Buffer.from(`${ROADMAP}\n`, 'utf16le'),
+        ]),
+    ],
+  ];
+
+  test.each(variants)('%s', async (_label, build) => {
+    const options = await mirrorWithRoadmap();
+    await expect(
+      gate('docs/copy.md', build(), 'docs: copy', options)
+    ).rejects.toThrow(/docs\/copy\.md \(near copy of docs\/internal\.md\)/);
+  });
+
+  test('a copy of upstream text that the preserved file also carries ships', async () => {
+    await fx.commitOnUpstream({ 'NOTES.md': `${ROADMAP}\n` });
+    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await fx.commitOnOrigin(
+      { 'NOTES.md': `${ROADMAP}\nPrivate addendum for the client team\n` },
+      'docs: addendum'
+    );
+    await git('fetch', '--quiet', 'origin');
+    const scan = await collectMirrorBlobs(
+      ['refs/remotes/origin/main', 'refs/heads/main'],
+      ['NOTES.md'],
+      'upstream/main',
+      fx.work
+    );
+
+    expect(
+      await gate('docs/copy.md', `${ROADMAP}\n`, 'docs: copy', {
+        mirrorBlobs: scan.blobs,
+        mirrorTexts: scan.texts,
+        preserve: ['NOTES.md'],
+      })
+    ).toEqual(['docs/copy.md']);
+  });
+
+  test('a file sharing two short lines with the preserved file ships', async () => {
+    const options = await mirrorWithRoadmap();
+    expect(
+      await gate(
+        'docs/other.md',
+        'Short line\nBudget approved for two additional engineers\nunrelated text here\n',
+        'docs: other',
+        options
+      )
+    ).toEqual(['docs/other.md']);
   });
 });

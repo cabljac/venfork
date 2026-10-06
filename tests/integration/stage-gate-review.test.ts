@@ -414,6 +414,7 @@ describe('file content needs a host before the bare mirror name', () => {
       head: 'feature',
       preserve: [],
       mirrorBlobs: new Map(),
+      mirrorTexts: [],
       denyList: NAME_TERMS,
       recordedUrls: [],
       originalOf: new Map(),

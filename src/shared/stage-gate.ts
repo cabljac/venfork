@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { $ } from 'execa';
 import { invalidPreserveError } from '../config.js';
 import {
@@ -402,10 +403,174 @@ export interface CollectMirrorBlobsOptions {
   historyCap?: number;
 }
 
+/** Normalized form of a text blob, for matching copies that differ in form. */
+interface TextShape {
+  /** Hash of the normalized text. */
+  fingerprint: string;
+  /** Normalized lines of at least {@link MIN_SHINGLE_LENGTH} characters. */
+  lines: ReadonlySet<string>;
+}
+
+/** A mirror-held text blob, as {@link collectMirrorBlobs} reads it. */
+export interface MirrorText extends TextShape {
+  /** Path the blob was found at. */
+  path: string;
+}
+
 /** Output of {@link collectMirrorBlobs}. */
 export interface MirrorBlobs {
   /** Mirror-held blob id to the path it was found at. */
   blobs: Map<string, string>;
+  /** Normalized shape of each mirror-held text blob. */
+  texts: MirrorText[];
+}
+
+/** A line shorter than this is too common to show that text was copied. */
+const MIN_SHINGLE_LENGTH = 20;
+
+/** Fewest long lines a mirror text needs before line overlap is judged. */
+const MIN_SHINGLE_LINES = 3;
+
+/** A published text sharing more than this share of a mirror text's long lines is a copy. */
+const SHINGLE_SHARE = 0.5;
+
+/** Mirror blobs over this size are not fingerprinted. */
+const MAX_FINGERPRINT_BYTES = 1024 * 1024;
+
+/** Blobs read per `git cat-file --batch` call. */
+const FINGERPRINT_BATCH = 100;
+
+/**
+ * Lines of `text` with case, invisible characters, a byte order mark, line
+ * ending style and runs of whitespace removed; blank lines are dropped.
+ */
+function normalizedLines(text: string): string[] {
+  const lines: string[] = [];
+  for (const raw of text.split(/\r\n|\r|\n/)) {
+    const line = canonicalText(raw).toLowerCase().replace(/\s+/g, ' ').trim();
+    if (line) lines.push(line);
+  }
+  return lines;
+}
+
+function shapeOf(text: string): TextShape | null {
+  const lines = normalizedLines(text);
+  if (lines.length === 0) return null;
+  return {
+    fingerprint: createHash('sha256').update(lines.join('\n')).digest('hex'),
+    lines: new Set(lines.filter((line) => line.length >= MIN_SHINGLE_LENGTH)),
+  };
+}
+
+/** Bytes of each blob in `oids` of at most {@link MAX_FINGERPRINT_BYTES}. */
+async function readSmallBlobs(
+  oids: readonly string[],
+  cwd: string
+): Promise<Map<string, Buffer>> {
+  const bytes = new Map<string, Buffer>();
+  for (let i = 0; i < oids.length; i += FINGERPRINT_BATCH) {
+    const chunk = oids.slice(i, i + FINGERPRINT_BATCH);
+    const sizes = await $({
+      cwd,
+      reject: false,
+      input: `${chunk.join('\n')}\n`,
+    })`git cat-file ${'--batch-check=%(objectname) %(objectsize)'}`;
+    if (sizes.exitCode !== 0) {
+      throw new GitError(
+        `Cannot read mirror objects: ${sizes.stderr.trim()}`,
+        'git cat-file'
+      );
+    }
+    const small = chunk.filter((_, at) => {
+      const size = Number(sizes.stdout.split('\n')[at]?.split(' ')[1]);
+      return Number.isFinite(size) && size <= MAX_FINGERPRINT_BYTES;
+    });
+    if (small.length === 0) continue;
+    const batch = await $({
+      cwd,
+      encoding: 'latin1',
+      input: `${small.join('\n')}\n`,
+    })`git cat-file --batch`;
+    let at = 0;
+    while (at < batch.stdout.length) {
+      const end = batch.stdout.indexOf('\n', at);
+      if (end === -1) break;
+      const [oid, , size] = batch.stdout.slice(at, end).split(' ');
+      const length = Number(size);
+      if (!oid || !Number.isFinite(length)) {
+        at = end + 1;
+        continue;
+      }
+      bytes.set(
+        oid,
+        Buffer.from(batch.stdout.slice(end + 1, end + 1 + length), 'latin1')
+      );
+      at = end + 1 + length + 1;
+    }
+  }
+  return bytes;
+}
+
+/**
+ * The mirror text shapes, with the lines upstream's own version of the same
+ * path has at `base` left out: a preserved file may be an edit of an
+ * upstream file, and shared upstream lines say nothing about a copy.
+ */
+async function mirrorTextShapes(
+  blobs: ReadonlyMap<string, string>,
+  base: string,
+  cwd: string
+): Promise<MirrorText[]> {
+  const bytes = await readSmallBlobs([...blobs.keys()], cwd);
+  const upstreamLines = new Map<string, ReadonlySet<string>>();
+  const texts: MirrorText[] = [];
+  for (const [oid, file] of blobs) {
+    const raw = bytes.get(oid);
+    const decoded = raw === undefined ? null : decodeText(raw);
+    const shape = decoded === null ? null : shapeOf(decoded);
+    if (shape === null) continue;
+    let known = upstreamLines.get(file);
+    if (known === undefined) {
+      const upstreamOid = await blobAt(base, file, cwd);
+      const upstreamBytes =
+        upstreamOid === null
+          ? undefined
+          : (await readSmallBlobs([upstreamOid], cwd)).get(upstreamOid);
+      const upstreamText =
+        upstreamBytes === undefined ? null : decodeText(upstreamBytes);
+      known = new Set(
+        upstreamText === null ? [] : normalizedLines(upstreamText)
+      );
+      upstreamLines.set(file, known);
+    }
+    const own = known;
+    texts.push({
+      path: file,
+      fingerprint: shape.fingerprint,
+      lines: new Set([...shape.lines].filter((line) => !own.has(line))),
+    });
+  }
+  return texts;
+}
+
+/**
+ * The path of the first mirror text that `shape` copies: the same normalized
+ * text, or more than half of the mirror text's long lines (at least three).
+ */
+function findNearCopy(
+  shape: TextShape,
+  file: string,
+  texts: readonly MirrorText[]
+): string | null {
+  for (const text of texts) {
+    if (text.path === file) continue;
+    if (text.fingerprint === shape.fingerprint) return text.path;
+    if (text.lines.size < MIN_SHINGLE_LINES) continue;
+    let shared = 0;
+    for (const line of text.lines) if (shape.lines.has(line)) shared += 1;
+    if (shared / text.lines.size > SHINGLE_SHARE) return text.path;
+  }
+  return null;
 }
 
 /**
@@ -461,7 +626,7 @@ export async function collectMirrorBlobs(
     if (upstream.has(`${blob.path}\0${blob.oid}`)) continue;
     blobs.set(blob.oid, blob.path);
   }
-  return { blobs };
+  return { blobs, texts: await mirrorTextShapes(blobs, base, cwd) };
 }
 
 /** Inputs for {@link assertPublishableCommits}. */
@@ -476,6 +641,8 @@ export interface StageGateInput {
   preserve: readonly string[];
   /** Output of {@link collectMirrorBlobs}. */
   mirrorBlobs: ReadonlyMap<string, string>;
+  /** `texts` from {@link collectMirrorBlobs}. */
+  mirrorTexts: readonly MirrorText[];
   /** Output of `mirrorDenyList`. */
   denyList: readonly string[];
   /**
@@ -597,6 +764,7 @@ export async function assertPublishableCommits(
   const upstreamBlobs = new Map<string, string | null>();
   const locationTerms = mirrorLocationTerms(denyList);
   const scanned = new Map<string, string | null>();
+  const shapes = new Map<string, TextShape | null>();
   const publishedPaths = new Set<string>();
 
   for (const commit of commits) {
@@ -657,12 +825,24 @@ export async function assertPublishableCommits(
                 findDeniedText(text, locationTerms, { hostOnlyNames: true }));
         hit = textHit ?? findTermInBytes(bytes, locationTerms);
         scanned.set(change.newOid, hit);
+        shapes.set(change.newOid, text === null ? null : shapeOf(text));
       }
       if (hit !== null) {
         throw new MirrorReferenceError(
           `commit ${label} file ${change.path}`,
           hit,
           `Remove it from ${change.path} and retry.`
+        );
+      }
+      const shape = shapes.get(change.newOid);
+      const source = shape
+        ? findNearCopy(shape, change.path, input.mirrorTexts)
+        : null;
+      if (source !== null) {
+        throw new StageLeakError(
+          branch,
+          [`${change.path} (near copy of ${source})`],
+          label
         );
       }
     }
