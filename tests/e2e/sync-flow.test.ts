@@ -221,9 +221,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     'tier 2: workflow_dispatch run on GHA syncs upstream change end-to-end',
     async () => {
       // Tier 1 left both repos in sync, with venfork's own workflow on
-      // origin/main wired to use `secrets.VENFORK_PUSH_TOKEN || github.token`.
-      // We set the secret, point the install step at the code under test,
-      // push another upstream change, and dispatch.
+      // origin/main, which fails its preflight unless VENFORK_PUSH_TOKEN is set.
       const defaultBranch = await getRepoDefaultBranch(
         UPSTREAM_OWNER,
         names.upstream

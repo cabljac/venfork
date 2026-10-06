@@ -36,8 +36,9 @@ rights in the mirror/fork org).
 **Tier 2** (opt-in via `VENFORK_E2E_REAL_DISPATCH=1`) - runs the same sync inside
 a real GitHub Actions runner via `gh workflow run`:
 
-1. Tier 1 setup leaves the workflow on origin/main with venfork's native
-   `with: token: ${{ secrets.VENFORK_PUSH_TOKEN || github.token }}` wiring.
+1. Tier 1 setup leaves the workflow on origin/main. Its first step fails the
+   job when the `VENFORK_PUSH_TOKEN` secret is empty, and `actions/checkout`
+   uses `token: ${{ secrets.VENFORK_PUSH_TOKEN }}` with no fallback.
 2. Sets `VENFORK_PUSH_TOKEN` on the mirror to either `$VENFORK_E2E_PAT` or
    `gh auth token` (default).
 3. Packs the build from `beforeAll` with `npm pack`, uploads the tarball as a
@@ -116,15 +117,18 @@ the `describe` block with `describe.skip`, so no GitHub calls are made.
 
 ## How Tier 2 authenticates cross-repo pushes
 
-The workflow `venfork schedule set` generates wires
-`token: ${{ secrets.VENFORK_PUSH_TOKEN || github.token }}` on
-`actions/checkout@v4`, plus a step that rewrites SSH GitHub URLs to HTTPS so
-`actions/checkout`'s extraheader auth applies to all push targets.
+The workflow `venfork schedule set` generates starts with a `Check
+VENFORK_PUSH_TOKEN` step that fails the job when the secret is empty. It then
+wires `token: ${{ secrets.VENFORK_PUSH_TOKEN }}` on `actions/checkout@v4`,
+plus a step that rewrites SSH GitHub URLs to HTTPS so `actions/checkout`'s
+extraheader auth applies to all push targets.
 
 Tier 2 sets the `VENFORK_PUSH_TOKEN` secret on the mirror. It does not patch
 the workflow: the install spec is overridden through the
 `VENFORK_INSTALL_SPEC` repository variable that the generated workflow reads,
-so the runner executes the code under test. The helper `getPushToken()`
+so the runner executes the code under test. The install step accepts only
+`venfork@<semver>` or an `https://` URL ending in `.tgz`; the release asset
+URL the test uploads has that form. The helper `getPushToken()`
 returns `$VENFORK_E2E_PAT` if set, otherwise `gh auth token` (your local OAuth
 token). The secret, the variable and the release are removed automatically
 when the test repos are deleted in `afterAll`.
