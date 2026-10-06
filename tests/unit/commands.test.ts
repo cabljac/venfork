@@ -3274,7 +3274,7 @@ describe('syncCommand - error paths', () => {
         stdout: 'abc123\n',
         stderr: '',
       });
-      mockResponses.set('gh issue list', {
+      mockResponses.set('gh api repos/acme/widget-private/issues', {
         exitCode: 0,
         stdout: '[]',
         stderr: '',
@@ -3306,7 +3306,7 @@ describe('syncCommand - error paths', () => {
     delete process.env.GITHUB_REPOSITORY;
     try {
       useDistinctRemotes();
-      mockResponses.set('gh issue list', {
+      mockResponses.set('gh api repos/acme/widget-private/issues', {
         exitCode: 0,
         stdout: '[{"number":9}]',
         stderr: '',

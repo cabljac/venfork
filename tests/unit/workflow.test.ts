@@ -148,7 +148,7 @@ describe('workflow helpers', () => {
     );
     expect(workflow).toContain(
       // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expression we are asserting.
-      '      - name: Sync from upstream\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: venfork sync --report-issues\n'
+      '      - name: Sync from upstream\n        id: sync\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: venfork sync --report-issues\n'
     );
   });
 
@@ -157,9 +157,27 @@ describe('workflow helpers', () => {
     const step = workflow.slice(workflow.indexOf('- name: Report failed sync'));
     expect(step).toContain('if: failure()');
     expect(step).toContain('gh label create venfork-sync-blocked');
-    expect(step).toContain('--label venfork-sync-blocked --state open');
     expect(step).toContain('gh issue create');
     expect(step).toContain('gh issue comment');
+  });
+
+  test('lists the open issue through REST, not the lagging search index', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *');
+    expect(workflow).not.toContain('gh issue list');
+    const step = workflow.slice(workflow.indexOf('- name: Report failed sync'));
+    expect(step).toContain(
+      `NUMBER="$(gh api "repos/$REPO/issues?labels=venfork-sync-blocked&state=open&per_page=100" --jq 'map(select(.pull_request == null))[0].number // empty')"`
+    );
+  });
+
+  test('skips the failure report when the sync step already reported', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *');
+    expect(workflow).toContain(
+      '      - name: Sync from upstream\n        id: sync\n'
+    );
+    expect(workflow).toContain(
+      "      - name: Report failed sync\n        if: failure() && steps.sync.outputs.reported != 'true'\n"
+    );
   });
 
   test('installs venfork before checking out the mirror', () => {

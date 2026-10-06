@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 type MockResponse = { exitCode: number; stdout: string; stderr: string };
 interface Call {
@@ -49,6 +52,8 @@ const RUN_ENV = {
   GITHUB_RUN_ID: '42',
 };
 const RUN_URL = 'https://github.com/acme/widget-private/actions/runs/42';
+const LIST_ISSUES =
+  'gh api repos/acme/widget-private/issues?labels=venfork-sync-blocked&state=open&per_page=100';
 const ORIGIN_ONLY = new SyncDivergenceError(
   'main',
   { count: 1, files: ['src/hotfix.ts'] },
@@ -76,11 +81,12 @@ beforeEach(() => {
   responses.length = 0;
   calls.length = 0;
   warnings.length = 0;
-  for (const key of Object.keys(RUN_ENV)) delete process.env[key];
+  for (const key of RUN_ENV_KEYS) delete process.env[key];
 });
 
+const RUN_ENV_KEYS = [...Object.keys(RUN_ENV), 'GITHUB_OUTPUT'];
 const savedRunEnv = Object.fromEntries(
-  Object.keys(RUN_ENV).map((key) => [key, process.env[key]])
+  RUN_ENV_KEYS.map((key) => [key, process.env[key]])
 );
 
 afterEach(() => {
@@ -160,7 +166,7 @@ describe('reportSyncBlocked', () => {
   });
 
   test('creates the label only when missing, then opens the issue', async () => {
-    responses.push(['gh label list', ok('[]')], ['gh issue list', ok('[]')]);
+    responses.push(['gh label list', ok('[]')], [LIST_ISSUES, ok('[]')]);
 
     await reportSyncBlocked({ cwd: '/m', error: ORIGIN_ONLY });
 
@@ -171,9 +177,7 @@ describe('reportSyncBlocked', () => {
     expect(gh[1]).toBe(
       'gh label create venfork-sync-blocked --repo acme/widget-private --color B60205 --description Scheduled venfork sync is blocked'
     );
-    expect(gh[2]).toBe(
-      'gh issue list --repo acme/widget-private --label venfork-sync-blocked --state open --json number --limit 100'
-    );
+    expect(gh[2]).toBe(LIST_ISSUES);
     expect(gh[3]).toBe(
       'gh issue create --repo acme/widget-private --title Scheduled sync blocked: divergent commits on origin/main --label venfork-sync-blocked --body-file -'
     );
@@ -185,7 +189,7 @@ describe('reportSyncBlocked', () => {
   test('keeps an existing label and refreshes title and body of the open issue', async () => {
     responses.push(
       ['gh label list', ok('[{"name":"venfork-sync-blocked"}]')],
-      ['gh issue list', ok('[{"number":7}]')]
+      [LIST_ISSUES, ok('[{"number":7}]')]
     );
 
     await reportSyncBlocked({ cwd: '/m', error: ORIGIN_ONLY });
@@ -202,7 +206,7 @@ describe('reportSyncBlocked', () => {
   });
 
   test('names public in the title when only public diverged', async () => {
-    responses.push(['gh label list', ok('[]')], ['gh issue list', ok('[]')]);
+    responses.push(['gh label list', ok('[]')], [LIST_ISSUES, ok('[]')]);
 
     await reportSyncBlocked({ cwd: '/m', error: PUBLIC_ONLY });
 
@@ -227,6 +231,73 @@ describe('reportSyncBlocked', () => {
       reportSyncBlocked({ cwd: '/m', error: ORIGIN_ONLY })
     ).resolves.toBeUndefined();
     expect(warnings[0]).toContain('HTTP 403');
+  });
+
+  test('a pull request carrying the label is not taken for the open issue', async () => {
+    responses.push(
+      ['gh label list', ok('[{"name":"venfork-sync-blocked"}]')],
+      [LIST_ISSUES, ok('[{"number":3,"pull_request":{"url":"x"}}]')]
+    );
+
+    await reportSyncBlocked({ cwd: '/m', error: ORIGIN_ONLY });
+
+    const gh = ghCalls().map((call) => call.command);
+    expect(gh.some((cmd) => cmd.startsWith('gh issue create'))).toBe(true);
+    expect(gh.some((cmd) => cmd.startsWith('gh issue edit'))).toBe(false);
+  });
+
+  describe('the step output', () => {
+    let dir: string;
+    let outputFile: string;
+
+    beforeEach(async () => {
+      dir = await mkdtemp(path.join(os.tmpdir(), 'venfork-output-'));
+      outputFile = path.join(dir, 'output');
+      await writeFile(outputFile, 'earlier=1\n');
+      process.env.GITHUB_OUTPUT = outputFile;
+    });
+
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    test.each([
+      ['opened', '[]'],
+      ['updated', '[{"number":7}]'],
+    ])('appends reported=true once the issue is %s', async (_label, open) => {
+      responses.push(
+        ['gh label list', ok('[{"name":"venfork-sync-blocked"}]')],
+        [LIST_ISSUES, ok(open)]
+      );
+
+      await reportSyncBlocked({ cwd: '/m', error: ORIGIN_ONLY });
+
+      expect(await readFile(outputFile, 'utf8')).toBe(
+        'earlier=1\nreported=true\n'
+      );
+    });
+
+    test('writes nothing when reporting fails', async () => {
+      responses.push([
+        'gh label list',
+        { exitCode: 1, stdout: '', stderr: 'HTTP 403' },
+      ]);
+
+      await reportSyncBlocked({ cwd: '/m', error: ORIGIN_ONLY });
+
+      expect(await readFile(outputFile, 'utf8')).toBe('earlier=1\n');
+    });
+  });
+
+  test('writes no step output outside Actions', async () => {
+    responses.push(
+      ['gh label list', ok('[{"name":"venfork-sync-blocked"}]')],
+      [LIST_ISSUES, ok('[]')]
+    );
+
+    await reportSyncBlocked({ cwd: '/m', error: ORIGIN_ONLY });
+
+    expect(warnings).toEqual([]);
   });
 });
 
@@ -258,7 +329,7 @@ describe('resolveSyncBlocked', () => {
   });
 
   test('closes every open labelled issue with the run URL', async () => {
-    responses.push(['gh issue list', ok('[{"number":7},{"number":8}]')]);
+    responses.push([LIST_ISSUES, ok('[{"number":7},{"number":8}]')]);
 
     await resolveSyncBlocked({ cwd: '/m' });
 
@@ -273,18 +344,32 @@ describe('resolveSyncBlocked', () => {
   });
 
   test('does nothing when no issue is open', async () => {
-    responses.push(['gh issue list', ok('[]')]);
+    responses.push([LIST_ISSUES, ok('[]')]);
 
     await resolveSyncBlocked({ cwd: '/m' });
 
-    expect(ghCalls().map((call) => call.command.split(' ')[2])).toEqual([
-      'list',
+    expect(ghCalls().map((call) => call.command)).toEqual([LIST_ISSUES]);
+  });
+
+  test('closes only issues, not pull requests the REST listing returns', async () => {
+    responses.push([
+      LIST_ISSUES,
+      ok('[{"number":7},{"number":9,"pull_request":{"url":"x"}}]'),
     ]);
+
+    await resolveSyncBlocked({ cwd: '/m' });
+
+    expect(
+      ghCalls()
+        .map((call) => call.command)
+        .filter((cmd) => cmd.startsWith('gh issue close'))
+        .map((cmd) => cmd.split(' ')[3])
+    ).toEqual(['7']);
   });
 
   test('logs and does not throw when closing fails', async () => {
     responses.push(
-      ['gh issue list', ok('[{"number":7}]')],
+      [LIST_ISSUES, ok('[{"number":7}]')],
       ['gh issue close', { exitCode: 1, stdout: '', stderr: 'HTTP 502' }]
     );
 

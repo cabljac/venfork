@@ -403,7 +403,7 @@ export async function listOpenIssuesWithLabel(
   label: string
 ): Promise<number[]> {
   const { stdout } =
-    await $`gh issue list --repo ${owner}/${repo} --label ${label} --state open --json number --jq ${'.[].number'}`;
+    await $`gh api ${`repos/${owner}/${repo}/issues?labels=${label}&state=open&per_page=100`} --jq ${'.[] | select(.pull_request == null) | .number'}`;
   return stdout
     .split('\n')
     .filter((line) => line.length > 0)

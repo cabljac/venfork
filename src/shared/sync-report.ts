@@ -1,3 +1,4 @@
+import { appendFile } from 'node:fs/promises';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import type { SyncDivergenceError } from '../errors.js';
@@ -79,24 +80,23 @@ export async function resolveReportRepo(cwd: string): Promise<string | null> {
   return repo;
 }
 
+/** Open labelled issue numbers. REST, not `gh issue list`: its search index lags a just-opened issue. */
 async function listOpenIssues(cwd: string, repo: string): Promise<number[]> {
   const out = await gh(cwd, [
-    'issue',
-    'list',
-    '--repo',
-    repo,
-    '--label',
-    SYNC_BLOCKED_LABEL,
-    '--state',
-    'open',
-    '--json',
-    'number',
-    '--limit',
-    '100',
+    'api',
+    `repos/${repo}/issues?labels=${SYNC_BLOCKED_LABEL}&state=open&per_page=100`,
   ]);
-  return (JSON.parse(out || '[]') as Array<{ number: number }>).map(
-    (issue) => issue.number
-  );
+  return (
+    JSON.parse(out || '[]') as Array<{ number: number; pull_request?: unknown }>
+  )
+    .filter((issue) => issue.pull_request === undefined)
+    .map((issue) => issue.number);
+}
+
+/** Tells later workflow steps (via `$GITHUB_OUTPUT`) that the sync step already reported. */
+async function markReported(): Promise<void> {
+  const outputFile = process.env.GITHUB_OUTPUT;
+  if (outputFile) await appendFile(outputFile, 'reported=true\n');
 }
 
 async function ensureLabel(cwd: string, repo: string): Promise<void> {
@@ -167,8 +167,9 @@ export function syncBlockedBody(
 
 /**
  * Opens (or refreshes the title and body of) the mirror issue labelled
- * `venfork-sync-blocked`. Failures are logged, never thrown, so the sync
- * error stays the reported outcome.
+ * `venfork-sync-blocked`, then writes `reported=true` to `$GITHUB_OUTPUT`
+ * when that is set. Failures are logged, never thrown, so the sync error
+ * stays the reported outcome.
  */
 export async function reportSyncBlocked(args: {
   cwd: string;
@@ -218,6 +219,7 @@ export async function reportSyncBlocked(args: {
       );
       p.log.info(`Updated issue #${existing}`);
     }
+    await markReported();
   } catch (err) {
     p.log.warn(
       `Could not report the blocked sync: ${err instanceof Error ? err.message : String(err)}`
