@@ -5,7 +5,11 @@ import {
   readVenforkConfigFromRepo,
   type VenforkConfig,
 } from '../config.js';
-import { ConfigError, PinDowngradeError } from '../errors.js';
+import {
+  ConfigError,
+  PinDowngradeError,
+  UNMIGRATED_MIRROR_STEPS,
+} from '../errors.js';
 import { checkGhAuth, getDefaultBranch, getRemotes } from '../git.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
 import {
@@ -20,7 +24,11 @@ import {
   OPEN_WORKFLOWS_WARNING,
   pushTokenCommand,
 } from '../shared/push-token.js';
-import { compareSemver, pinnedVenforkVersion } from '../shared/semver.js';
+import {
+  compareSemver,
+  isUnpinnedWorkflow,
+  pinnedVenforkVersion,
+} from '../shared/semver.js';
 import { parseRepoPath } from '../utils.js';
 import { VENFORK_VERSION } from '../version.js';
 import { generateSyncWorkflow } from '../workflow.js';
@@ -487,12 +495,19 @@ async function collectChecks(
                 detail: `origin pins venfork ${pinned}, newer than this CLI (${VENFORK_VERSION}); sync refuses to downgrade it`,
                 fix: `Upgrade venfork to ${pinned} or later.`,
               }
-            : {
-                id: 'workflow',
-                ok: false,
-                detail: `${SYNC_WORKFLOW_PATH} is stale (origin pins venfork ${pinned ?? 'unknown'}; config or venfork ${VENFORK_VERSION} would write different YAML)`,
-                fix: 'Run `venfork sync`.',
-              }
+            : isUnpinnedWorkflow(workflowOnOrigin)
+              ? {
+                  id: 'workflow',
+                  ok: false,
+                  detail: `${SYNC_WORKFLOW_PATH} is not pinned to a venfork version, so it predates venfork 0.11; every scheduled run fails until the mirror is migrated`,
+                  fix: UNMIGRATED_MIRROR_STEPS,
+                }
+              : {
+                  id: 'workflow',
+                  ok: false,
+                  detail: `${SYNC_WORKFLOW_PATH} is stale (origin pins venfork ${pinned ?? 'unknown'}; config or venfork ${VENFORK_VERSION} would write different YAML)`,
+                  fix: 'Run `venfork sync`.',
+                }
         );
       } else {
         checks.push({

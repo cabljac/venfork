@@ -54,7 +54,7 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   [
     'sync',
     `venfork sync [branch] [--report-issues]
-  Update the default branches of origin (and public, unless --no-public) to match upstream
+  Update the default branches of origin (and public, unless the mirror is in no-public mode) to match upstream
   --report-issues (used by the scheduled workflow) opens a venfork-sync-blocked
     issue on the mirror when sync is blocked and closes it after a successful sync
   Keeps the private default branch at upstream plus one venfork-managed commit

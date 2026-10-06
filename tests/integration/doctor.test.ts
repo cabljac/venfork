@@ -20,6 +20,7 @@ import {
   syncCommand,
 } from '../../src/commands.js';
 import { updateVenforkConfig } from '../../src/config.js';
+import { UNMIGRATED_MIRROR_STEPS } from '../../src/errors.js';
 import { VENFORK_VERSION } from '../../src/version.js';
 import { generateSyncWorkflow } from '../../src/workflow.js';
 import {
@@ -358,6 +359,26 @@ describe('doctor and the pinned version', () => {
       `origin pins venfork 99.0.0, newer than this CLI (${VENFORK_VERSION})`
     );
     expect(checks.workflow.fix).toContain('Upgrade venfork');
+  });
+
+  test('an unpinned workflow predates 0.11 and names the two migration steps', async () => {
+    await scheduledAndSynced();
+    await fx.commitOnOrigin(
+      {
+        '.github/workflows/venfork-sync.yml':
+          'name: Venfork Sync\njobs:\n  sync:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm install -g venfork\n      - run: venfork sync\n',
+      },
+      'chore: venfork-managed mirror commit\n\nVenfork-Managed: 1'
+    );
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+    expect(checks.workflow.ok).toBe(false);
+    expect(checks.workflow.detail).toContain('predates venfork 0.11');
+    expect(checks.workflow.detail).not.toContain('unknown');
+    expect(checks.workflow.fix).toBe(UNMIGRATED_MIRROR_STEPS);
+    expect(checks.workflow.fix).toContain('Set VENFORK_PUSH_TOKEN');
+    expect(checks.workflow.fix).toContain('run `venfork sync` locally once');
   });
 });
 

@@ -844,7 +844,8 @@ export async function assertPublishableCommits(
         throw new StageLeakError(
           branch,
           [`${change.path} (near copy of ${source})`],
-          label
+          label,
+          'content'
         );
       }
     }

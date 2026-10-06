@@ -5,9 +5,42 @@ import {
   GitError,
   NotInRepositoryError,
   RemoteNotFoundError,
+  StageLeakError,
   SyncDivergenceError,
+  UNMIGRATED_MIRROR_STEPS,
+  UnmigratedMirrorError,
   VenforkError,
 } from '../../src/errors';
+
+describe('StageLeakError', () => {
+  test('names mirror-only paths a commit adds or changes', () => {
+    const error = new StageLeakError('feat', ['docs/A.md'], 'abc123');
+    expect(error.message).toContain(
+      'commit abc123 would publish mirror-only path(s) docs/A.md'
+    );
+  });
+
+  test('describes a near copy as content of a mirror-only file', () => {
+    const error = new StageLeakError(
+      'feat',
+      ['docs/copy.md (near copy of docs/internal.md)'],
+      'abc123',
+      'content'
+    );
+    expect(error.message).toContain(
+      'commit abc123 would publish content of a mirror-only file: docs/copy.md (near copy of docs/internal.md)'
+    );
+    expect(error.message).not.toContain('mirror-only path(s)');
+  });
+});
+
+describe('UnmigratedMirrorError', () => {
+  test('ends with the shared migration steps', () => {
+    const error = new UnmigratedMirrorError();
+    expect(error.message).toContain('predates venfork 0.11');
+    expect(error.message.endsWith(UNMIGRATED_MIRROR_STEPS)).toBe(true);
+  });
+});
 
 describe('VenforkError', () => {
   test('creates error with correct message', () => {

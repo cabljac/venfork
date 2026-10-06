@@ -165,10 +165,14 @@ export class StageLeakError extends VenforkError {
   constructor(
     public readonly branch: string,
     public readonly paths: string[],
-    public readonly commit?: string
+    public readonly commit?: string,
+    public readonly leak: 'path' | 'content' = 'path'
   ) {
+    const who = commit ? `commit ${commit}` : 'it';
     super(
-      `Refusing to stage '${branch}': ${commit ? `commit ${commit}` : 'it'} would publish mirror-only path(s) ${paths.join(', ')}. Rewrite the branch so no commit adds or changes them (they belong on the mirror default branch only) and retry.`
+      leak === 'content'
+        ? `Refusing to stage '${branch}': ${who} would publish content of a mirror-only file: ${paths.join(', ')}. Rewrite the branch so no commit copies mirror-only content (it belongs on the mirror default branch only) and retry.`
+        : `Refusing to stage '${branch}': ${who} would publish mirror-only path(s) ${paths.join(', ')}. Rewrite the branch so no commit adds or changes them (they belong on the mirror default branch only) and retry.`
     );
     this.name = 'StageLeakError';
   }
@@ -190,6 +194,10 @@ export class PinDowngradeError extends VenforkError {
   }
 }
 
+/** The steps that migrate a mirror whose sync workflow predates venfork 0.11. */
+export const UNMIGRATED_MIRROR_STEPS =
+  'Set VENFORK_PUSH_TOKEN, then run `venfork sync` locally once with venfork 0.11 or later; see the README section on upgrading from 0.10.';
+
 /**
  * Thrown by a scheduled run when origin's sync workflow predates the pinned
  * install: the mirror has not been migrated to venfork 0.11 by a local sync.
@@ -197,7 +205,7 @@ export class PinDowngradeError extends VenforkError {
 export class UnmigratedMirrorError extends VenforkError {
   constructor() {
     super(
-      "This mirror's sync workflow is not pinned to a venfork version, so it predates venfork 0.11. Set VENFORK_PUSH_TOKEN, then run `venfork sync` locally once with venfork 0.11 or later; see the README section on upgrading from 0.10."
+      `This mirror's sync workflow is not pinned to a venfork version, so it predates venfork 0.11. ${UNMIGRATED_MIRROR_STEPS}`
     );
     this.name = 'UnmigratedMirrorError';
   }

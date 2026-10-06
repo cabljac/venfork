@@ -475,19 +475,19 @@ gh secret set VENFORK_PUSH_TOKEN --repo <owner>/<mirror> --body "<fine-grained t
 
 Do not store `gh auth token` or any other account-wide token. A repository secret is readable by every workflow on the mirror's default branch, and until you filter them with `venfork workflows block` or `venfork workflows allow`, every workflow upstream ships runs there. An upstream contributor who lands a workflow change could read the secret, so give it access to nothing beyond the repositories sync pushes to. `venfork schedule set` and `venfork doctor` warn while both workflow lists are empty.
 
+If you followed the 0.10 docs and stored `VENFORK_PUSH_TOKEN` from `gh auth token`, rotate it: revoke that token and store a fine-grained one as above. `venfork doctor` only checks that the secret exists, so it cannot tell you which kind it holds.
+
 If `VENFORK_PUSH_TOKEN` is unset, the generated workflow fails its first step with an error annotation, before it installs anything. The failure opens the `venfork-sync-blocked` issue, and the issue names the missing secret. The workflow does not fall back to the default `GITHUB_TOKEN`.
 
 **Upgrading from 0.10 or earlier**
 
-Scheduled mirrors created by 0.10 or earlier run an unpinned `npm install -g venfork`. The first scheduled run after 0.11 reaches npm installs 0.11, which rewrites the managed commit with the new pinned workflow. That workflow needs `VENFORK_PUSH_TOKEN` in both modes. A no-public mirror set up without the token under the old docs then fails on every run, and the old workflow does not report the failure.
+Scheduled mirrors created by 0.10 or earlier run an unpinned `npm install -g venfork`. Once 0.11 is on npm, a scheduled run installs it, sees the unpinned workflow and stops with the migration message. It does not rewrite the managed commit. Every scheduled run fails the same way until you migrate the mirror locally:
 
-Do this before the release reaches npm:
-
-1. Install the new CLI locally: `npm install -g venfork@latest`.
-2. Create `VENFORK_PUSH_TOKEN` on the mirror (see "Authenticating cross-repo pushes" above).
+1. Install venfork 0.11 or later locally: the released version from npm, or the release tarball.
+2. Create `VENFORK_PUSH_TOKEN` on the mirror (see "Authenticating cross-repo pushes" above). The new workflow needs it in both modes.
 3. In a clone of the mirror, run `venfork sync` once. The pinned workflow lands on the default branch, so later runs install exactly that version.
 
-If you miss the window, set the secret afterwards and run `venfork sync` locally. The next scheduled run then succeeds, and it closes the `venfork-sync-blocked` issue.
+The next scheduled run then succeeds and closes the `venfork-sync-blocked` issue. `venfork doctor` reports an unmigrated mirror on its `workflow` check.
 
 ### How scheduled sync behaves
 
