@@ -539,11 +539,8 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
   }, 300_000);
 
   test.skipIf(!REAL_DISPATCH)(
-    'tier 6: no-public sync without VENFORK_PUSH_TOKEN cannot push an upstream workflow change and files an issue',
+    'tier 6: no-public sync without VENFORK_PUSH_TOKEN fails at the preflight and files an issue naming the cause',
     async () => {
-      // Pins that the job's GITHUB_TOKEN alone cannot push an upstream
-      // commit that edits .github/workflows/ to the mirror, and that the
-      // failure step reports it.
       const defaultBranch = await getRepoDefaultBranch(
         UPSTREAM_OWNER,
         names.upstream
@@ -563,20 +560,10 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
       await runVenfork(['schedule', 'set', '*/5 * * * *'], {
         cwd: mirrorPath,
       });
-      await setRepoVariable(
+      await pokeUpstream('no-public.txt', `no-public ${RUN_ID} ${Date.now()}`);
+      const mirrorShaBefore = await getDefaultBranchSha(
         GITHUB_ORG,
         names.noPublicMirror,
-        'VENFORK_INSTALL_SPEC',
-        await codeUnderTestUrl()
-      );
-
-      await pokeUpstream(
-        '.github/workflows/ci.yml',
-        `name: ci ${RUN_ID}\non: workflow_dispatch\njobs:\n  noop:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${Date.now()}\n`
-      );
-      const upstreamSha = await getDefaultBranchSha(
-        UPSTREAM_OWNER,
-        names.upstream,
         defaultBranch
       );
 
@@ -604,22 +591,36 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
 
       expect(conclusion).toBe('failure');
       expect(logs.stdout).toContain(
-        'refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows` permission'
+        '##[error]VENFORK_PUSH_TOKEN is not set on this repository'
       );
+      const steps =
+        await $`gh run view ${runId} --repo ${GITHUB_ORG}/${names.noPublicMirror} --json jobs --jq ${'.jobs[0].steps[] | "\\(.name)=\\(.conclusion)"'}`;
+      expect(steps.stdout).toContain('Check VENFORK_PUSH_TOKEN=failure');
+      expect(steps.stdout).toContain('Install venfork=skipped');
+      expect(steps.stdout).toContain('Sync from upstream=skipped');
+      expect(steps.stdout).toContain('Report failed sync=success');
+
       expect(
         await getDefaultBranchSha(
           GITHUB_ORG,
           names.noPublicMirror,
           defaultBranch
         )
-      ).not.toBe(upstreamSha);
-      expect(
-        await listOpenIssuesWithLabel(
-          GITHUB_ORG,
-          names.noPublicMirror,
-          'venfork-sync-blocked'
-        )
-      ).toHaveLength(1);
+      ).toBe(mirrorShaBefore);
+      const blocked = await listOpenIssuesWithLabel(
+        GITHUB_ORG,
+        names.noPublicMirror,
+        'venfork-sync-blocked'
+      );
+      expect(blocked).toHaveLength(1);
+      const issue = await getIssueMeta({
+        owner: GITHUB_ORG,
+        repo: names.noPublicMirror,
+        number: blocked[0] ?? 0,
+      });
+      expect(issue.body).toContain(
+        'Cause: the VENFORK_PUSH_TOKEN secret is not set'
+      );
     },
     600_000
   );

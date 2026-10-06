@@ -58,18 +58,17 @@ a real GitHub Actions runner via `gh workflow run`:
   refreshes it after the contributor pushes again.
 - Tier 5: `venfork stage issue` and `venfork pull issue` round-trip issues.
 
-**Tier 6** (opt-in via `VENFORK_E2E_REAL_DISPATCH=1`) - pins why
-`VENFORK_PUSH_TOKEN` is required in no-public mode too:
+**Tier 6** (opt-in via `VENFORK_E2E_REAL_DISPATCH=1`) - pins that a mirror
+without `VENFORK_PUSH_TOKEN` fails fast and says why, in no-public mode too:
 
 1. Sets up a second, no-public mirror and enables scheduled sync, with no
-   `VENFORK_PUSH_TOKEN` secret, so the workflow runs with the job's
-   `GITHUB_TOKEN`.
-2. Pushes an upstream commit that edits `.github/workflows/ci.yml` and
-   dispatches the sync workflow.
-3. Asserts the run fails with GitHub's `refusing to allow a GitHub App to
-   create or update workflow ... without workflows permission` rejection, the
-   mirror's default branch does not move, and exactly one open
-   `venfork-sync-blocked` issue exists.
+   `VENFORK_PUSH_TOKEN` secret.
+2. Pushes an upstream commit and dispatches the sync workflow.
+3. Asserts the run fails at the `Check VENFORK_PUSH_TOKEN` step with
+   the `VENFORK_PUSH_TOKEN is not set on this repository` error annotation, the install
+   and sync steps are skipped, the mirror's default branch does not move, and
+   exactly one open `venfork-sync-blocked` issue exists whose body names the
+   missing secret as the cause.
 
 Tier 6 needs no extra token: it deliberately sets no secret.
 
