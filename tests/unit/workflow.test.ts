@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import pkg from '../../package.json' with { type: 'json' };
 import { VENFORK_VERSION } from '../../src/version.js';
 import {
@@ -117,7 +120,8 @@ describe('workflow helpers', () => {
   test('pins the venfork version in the install step', () => {
     const workflow = generateSyncWorkflow('0 */6 * * *', 'standard', '1.2.3');
     expect(workflow).toContain(
-      `run: npm install -g --ignore-scripts "\${VENFORK_INSTALL_SPEC:-venfork@1.2.3}"`
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell expansion we are asserting.
+      'SPEC="${VENFORK_INSTALL_SPEC:-venfork@1.2.3}"'
     );
     expect(workflow).toMatchSnapshot();
   });
@@ -125,7 +129,7 @@ describe('workflow helpers', () => {
   test('defaults the pin to the running CLI version from package.json', () => {
     expect(VENFORK_VERSION).toBe(pkg.version);
     expect(generateSyncWorkflow('0 */6 * * *')).toContain(
-      `run: npm install -g --ignore-scripts "\${VENFORK_INSTALL_SPEC:-venfork@${pkg.version}}"`
+      `SPEC="\${VENFORK_INSTALL_SPEC:-venfork@${pkg.version}}"`
     );
   });
 
@@ -196,5 +200,93 @@ describe('failure report duplicate check', () => {
       'BODY="$(gh issue view "$NUMBER" --repo "$REPO" --json body --jq \'.body\')"'
     );
     expect(step).toContain('grep -qF "$RUN_URL" <<<"$BODY"');
+  });
+});
+
+describe('install step spec validation', () => {
+  function installScript(version: string): string {
+    const workflow = generateSyncWorkflow('0 */6 * * *', 'standard', version);
+    const start = workflow.indexOf('- name: Install venfork');
+    const end = workflow.indexOf('- name: Checkout mirror');
+    const step = workflow.slice(start, end);
+    const body = step.slice(step.indexOf('run: |\n') + 'run: |\n'.length);
+    return body
+      .split('\n')
+      .map((line) => line.replace(/^ {10}/, ''))
+      .join('\n');
+  }
+
+  function runInstall(spec: string | undefined): {
+    status: number;
+    npmArgs: string | null;
+    stdout: string;
+  } {
+    const dir = mkdtempSync(join(tmpdir(), 'venfork-install-'));
+    const script = join(dir, 'install.sh');
+    const log = join(dir, 'npm.log');
+    writeFileSync(script, installScript('0.11.0'));
+    const npm = join(dir, 'npm');
+    writeFileSync(npm, `#!/bin/sh\nprintf '%s\\n' "$@" > "${log}"\n`);
+    chmodSync(npm, 0o755);
+    const env: Record<string, string> = {
+      PATH: `${dir}:${process.env.PATH ?? ''}`,
+    };
+    if (spec !== undefined) env.VENFORK_INSTALL_SPEC = spec;
+    const result = Bun.spawnSync(['bash', '-e', script], { env });
+    let npmArgs: string | null = null;
+    try {
+      npmArgs = readFileSync(log, 'utf8');
+    } catch {
+      npmArgs = null;
+    }
+    return {
+      status: result.exitCode ?? -1,
+      npmArgs,
+      stdout: result.stdout.toString(),
+    };
+  }
+
+  test('runs the validation in bash', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *');
+    const step = workflow.slice(
+      workflow.indexOf('- name: Install venfork'),
+      workflow.indexOf('- name: Checkout mirror')
+    );
+    expect(step).toContain('shell: bash');
+    expect(step).toContain('::error::');
+  });
+
+  test('installs the pinned default when the variable is unset or empty', () => {
+    for (const spec of [undefined, '']) {
+      const result = runInstall(spec);
+      expect(result.status).toBe(0);
+      expect(result.npmArgs).toContain('venfork@0.11.0');
+    }
+  });
+
+  test.each([
+    'venfork@0.11.0',
+    'venfork@1.0.0-rc.1',
+    'https://registry.npmjs.org/venfork/-/venfork-0.11.0.tgz',
+  ])('accepts %s', (spec) => {
+    const result = runInstall(spec);
+    expect(result.status).toBe(0);
+    expect(result.npmArgs).toContain('--ignore-scripts');
+    expect(result.npmArgs).toContain(spec);
+  });
+
+  test.each([
+    'git+https://x/y',
+    '--ignore-scripts=false',
+    'venfork',
+    'venfork@latest',
+    'http://example.com/venfork.tgz',
+    'https://example.com/venfork.zip',
+    'venfork@0.11.0 evil',
+  ])('rejects %s without installing', (spec) => {
+    const result = runInstall(spec);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain('::error::');
+    expect(result.npmArgs).toBeNull();
   });
 });

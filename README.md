@@ -452,7 +452,7 @@ The workflow runs one sync at a time (concurrency group `venfork-sync-<workflow 
 
 By default the generated workflow installs exactly the venfork version that wrote it (`npm install -g venfork@<version>`). The runner therefore regenerates byte-identical YAML and the managed commit stays stable. To upgrade a mirror, install the new venfork locally and run `venfork sync` (or `venfork schedule set` again). That rewrites the workflow with the new pin in one managed-commit update. Check the installed version with `venfork --version`.
 
-To install something else, set the `VENFORK_INSTALL_SPEC` repository variable on the mirror. The workflow passes its value to `npm install -g` in place of `venfork@<version>`, for example a tarball URL or a git spec:
+To install something else, set the `VENFORK_INSTALL_SPEC` repository variable on the mirror. The workflow passes its value to `npm install -g` in place of `venfork@<version>`. The workflow accepts only `venfork@<semver>` or an `https://` URL ending in `.tgz`, and fails the install step with an error for anything else. Git specs do not work: a git install has no built `dist/` and no `venfork` binary.
 
 ```bash
 gh variable set VENFORK_INSTALL_SPEC --repo <owner>/<mirror> --body "venfork@<version>"
@@ -475,14 +475,14 @@ gh secret set VENFORK_PUSH_TOKEN --repo <owner>/<mirror> --body "<fine-grained t
 
 Do not store `gh auth token` or any other account-wide token. A repository secret is readable by every workflow on the mirror's default branch, and until you filter them with `venfork workflows block` or `venfork workflows allow`, every workflow upstream ships runs there. An upstream contributor who lands a workflow change could read the secret, so give it access to nothing beyond the repositories sync pushes to. `venfork schedule set` and `venfork doctor` warn while both workflow lists are empty.
 
-If `VENFORK_PUSH_TOKEN` is unset, the generated workflow falls back to the default `GITHUB_TOKEN`: pushes to the public fork fail, and so does any run whose upstream changes touch `.github/workflows/`. The failure opens the `venfork-sync-blocked` issue.
+If `VENFORK_PUSH_TOKEN` is unset, the generated workflow fails its first step with an error annotation, before it installs anything. The failure opens the `venfork-sync-blocked` issue, and the issue names the missing secret. The workflow does not fall back to the default `GITHUB_TOKEN`.
 
 ### How scheduled sync behaves
 
 - **Cron is best-effort.** GitHub runs scheduled workflows only from the default branch, at most every 5 minutes, and may delay or skip runs when Actions is busy. Do not rely on exact timing. `venfork doctor` flags a disabled workflow, and a last scheduled run older than twice the cron interval (at least 1 hour).
 - **Idle repositories.** GitHub disables scheduled workflows in a public repository after 60 days without activity. A private mirror is not affected by that rule, but if you make a mirror public, re-enable the workflow from the Actions tab when it stops.
 - **The workflow file must stay on the default branch.** It lives in the venfork-managed commit. Sync builds the new tip first and moves the default branch in a single leased push, so the file is never missing between runs.
-- **Token.** Both modes need the `VENFORK_PUSH_TOKEN` secret, a fine-grained token with Workflows: write limited to the mirror and the public fork (see above): the job token cannot push upstream workflow changes, nor push to the public fork. Runs with nothing to push succeed without it, so a missing token can go unnoticed until upstream changes a workflow. `venfork doctor` checks that the secret exists.
+- **Token.** Both modes need the `VENFORK_PUSH_TOKEN` secret, a fine-grained token with Workflows: write limited to the mirror and the public fork (see above): the job token cannot push upstream workflow changes, nor push to the public fork. A run without the secret fails at its first step and opens the `venfork-sync-blocked` issue. `venfork doctor` also checks that the secret exists.
 - **Failures open an issue.** Blocked or failed runs open or update a `venfork-sync-blocked` issue on the mirror; the next successful run closes it.
 - **Upgrades.** The workflow pins the venfork version that wrote it. Install a newer venfork locally and run `venfork sync` to move the mirror to it.
 - **Right after a release.** A release tag can exist for a few minutes before `npm publish` finishes. A local sync in that window can pin a version that npm does not have yet. The scheduled run then fails at "Install venfork" and opens the `venfork-sync-blocked` issue. The next run after the publish succeeds and closes it. To bridge the gap, set `VENFORK_INSTALL_SPEC` (see above).

@@ -33,7 +33,17 @@ jobs:
       - name: Install venfork
         env:
           VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
-        run: npm install -g --ignore-scripts "\${VENFORK_INSTALL_SPEC:-venfork@1.2.3}"
+        shell: bash
+        run: |
+          set -euo pipefail
+          SPEC="\${VENFORK_INSTALL_SPEC:-venfork@1.2.3}"
+          SEMVER_SPEC='^venfork@[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          TARBALL_SPEC='^https://[^[:space:]]+\\.tgz$'
+          if ! [[ "$SPEC" =~ $SEMVER_SPEC ]] && ! [[ "$SPEC" =~ $TARBALL_SPEC ]]; then
+            echo "::error::VENFORK_INSTALL_SPEC must be venfork@<semver> or an https:// URL ending in .tgz"
+            exit 1
+          fi
+          npm install -g --ignore-scripts "$SPEC"
       - name: Checkout mirror
         uses: actions/checkout@v4
         with:
