@@ -113,18 +113,36 @@ describe('per-command help', () => {
     expect(result.stderr).toContain('Unknown command: frobnicate');
   });
 
-  test('the removed pull-request and issue commands are unknown commands', async () => {
-    for (const args of [
+  for (const [args, hints] of [
+    [
       ['pull-request', '1'],
+      ['`venfork pull-request` is now `venfork pull pr <number-or-url>`'],
+    ],
+    [
       ['issue', 'pull', '1'],
-    ]) {
+      [
+        'venfork pull issue <number-or-url>',
+        'venfork stage issue <number-or-url>',
+      ],
+    ],
+    [
+      ['issue', 'stage', '1'],
+      [
+        'venfork pull issue <number-or-url>',
+        'venfork stage issue <number-or-url>',
+      ],
+    ],
+    [['status'], ['`venfork status` is now `venfork doctor`']],
+  ] as const) {
+    test(`renamed command ${args.join(' ')} names its replacement on stderr`, async () => {
       const result = await runCli(...args);
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain(`Unknown command: ${args[0]}`);
-      expect(result.stdout).not.toContain('Venfork');
-    }
-  });
+      for (const hint of hints) expect(result.stderr).toContain(hint);
+      expect(result.stderr).not.toContain('Unknown command');
+      expect(result.stdout).toBe('');
+    });
+  }
 
   for (const [args, usage] of [
     [['pull', 'pr', '--help'], 'venfork pull pr <pr-number-or-url>'],
@@ -147,14 +165,6 @@ describe('per-command help', () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('venfork stage branch issue');
-  });
-
-  test('the removed status command is an unknown command', async () => {
-    const result = await runCli('status');
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('Unknown command: status');
-    expect(result.stdout).not.toContain('Venfork Status');
   });
 });
 

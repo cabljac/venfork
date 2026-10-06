@@ -26,6 +26,14 @@ import { parseSyncCliArgs } from './sync-args.js';
 import { VENFORK_VERSION } from './version.js';
 import { parseWorkflowsCliArgs } from './workflows-args.js';
 
+const RENAMED: Record<string, string> = {
+  'pull-request':
+    '`venfork pull-request` is now `venfork pull pr <number-or-url>`.',
+  issue:
+    '`venfork issue` was split: use `venfork pull issue <number-or-url>` to bring an upstream issue in, or `venfork stage issue <number-or-url>` to publish a mirror issue.',
+  status: '`venfork status` is now `venfork doctor`.',
+};
+
 /**
  * Main CLI entry point
  */
@@ -131,9 +139,13 @@ async function main(): Promise<void> {
       }
       break;
     }
-    default:
-      console.error(`Unknown command: ${command}. Run \`venfork help\`.`);
+    default: {
+      const renamed = RENAMED[command];
+      console.error(
+        renamed ?? `Unknown command: ${command}. Run \`venfork help\`.`
+      );
       process.exit(1);
+    }
   }
 }
 
