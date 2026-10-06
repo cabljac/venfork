@@ -13,7 +13,11 @@ mock.module('execa', () => ({
   },
 }));
 
-import { netExec, netFailureReason } from '../../src/shared/net.js';
+import {
+  isTransientPushError,
+  netExec,
+  netFailureReason,
+} from '../../src/shared/net.js';
 
 const DEFAULT_OPTS = '-o BatchMode=yes -o ConnectTimeout=15';
 
@@ -88,5 +92,44 @@ describe('netFailureReason', () => {
       'denied'
     );
     expect(netFailureReason({ stderr: '', exitCode: 128 })).toBe('exit 128');
+  });
+});
+
+describe('isTransientPushError', () => {
+  const withStderr = (stderr: string) => ({ stderr });
+
+  test.each([
+    'fatal: RPC failed; HTTP 502 curl 22',
+    'error: RPC failed; HTTP 408',
+    'error: RPC failed; Operation too slow. Less than 1000 bytes/sec transferred the last 60 seconds',
+    'fatal: unable to access: Connection was reset',
+    'fatal: unable to access: Connection reset by peer',
+    'fatal: unable to access: Could not resolve host: github.com',
+    'error: RPC failed; HTTP 429 curl 22',
+    'remote: Too Many Requests',
+  ])('retries %s', (stderr) => {
+    expect(isTransientPushError(withStderr(stderr))).toBe(true);
+  });
+
+  test('matches case-insensitively', () => {
+    expect(isTransientPushError(withStderr('OPERATION TOO SLOW'))).toBe(true);
+  });
+
+  test.each([
+    'remote: HTTP 401 unauthorized',
+    'fatal: Authentication failed for https://github.com/x/y',
+    'remote: Permission denied to user',
+    'remote: Repository not found.',
+    'remote: error: GH006: Protected branch update failed',
+    'fatal: unrecognized failure',
+  ])('does not retry %s', (stderr) => {
+    expect(isTransientPushError(withStderr(stderr))).toBe(false);
+  });
+
+  test('returns false for null, undefined and non-objects', () => {
+    expect(isTransientPushError(undefined)).toBe(false);
+    expect(isTransientPushError(null)).toBe(false);
+    expect(isTransientPushError('Operation too slow')).toBe(false);
+    expect(isTransientPushError(42)).toBe(false);
   });
 });

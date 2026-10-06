@@ -144,6 +144,7 @@ const SEED_PUSH_CONFIG = [
  * permanent setup error.
  */
 export function isTransientPushError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
   if (err instanceof GitError) return false; // hard timeout
   const e = err as {
     stderr?: unknown;
@@ -187,6 +188,11 @@ export function isTransientPushError(err: unknown): boolean {
     'unexpected disconnect',
     'early eof',
     'connection reset',
+    'connection was reset',
+    'operation too slow',
+    'could not resolve host',
+    'http 429',
+    'too many requests',
     'connection timed out',
     'operation timed out',
     'failed to connect',
