@@ -140,9 +140,10 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     const wf = await readWorkflowFromOrigin(localMirrorPath, defaultBranch);
     expect(wf).toContain(`cron: '${cron}'`);
     expect(wf).toContain('workflow_dispatch:');
-    expect(wf).toContain(
-      `npm install -g --ignore-scripts "\${VENFORK_INSTALL_SPEC:-venfork@`
-    );
+    expect(wf).toContain('SPEC="${VENFORK_INSTALL_SPEC:-venfork@');
+    expect(wf).toContain('npm install -g --ignore-scripts "$SPEC"');
+    expect(wf).toContain('- name: Check VENFORK_PUSH_TOKEN');
+    expect(wf).not.toContain('|| github.token');
     expect(wf).toContain('venfork sync');
 
     const scheduledConfig = await readVenforkConfigFromRepo(localMirrorPath);
