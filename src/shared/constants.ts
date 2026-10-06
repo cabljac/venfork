@@ -10,13 +10,15 @@ export function gitNetTimeoutMs(): number {
   return Number.isFinite(configured) && configured > 0 ? configured : 600_000;
 }
 
-/** Env applied to every network git/gh op so a misconfigured credential or
- *  SSH path fails fast instead of blocking on an invisible prompt. */
+/** Env applied to every network git/gh op so a misconfigured credential
+ *  fails fast instead of blocking on an invisible prompt. */
 export const NET_ENV = {
   GIT_TERMINAL_PROMPT: '0',
   GCM_INTERACTIVE: 'never',
-  GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=15',
 };
+
+/** ssh options that make a network op fail instead of prompting. */
+export const NET_SSH_OPTIONS = '-o BatchMode=yes -o ConnectTimeout=15';
 
 /** Repo-relative path of the managed sync workflow file. */
 export const SYNC_WORKFLOW_PATH = getSyncWorkflowPath();

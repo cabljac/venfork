@@ -1,7 +1,29 @@
+import { spawnSync } from 'node:child_process';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { GitError } from '../errors.js';
-import { gitNetTimeoutMs, NET_ENV } from './constants.js';
+import { gitNetTimeoutMs, NET_ENV, NET_SSH_OPTIONS } from './constants.js';
+
+function configuredSshCommand(cwd?: string): string | undefined {
+  const fromEnv = process.env.GIT_SSH_COMMAND?.trim();
+  if (fromEnv) return fromEnv;
+  const result = spawnSync('git', ['config', '--get', 'core.sshCommand'], {
+    ...(cwd ? { cwd } : {}),
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  const fromConfig = result.status === 0 ? result.stdout.trim() : '';
+  return fromConfig || undefined;
+}
+
+/**
+ * The `GIT_SSH_COMMAND` for a network op run in `cwd`: the user's own ssh
+ * command (env, else `core.sshCommand`) with the fail-fast options appended,
+ * or plain `ssh` with them.
+ */
+export function netSshCommand(cwd?: string): string {
+  return `${configuredSshCommand(cwd) ?? 'ssh'} ${NET_SSH_OPTIONS}`;
+}
 
 /**
  * An execa `$` bound for a heavy network git/gh op: no stdin (any
@@ -26,7 +48,7 @@ export function netExec(
   return $({
     ...(cwd ? { cwd } : {}),
     ...(opts?.input === undefined ? {} : { input: opts.input }),
-    env: NET_ENV,
+    env: { ...NET_ENV, GIT_SSH_COMMAND: netSshCommand(cwd) },
     timeout: gitNetTimeoutMs(),
     stdio:
       captureOutput || bufferOutput
