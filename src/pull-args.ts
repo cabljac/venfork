@@ -1,4 +1,9 @@
-import { consumeValue } from './shared/args.js';
+import {
+  consumeValue,
+  scanArgs,
+  unexpectedArgument,
+  unknownOption,
+} from './shared/args.js';
 
 /** Parsed `venfork pull pr ...` arguments. */
 export type ParsedPullPrArgs = {
@@ -19,60 +24,61 @@ export type ParsedPullIssueArgs = {
 
 export type ParsedPullArgs = ParsedPullPrArgs | ParsedPullIssueArgs;
 
+const PULL_USAGE = 'venfork pull <pr|issue> <number-or-url>';
+const PR_USAGE =
+  'venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push]';
+const ISSUE_USAGE = 'venfork pull issue <number-or-url> [--title <text>]';
+
 /**
  * Parse `venfork pull ...` argv after the `pull` token.
  * Layout: `venfork pull pr <n-or-url> [--branch-name <b>] [--no-push]` or
- * `venfork pull issue <n-or-url> [--title <t>]`.
+ * `venfork pull issue <n-or-url> [--title <t>]`. Flags may appear anywhere.
  */
 export function parsePullCliArgs(args: string[]): ParsedPullArgs {
-  const [sub, ...rest] = args;
-  if (sub === 'pr') return parsePullPr(rest);
-  if (sub === 'issue') return parsePullIssue(rest);
-  if (sub === undefined || sub.startsWith('-')) {
-    throw new Error(
-      'Missing pull target. Usage: venfork pull <pr|issue> <number-or-url>'
-    );
-  }
-  throw new Error(`Unknown pull target: ${sub}. Expected one of: pr, issue.`);
-}
-
-function parsePullPr(args: string[]): ParsedPullPrArgs {
-  const positional: string[] = [];
   let branchName: string | undefined;
-  let push = true;
+  let title: string | undefined;
+  let noPush: string | undefined;
+  let branchNameFlag: string | undefined;
+  let titleFlag: string | undefined;
 
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
+  const targetUsage = args.includes('pr')
+    ? PR_USAGE
+    : args.includes('issue')
+      ? ISSUE_USAGE
+      : PULL_USAGE;
+  const [sub, ...rest] = scanArgs(args, targetUsage, (a, i) => {
     if (a === '--no-push') {
-      push = false;
-      continue;
+      noPush = a;
+      return 0;
     }
     if (a === '--branch-name' || a.startsWith('--branch-name=')) {
       const { value, consumed } = consumeValue('--branch-name', args, i);
       branchName = value;
-      i += consumed;
-      continue;
+      branchNameFlag = a;
+      return consumed;
     }
-    positional.push(a);
-  }
-
-  return { kind: 'pr', ref: positional[0], branchName, push };
-}
-
-function parsePullIssue(args: string[]): ParsedPullIssueArgs {
-  const positional: string[] = [];
-  let title: string | undefined;
-
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
     if (a === '--title' || a.startsWith('--title=')) {
       const { value, consumed } = consumeValue('--title', args, i);
       title = value;
-      i += consumed;
-      continue;
+      titleFlag = a;
+      return consumed;
     }
-    positional.push(a);
-  }
+    return undefined;
+  });
 
-  return { kind: 'issue', ref: positional[0], title };
+  if (sub === 'pr') {
+    if (titleFlag) throw unknownOption(titleFlag, PR_USAGE);
+    if (rest.length > 1) throw unexpectedArgument(rest[1], PR_USAGE);
+    return { kind: 'pr', ref: rest[0], branchName, push: noPush === undefined };
+  }
+  if (sub === 'issue') {
+    const stray = noPush ?? branchNameFlag;
+    if (stray) throw unknownOption(stray, ISSUE_USAGE);
+    if (rest.length > 1) throw unexpectedArgument(rest[1], ISSUE_USAGE);
+    return { kind: 'issue', ref: rest[0], title };
+  }
+  if (sub === undefined) {
+    throw new Error(`Missing pull target. Usage: ${PULL_USAGE}`);
+  }
+  throw new Error(`Unknown pull target: ${sub}. Expected one of: pr, issue.`);
 }

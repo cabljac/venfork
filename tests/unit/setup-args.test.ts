@@ -144,3 +144,34 @@ describe('parseSetupCliArgs', () => {
     ).toBe(true);
   });
 });
+
+describe('parseSetupCliArgs strictness', () => {
+  test('rejects unknown flags', () => {
+    expect(() => parseSetupCliArgs(['--bogus', 'a/b'])).toThrow(
+      "Unknown option '--bogus'. Usage: venfork setup"
+    );
+    expect(() => parseSetupCliArgs(['a/b', '-x'])).toThrow(
+      "Unknown option '-x'"
+    );
+  });
+
+  test('rejects a third positional', () => {
+    expect(() => parseSetupCliArgs(['a/b', 'c', 'd'])).toThrow(
+      "Unexpected argument 'd'. Usage: venfork setup"
+    );
+  });
+
+  test('accepts flags before positionals and after --', () => {
+    expect(parseSetupCliArgs(['--org=acme', 'a/b']).upstreamUrl).toBe('a/b');
+    expect(parseSetupCliArgs(['--', 'a/b']).upstreamUrl).toBe('a/b');
+  });
+
+  test('missing value at the end of argv throws', () => {
+    expect(() => parseSetupCliArgs(['a/b', '--org'])).toThrow(
+      '--org requires a value'
+    );
+    expect(() => parseSetupCliArgs(['a/b', '--fork-name'])).toThrow(
+      '--fork-name requires a value'
+    );
+  });
+});

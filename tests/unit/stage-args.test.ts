@@ -194,3 +194,59 @@ describe('parseStageCliArgs issue rejects branch-only flags', () => {
     });
   }
 });
+
+describe('parseStageCliArgs strictness', () => {
+  test('rejects an unknown flag after the branch', () => {
+    expect(() => parseStageUnion(['feat', '--drfat'])).toThrow(
+      "Unknown option '--drfat'. Usage: venfork stage"
+    );
+  });
+
+  test('rejects an unknown flag instead of treating it as the branch', () => {
+    expect(() => parseStageUnion(['--bogus'])).toThrow(
+      "Unknown option '--bogus'"
+    );
+  });
+
+  test('rejects an extra positional', () => {
+    expect(() => parseStageUnion(['feat', 'extra'])).toThrow(
+      "Unexpected argument 'extra'. Usage: venfork stage"
+    );
+    expect(() => parseStageUnion(['branch', 'feat', 'extra'])).toThrow(
+      "Unexpected argument 'extra'"
+    );
+    expect(() => parseStageUnion(['issue', '5', 'extra'])).toThrow(
+      "Unexpected argument 'extra'"
+    );
+  });
+
+  test('accepts flags before the branch', () => {
+    const parsed = parseStageCliArgs(['--pr', '--title=T', 'feat']);
+    expect(parsed.branch).toBe('feat');
+    expect(parsed.createPr).toBe(true);
+    expect(parsed.title).toBe('T');
+  });
+
+  test('-- ends options so a dash-leading branch is accepted', () => {
+    expect(parseStageCliArgs(['--', '-odd']).branch).toBe('-odd');
+  });
+
+  test('missing value at the end of argv throws', () => {
+    for (const flag of ['--title', '--base', '--internal-pr']) {
+      expect(() => parseStageUnion(['feat', flag])).toThrow(
+        `${flag} requires a value`
+      );
+    }
+  });
+
+  test('--internal-pr takes only plain positive integers', () => {
+    for (const bad of ['1e3', '0x10', ' 7 ', '0', '-1', '1.5']) {
+      expect(() => parseStageUnion(['feat', `--internal-pr=${bad}`])).toThrow(
+        '--internal-pr requires a positive integer'
+      );
+    }
+    expect(
+      parseStageCliArgs(['feat', '--internal-pr', '7']).internalPrNumber
+    ).toBe(7);
+  });
+});

@@ -97,3 +97,75 @@ describe('parsePullCliArgs targets', () => {
     expect(() => parsePullCliArgs(['1234'])).toThrow('Unknown pull target');
   });
 });
+
+describe('parsePullCliArgs strictness', () => {
+  test('rejects unknown flags in both forms', () => {
+    expect(() => parsePullCliArgs(['pr', '5', '--bogus'])).toThrow(
+      "Unknown option '--bogus'. Usage: venfork pull pr"
+    );
+    expect(() => parsePullCliArgs(['issue', '5', '--bogus'])).toThrow(
+      "Unknown option '--bogus'. Usage: venfork pull issue"
+    );
+  });
+
+  test('flags of the other form are unknown', () => {
+    expect(() => parsePullCliArgs(['pr', '5', '--title', 'x'])).toThrow(
+      "Unknown option '--title'"
+    );
+    expect(() => parsePullCliArgs(['issue', '5', '--no-push'])).toThrow(
+      "Unknown option '--no-push'"
+    );
+  });
+
+  test('a flag before the ref is not taken as the ref', () => {
+    expect(parsePr(['--no-push', '5'])).toMatchObject({
+      ref: '5',
+      push: false,
+    });
+    expect(parseIssue(['--title=T', '5'])).toMatchObject({
+      ref: '5',
+      title: 'T',
+    });
+    expect(parsePr(['--branch-name', 'b', '5']).ref).toBe('5');
+  });
+
+  test('flags are accepted before the subcommand', () => {
+    expect(parsePullCliArgs(['--no-push', 'pr', '5'])).toMatchObject({
+      kind: 'pr',
+      ref: '5',
+      push: false,
+    });
+    expect(parsePullCliArgs(['--title', 'T', 'issue', '5'])).toMatchObject({
+      kind: 'issue',
+      ref: '5',
+      title: 'T',
+    });
+  });
+
+  test('-- ends options', () => {
+    expect(parsePr(['--', '5']).ref).toBe('5');
+  });
+
+  test('rejects an extra positional', () => {
+    expect(() => parsePullCliArgs(['pr', '5', '6'])).toThrow(
+      "Unexpected argument '6'. Usage: venfork pull pr"
+    );
+    expect(() => parsePullCliArgs(['issue', '5', '6'])).toThrow(
+      "Unexpected argument '6'"
+    );
+  });
+
+  test('missing value at the end of argv throws', () => {
+    expect(() => parsePullCliArgs(['pr', '5', '--branch-name'])).toThrow(
+      '--branch-name requires a value'
+    );
+    expect(() => parsePullCliArgs(['issue', '5', '--title'])).toThrow(
+      '--title requires a value'
+    );
+  });
+
+  test('--flag=value form works for both', () => {
+    expect(parsePr(['5', '--branch-name=b']).branchName).toBe('b');
+    expect(parseIssue(['5', '--title=T']).title).toBe('T');
+  });
+});

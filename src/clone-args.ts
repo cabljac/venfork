@@ -1,28 +1,12 @@
+import { consumeValue, scanArgs, unexpectedArgument } from './shared/args.js';
+
 export type ParsedCloneArgs = {
   vendorRepoUrl?: string;
   noPublic: boolean;
   upstreamUrl?: string;
 };
 
-function consumeValue(
-  flag: string,
-  args: string[],
-  i: number
-): { value: string; consumed: number } {
-  const equalsForm = `${flag}=`;
-  const a = args[i];
-  if (a === flag) {
-    const v = args[i + 1];
-    if (!v || v.startsWith('--')) throw new Error(`${flag} requires a value`);
-    return { value: v, consumed: 1 };
-  }
-  if (a.startsWith(equalsForm)) {
-    const v = a.slice(equalsForm.length);
-    if (!v) throw new Error(`${flag} requires a value`);
-    return { value: v, consumed: 0 };
-  }
-  throw new Error(`internal: consumeValue called for non-matching arg ${a}`);
-}
+const USAGE = 'venfork clone <vendor-repo> [--no-public] [--upstream <url>]';
 
 /**
  * Parse `venfork clone ...` argv after the `clone` token.
@@ -33,24 +17,22 @@ function consumeValue(
  * (and will conflict with the recorded `mode` if set inconsistently).
  */
 export function parseCloneCliArgs(args: string[]): ParsedCloneArgs {
-  const positional: string[] = [];
   let noPublic = false;
   let upstreamUrl: string | undefined;
 
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
+  const positional = scanArgs(args, USAGE, (a, i) => {
     if (a === '--no-public') {
       noPublic = true;
-      continue;
+      return 0;
     }
     if (a === '--upstream' || a.startsWith('--upstream=')) {
       const { value, consumed } = consumeValue('--upstream', args, i);
       upstreamUrl = value;
-      i += consumed;
-      continue;
+      return consumed;
     }
-    positional.push(a);
-  }
+    return undefined;
+  });
+  if (positional.length > 1) throw unexpectedArgument(positional[1], USAGE);
 
   return {
     vendorRepoUrl: positional[0],

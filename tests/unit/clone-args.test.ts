@@ -74,3 +74,28 @@ describe('parseCloneCliArgs', () => {
     });
   });
 });
+
+describe('parseCloneCliArgs strictness', () => {
+  test('rejects unknown flags', () => {
+    expect(() => parseCloneCliArgs(['--bogus', 'a/b'])).toThrow(
+      "Unknown option '--bogus'. Usage: venfork clone"
+    );
+  });
+
+  test('rejects an extra positional', () => {
+    expect(() => parseCloneCliArgs(['a/b', 'c'])).toThrow(
+      "Unexpected argument 'c'. Usage: venfork clone"
+    );
+  });
+
+  test('accepts a flag before the positional and -- as separator', () => {
+    expect(parseCloneCliArgs(['--no-public', 'a/b']).vendorRepoUrl).toBe('a/b');
+    expect(parseCloneCliArgs(['--', 'a/b']).vendorRepoUrl).toBe('a/b');
+  });
+
+  test('missing value at the end of argv throws', () => {
+    expect(() => parseCloneCliArgs(['a/b', '--upstream'])).toThrow(
+      '--upstream requires a value'
+    );
+  });
+});

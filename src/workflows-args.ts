@@ -1,7 +1,12 @@
+import { scanArgs, unexpectedArgument } from './shared/args.js';
+
 export type ParsedWorkflowsArgs = {
   action: 'status' | 'allow' | 'block' | 'clear';
   workflows: string[];
 };
+
+const USAGE =
+  'venfork workflows <status|allow|block|clear> [workflow-file ...]';
 
 /**
  * Parse `venfork workflows ...` argv after the `workflows` token.
@@ -9,18 +14,19 @@ export type ParsedWorkflowsArgs = {
 export function parseWorkflowsCliArgs(
   workflowsArgs: string[]
 ): ParsedWorkflowsArgs {
-  const actionRaw = workflowsArgs[0] ?? 'status';
+  const [actionRaw = 'status', ...rest] = scanArgs(
+    workflowsArgs,
+    USAGE,
+    () => undefined
+  );
 
-  if (actionRaw === 'status') {
-    return { action: 'status', workflows: [] };
-  }
-
-  if (actionRaw === 'clear') {
-    return { action: 'clear', workflows: [] };
+  if (actionRaw === 'status' || actionRaw === 'clear') {
+    if (rest.length > 0) throw unexpectedArgument(rest[0], USAGE);
+    return { action: actionRaw, workflows: [] };
   }
 
   if (actionRaw === 'allow' || actionRaw === 'block') {
-    const values = workflowsArgs.slice(1).flatMap((entry) =>
+    const values = rest.flatMap((entry) =>
       entry
         .split(',')
         .map((v) => v.trim())
@@ -34,7 +40,5 @@ export function parseWorkflowsCliArgs(
     return { action: actionRaw, workflows: values };
   }
 
-  throw new Error(
-    'Usage: venfork workflows <status|allow|block|clear> [workflow-file ...]'
-  );
+  throw new Error(`Usage: ${USAGE}`);
 }

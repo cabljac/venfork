@@ -2,6 +2,7 @@ import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
 import { RemoteNotFoundError } from '../errors.js';
+import { parsePositiveInt } from '../shared/args.js';
 import { confirmOrAutoYes } from '../shared/confirm.js';
 import {
   assertNoMirrorReference,
@@ -94,29 +95,32 @@ async function createIssue(args: {
   return { url, number: Number(numberMatch[1]) };
 }
 
-function resolveIssueArg(
+/** Resolve a number or same-repo URL to a positive number; throws on anything else. */
+export function resolveIssueArg(
   target: string,
   expectedRepoPath: string
 ): { number: number } {
   const trimmed = target.trim();
-  if (/^\d+$/.test(trimmed)) {
-    return { number: Number(trimmed) };
+  const bare = parsePositiveInt(trimmed);
+  if (bare !== null) {
+    return { number: bare };
   }
   const match = trimmed.match(
-    /github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?\/issues\/(\d+)/
+    /^(?:https?:\/\/(?:www\.)?|git@)github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?\/issues\/(\d+)(?=[/?#]|$)/i
   );
-  if (!match) {
+  const number = match ? parsePositiveInt(match[2]) : null;
+  if (!match || number === null) {
     throw new Error(
-      `Could not parse issue reference: ${target}. Expected an integer or a github.com/<owner>/<repo>/issues/<n> URL.`
+      `Could not parse issue reference: ${target}. Expected a positive integer or a github.com/<owner>/<repo>/issues/<n> URL.`
     );
   }
-  const [, sourceRepoPath, num] = match;
-  if (sourceRepoPath !== expectedRepoPath) {
+  const sourceRepoPath = match[1];
+  if (sourceRepoPath.toLowerCase() !== expectedRepoPath.toLowerCase()) {
     throw new Error(
       `Refused to use issue URL ${target}: it points to ${sourceRepoPath}, but the expected repo is ${expectedRepoPath}. If this is intentional, pass the issue number directly.`
     );
   }
-  return { number: Number(num) };
+  return { number };
 }
 
 function issueUsage(action: 'stage' | 'pull' | undefined): string {

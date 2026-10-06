@@ -1,4 +1,9 @@
-import { consumeValue } from './shared/args.js';
+import {
+  consumeValue,
+  parsePositiveInt,
+  scanArgs,
+  unexpectedArgument,
+} from './shared/args.js';
 
 /** Parsed `venfork stage [branch] <name> ...` arguments. */
 export type ParsedStageBranchArgs = {
@@ -37,6 +42,9 @@ export type ParsedStageIssueArgs = {
 
 export type ParsedStageArgs = ParsedStageBranchArgs | ParsedStageIssueArgs;
 
+const USAGE =
+  'venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing]';
+
 /**
  * Parse `venfork stage ...` argv after the `stage` token.
  * Forms: `stage <branch>`, `stage branch <name>`, `stage issue <n-or-url>`.
@@ -44,7 +52,6 @@ export type ParsedStageArgs = ParsedStageBranchArgs | ParsedStageIssueArgs;
  * `branch` must use `stage branch <name>`.
  */
 export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
-  const positional: string[] = [];
   let createPr = false;
   let draft = false;
   let title: string | undefined;
@@ -52,45 +59,41 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   let internalPrNumber: number | undefined;
   let noUpdateExisting = false;
 
-  for (let i = 0; i < stageArgs.length; i++) {
-    const a = stageArgs[i];
+  const positional = scanArgs(stageArgs, USAGE, (a, i) => {
     if (a === '--pr') {
       createPr = true;
-      continue;
+      return 0;
     }
     if (a === '--draft') {
       draft = true;
       createPr = true;
-      continue;
+      return 0;
     }
     if (a === '--no-update-existing') {
       noUpdateExisting = true;
-      continue;
+      return 0;
     }
     if (a === '--title' || a.startsWith('--title=')) {
       const { value, consumed } = consumeValue('--title', stageArgs, i);
       title = value;
-      i += consumed;
-      continue;
+      return consumed;
     }
     if (a === '--base' || a.startsWith('--base=')) {
       const { value, consumed } = consumeValue('--base', stageArgs, i);
       base = value;
-      i += consumed;
-      continue;
+      return consumed;
     }
     if (a === '--internal-pr' || a.startsWith('--internal-pr=')) {
       const { value, consumed } = consumeValue('--internal-pr', stageArgs, i);
-      const parsed = Number(value);
-      if (!Number.isInteger(parsed) || parsed <= 0) {
+      const parsed = parsePositiveInt(value);
+      if (parsed === null) {
         throw new Error('--internal-pr requires a positive integer');
       }
       internalPrNumber = parsed;
-      i += consumed;
-      continue;
+      return consumed;
     }
-    positional.push(a);
-  }
+    return undefined;
+  });
 
   const [first, ...rest] = positional;
   if (first === 'issue') {
@@ -111,6 +114,7 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
         `${branchOnly.join(', ')} only applies to stage branch, not stage issue`
       );
     }
+    if (rest.length > 1) throw unexpectedArgument(rest[1], USAGE);
     return { kind: 'issue', ref: rest[0], title };
   }
 
@@ -123,6 +127,8 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     }
     branch = rest[0];
   }
+  const extra = first === 'branch' ? rest[1] : rest[0];
+  if (extra !== undefined) throw unexpectedArgument(extra, USAGE);
 
   return {
     kind: 'branch',

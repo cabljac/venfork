@@ -44,3 +44,29 @@ describe('parseWorkflowsCliArgs', () => {
     expect(() => parseWorkflowsCliArgs(['unknown'])).toThrow();
   });
 });
+
+describe('parseWorkflowsCliArgs strictness', () => {
+  test('rejects unknown flags instead of adding them as workflows', () => {
+    expect(() => parseWorkflowsCliArgs(['allow', '--bogus'])).toThrow(
+      "Unknown option '--bogus'. Usage: venfork workflows"
+    );
+    expect(() => parseWorkflowsCliArgs(['--bogus'])).toThrow(
+      "Unknown option '--bogus'"
+    );
+  });
+
+  test('rejects extra arguments to status and clear', () => {
+    expect(() => parseWorkflowsCliArgs(['status', 'x'])).toThrow(
+      "Unexpected argument 'x'"
+    );
+    expect(() => parseWorkflowsCliArgs(['clear', 'x'])).toThrow(
+      "Unexpected argument 'x'"
+    );
+  });
+
+  test('-- ends options', () => {
+    expect(parseWorkflowsCliArgs(['allow', '--', 'ci.yml']).workflows).toEqual([
+      'ci.yml',
+    ]);
+  });
+});

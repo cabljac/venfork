@@ -64,3 +64,29 @@ describe('parsePreserveCliArgs', () => {
     expect(() => parsePreserveCliArgs(['nuke'])).toThrow();
   });
 });
+
+describe('parsePreserveCliArgs strictness', () => {
+  test('rejects unknown flags instead of preserving them as paths', () => {
+    expect(() => parsePreserveCliArgs(['add', '--bogus'])).toThrow(
+      "Unknown option '--bogus'. Usage: venfork preserve"
+    );
+    expect(() => parsePreserveCliArgs(['--bogus'])).toThrow(
+      "Unknown option '--bogus'"
+    );
+  });
+
+  test('rejects extra arguments to list and clear', () => {
+    expect(() => parsePreserveCliArgs(['list', 'extra'])).toThrow(
+      "Unexpected argument 'extra'"
+    );
+    expect(() => parsePreserveCliArgs(['clear', 'extra'])).toThrow(
+      "Unexpected argument 'extra'"
+    );
+  });
+
+  test('-- ends options so a dash-leading path is accepted', () => {
+    expect(parsePreserveCliArgs(['add', '--', '-odd.txt']).paths).toEqual([
+      '-odd.txt',
+    ]);
+  });
+});

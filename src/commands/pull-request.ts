@@ -2,6 +2,7 @@ import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
 import { RemoteNotFoundError } from '../errors.js';
+import { parsePositiveInt } from '../shared/args.js';
 import { parseRepoPath } from '../utils.js';
 
 export interface PullRequestOptions {
@@ -16,29 +17,33 @@ export interface PullRequestOptions {
  * For URL form, also returns the parsed owner/repo so the caller can sanity
  * check it matches the upstream remote.
  */
-function resolvePullRequestArg(
+/** Resolve a number or same-repo URL to a positive number; throws on anything else. */
+export function resolvePullRequestArg(
   pr: string,
   upstreamRepoPath: string
 ): { number: number; sourceRepoPath?: string } {
   const trimmed = pr.trim();
-  if (/^\d+$/.test(trimmed)) {
-    return { number: Number(trimmed) };
+  const bare = parsePositiveInt(trimmed);
+  if (bare !== null) {
+    return { number: bare };
   }
   const match = trimmed.match(
-    /github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?\/pull\/(\d+)/
+    /^(?:https?:\/\/(?:www\.)?|git@)github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?\/pull\/(\d+)(?=[/?#]|$)/i
   );
-  if (!match) {
+  const number = match ? parsePositiveInt(match[2]) : null;
+  if (!match || number === null) {
     throw new Error(
-      `Could not parse PR reference: ${pr}. Expected an integer or a github.com/<owner>/<repo>/pull/<n> URL.`
+      `Could not parse PR reference: ${pr}. Expected a positive integer or a github.com/<owner>/<repo>/pull/<n> URL.`
     );
   }
-  const [, sourceRepoPath, num] = match;
-  if (sourceRepoPath !== upstreamRepoPath) {
+  const sourceRepoPath = match[1];
+  const num = match[2];
+  if (sourceRepoPath.toLowerCase() !== upstreamRepoPath.toLowerCase()) {
     throw new Error(
       `Refused to use PR URL ${pr}: it points to ${sourceRepoPath}, but the upstream remote is ${upstreamRepoPath}. If this is intentional, pass the PR number directly (\`venfork pull pr ${num}\`).`
     );
   }
-  return { number: Number(num), sourceRepoPath };
+  return { number, sourceRepoPath };
 }
 
 interface UpstreamPrMeta {
