@@ -94,8 +94,11 @@ jobs:
           if [ -z "$NUMBER" ]; then
             gh issue create --repo "$REPO" --label venfork-sync-blocked --title "Scheduled sync failed" --body "$MESSAGE"
           # A blocked sync already wrote this run URL into the issue body.
-          elif ! gh issue view "$NUMBER" --repo "$REPO" --json body --jq '.body' | grep -qF "$RUN_URL"; then
-            gh issue comment "$NUMBER" --repo "$REPO" --body "$MESSAGE"
+          else
+            BODY="$(gh issue view "$NUMBER" --repo "$REPO" --json body --jq '.body')"
+            if ! grep -qF "$RUN_URL" <<<"$BODY"; then
+              gh issue comment "$NUMBER" --repo "$REPO" --body "$MESSAGE"
+            fi
           fi
 "
 `;

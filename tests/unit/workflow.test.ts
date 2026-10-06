@@ -186,3 +186,15 @@ describe('workflow helpers', () => {
     expect(step).not.toContain('--force');
   });
 });
+
+describe('failure report duplicate check', () => {
+  test('reads the issue body into a variable instead of piping gh into grep -q', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *');
+    const step = workflow.slice(workflow.indexOf('- name: Report failed sync'));
+    expect(step).not.toMatch(/gh issue view[^\n]*\|\s*grep -q/);
+    expect(step).toContain(
+      'BODY="$(gh issue view "$NUMBER" --repo "$REPO" --json body --jq \'.body\')"'
+    );
+    expect(step).toContain('grep -qF "$RUN_URL" <<<"$BODY"');
+  });
+});
