@@ -80,6 +80,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Check VENFORK_PUSH_TOKEN
+        id: token-check
+        shell: bash
+        env:
+          VENFORK_PUSH_TOKEN: \${{ secrets.VENFORK_PUSH_TOKEN }}
+        run: |
+          if [ -z "$VENFORK_PUSH_TOKEN" ]; then
+            echo "::error::VENFORK_PUSH_TOKEN is not set on this repository. Create a fine-grained token with Contents and Workflows write for the mirror and the public fork, then: gh secret set VENFORK_PUSH_TOKEN --repo $GITHUB_REPOSITORY --body <token>"
+            exit 1
+          fi
       - name: Install venfork
         env:
           VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
@@ -87,7 +97,7 @@ jobs:
       - name: Checkout mirror
         uses: actions/checkout@v4
         with:
-          token: \${{ secrets.VENFORK_PUSH_TOKEN || github.token }}
+          token: \${{ secrets.VENFORK_PUSH_TOKEN }}
           fetch-depth: 0
       - name: Rewrite SSH GitHub URLs to HTTPS
         shell: bash
@@ -99,6 +109,9 @@ jobs:
           # value is a separate entry under the same key.
           git config --global --add url."https://github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com:22/"
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@ssh.github.com:443/"
+          git config --global --add url."https://github.com/".insteadOf "git@GitHub.com:"
       - name: Configure venfork remotes
         shell: bash
         run: |
@@ -113,18 +126,23 @@ ${remotesScript}
         env:
           GH_TOKEN: \${{ github.token }}
           RUN_URL: \${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}
+          TOKEN_CHECK: \${{ steps.token-check.outcome }}
         run: |
           set -euo pipefail
           REPO="$GITHUB_REPOSITORY"
+          MESSAGE="Scheduled venfork sync failed. See $RUN_URL"
+          if [ "$TOKEN_CHECK" = "failure" ]; then
+            MESSAGE="$MESSAGE"$'\\n\\n'"Cause: the VENFORK_PUSH_TOKEN secret is not set. Create a fine-grained token with Contents and Workflows write for the mirror and the public fork, then run: gh secret set VENFORK_PUSH_TOKEN --repo $REPO --body <token>"
+          fi
           if ! gh label list --repo "$REPO" --search venfork-sync-blocked --json name --jq '.[].name' | grep -qx venfork-sync-blocked; then
             gh label create venfork-sync-blocked --repo "$REPO" --color B60205 --description "Scheduled venfork sync is blocked"
           fi
           NUMBER="$(gh issue list --repo "$REPO" --label venfork-sync-blocked --state open --json number --limit 1 --jq '.[0].number // empty')"
           if [ -z "$NUMBER" ]; then
-            gh issue create --repo "$REPO" --label venfork-sync-blocked --title "Scheduled sync failed" --body "Scheduled venfork sync failed. See $RUN_URL"
+            gh issue create --repo "$REPO" --label venfork-sync-blocked --title "Scheduled sync failed" --body "$MESSAGE"
           # A blocked sync already wrote this run URL into the issue body.
           elif ! gh issue view "$NUMBER" --repo "$REPO" --json body --jq '.body' | grep -qF "$RUN_URL"; then
-            gh issue comment "$NUMBER" --repo "$REPO" --body "Scheduled venfork sync failed. See $RUN_URL"
+            gh issue comment "$NUMBER" --repo "$REPO" --body "$MESSAGE"
           fi
 `;
 }

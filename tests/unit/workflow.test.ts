@@ -18,13 +18,48 @@ describe('workflow helpers', () => {
     expect(workflow).toContain('run: venfork sync --report-issues');
   });
 
-  test('checkout step wires VENFORK_PUSH_TOKEN with github.token fallback', () => {
+  test('checkout uses the VENFORK_PUSH_TOKEN secret with no github.token fallback', () => {
     const workflow = generateSyncWorkflow('0 */6 * * *');
-    const expectedTokenLine =
+    const checkout = workflow.slice(
+      workflow.indexOf('- name: Checkout mirror'),
+      workflow.indexOf('- name: Rewrite SSH')
+    );
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expression we are asserting.
+    expect(checkout).toContain('token: ${{ secrets.VENFORK_PUSH_TOKEN }}');
+    expect(checkout).not.toContain('github.token');
+    expect(checkout).toContain('fetch-depth: 0');
+  });
+
+  test.each(['standard', 'no-public'] as const)(
+    'fails fast before install when VENFORK_PUSH_TOKEN is empty (%s)',
+    (mode) => {
+      const workflow = generateSyncWorkflow('0 */6 * * *', mode);
+      const check = workflow.indexOf('- name: Check VENFORK_PUSH_TOKEN');
+      expect(check).toBeGreaterThan(-1);
+      expect(check).toBeLessThan(workflow.indexOf('- name: Install venfork'));
+      const step = workflow.slice(
+        check,
+        workflow.indexOf('- name: Install venfork')
+      );
+      expect(step).toContain('id: token-check');
+      expect(step).toContain('if [ -z "$VENFORK_PUSH_TOKEN" ]; then');
+      expect(step).toContain('::error::VENFORK_PUSH_TOKEN is not set');
+      expect(step).toContain('exit 1');
+    }
+  );
+
+  test('failure report names the missing token when the check step failed', () => {
+    const workflow = generateSyncWorkflow('0 */6 * * *');
+    const step = workflow.slice(workflow.indexOf('- name: Report failed sync'));
+    expect(step).toContain('if: failure()');
+    expect(step).toContain(
       // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expression we are asserting.
-      'token: ${{ secrets.VENFORK_PUSH_TOKEN || github.token }}';
-    expect(workflow).toContain(expectedTokenLine);
-    expect(workflow).toContain('fetch-depth: 0');
+      'TOKEN_CHECK: ${{ steps.token-check.outcome }}'
+    );
+    expect(step).toContain('if [ "$TOKEN_CHECK" = "failure" ]; then');
+    expect(step).toContain('Cause: the VENFORK_PUSH_TOKEN secret is not set');
+    expect(step).toContain(String.raw`$'\n\n'`);
+    expect(step).toContain('--body "$MESSAGE"');
   });
 
   test('rewrites SSH GitHub URLs to HTTPS so extraheader auth applies', () => {
@@ -37,6 +72,16 @@ describe('workflow helpers', () => {
     );
     expect(workflow).toContain(
       'git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"'
+    );
+  });
+
+  test.each([
+    'ssh://git@github.com:22/',
+    'ssh://git@ssh.github.com:443/',
+    'git@GitHub.com:',
+  ])('rewrites the %s SSH form to HTTPS', (form) => {
+    expect(generateSyncWorkflow('0 */6 * * *')).toContain(
+      `git config --global --add url."https://github.com/".insteadOf "${form}"`
     );
   });
 
