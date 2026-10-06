@@ -239,7 +239,7 @@ venfork sync develop   # Sync develop branch with upstream/develop
 **What it does:**
 1. Fetches latest changes from all remotes (upstream, origin, public)
 2. Checks for divergent commits and aborts if any are found, to prevent data loss
-3. Builds the new origin tip: upstream's default branch, plus (when scheduled sync or preserve is enabled) one deterministic managed commit with `.github/workflows/venfork-sync.yml` and preserved files
+3. Builds the new origin tip: upstream's default branch, plus (when scheduled sync, preserve or a workflow allow/block list is enabled) one deterministic managed commit with `.github/workflows/venfork-sync.yml` and preserved files
 4. Pushes origin and public once each with an explicit lease, skipping any remote that is already up to date
 5. If workflow policy is configured, that managed commit filters `.github/workflows` using:
    - `enabledWorkflows` allowlist (highest precedence)
@@ -505,7 +505,7 @@ venfork workflows clear
 3. `block` sets the blocklist by workflow filename
 4. `clear` removes both lists
 5. Precedence: if `enabledWorkflows` is non-empty, it is used and `disabledWorkflows` is ignored
-6. Changes apply to the mirror default branch on next `venfork sync` (when the managed commit is in use: a schedule or a preserve list)
+6. Changes apply to the mirror default branch on next `venfork sync` (a non-empty allow or block list is enough to put the managed commit on the mirror, with or without a schedule or a preserve list)
 
 ### `venfork preserve <list|add|remove|clear> [path ...]`
 

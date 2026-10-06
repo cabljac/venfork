@@ -198,34 +198,34 @@ export async function buildMirrorTip(args: {
         '--cacheinfo',
         `100644,${blob},${SYNC_WORKFLOW_PATH}`,
       ]);
+    }
 
-      // Precedence: enabledWorkflows allowlist > disabledWorkflows blocklist.
-      if (allowlist.length > 0 || blocklist.length > 0) {
-        const listed = await mustGit(git, [
-          'ls-tree',
-          '-r',
-          '-z',
-          '--name-only',
-          upstreamTip,
-          '--',
-          WORKFLOWS_DIR,
-        ]);
-        for (const workflowFile of listed.split('\0').filter(Boolean)) {
-          if (workflowFile === SYNC_WORKFLOW_PATH) continue;
-          if (!isTopLevelWorkflow(workflowFile)) continue;
-          const base = path.posix.basename(workflowFile);
-          const keep =
-            allowlist.length > 0
-              ? allowlist.includes(base)
-              : !blocklist.includes(base);
-          if (!keep) {
-            await mustGit(git, [
-              'update-index',
-              '--force-remove',
-              '--',
-              workflowFile,
-            ]);
-          }
+    // Precedence: enabledWorkflows allowlist > disabledWorkflows blocklist.
+    if (allowlist.length > 0 || blocklist.length > 0) {
+      const listed = await mustGit(git, [
+        'ls-tree',
+        '-r',
+        '-z',
+        '--name-only',
+        upstreamTip,
+        '--',
+        WORKFLOWS_DIR,
+      ]);
+      for (const workflowFile of listed.split('\0').filter(Boolean)) {
+        if (workflowFile === SYNC_WORKFLOW_PATH) continue;
+        if (!isTopLevelWorkflow(workflowFile)) continue;
+        const base = path.posix.basename(workflowFile);
+        const keep =
+          allowlist.length > 0
+            ? allowlist.includes(base)
+            : !blocklist.includes(base);
+        if (!keep) {
+          await mustGit(git, [
+            'update-index',
+            '--force-remove',
+            '--',
+            workflowFile,
+          ]);
         }
       }
     }
@@ -429,8 +429,8 @@ export async function resolveCommit(
 
 /**
  * The commit `origin/<defaultBranch>` should point at for `config`: the
- * upstream tip plus the managed commit when a schedule or preserve list is
- * active, else the plain upstream tip. Refuses to downgrade a newer pinned
+ * upstream tip plus the managed commit when a schedule, a preserve list or a
+ * workflow allow/block list is active, else the plain upstream tip. Refuses to downgrade a newer pinned
  * workflow. Nothing is pushed.
  */
 export async function buildOriginTip(args: {
@@ -455,7 +455,12 @@ export async function buildOriginTip(args: {
     await assertNoPinDowngrade(previousMirrorTip, cwd);
   }
   const preserve = config?.preserve ?? [];
-  if (!scheduleActive && preserve.length === 0) {
+  const enabledWorkflows = config?.enabledWorkflows ?? [];
+  const disabledWorkflows = config?.disabledWorkflows ?? [];
+  const filtersWorkflows =
+    normalizeWorkflowList(enabledWorkflows).length > 0 ||
+    normalizeWorkflowList(disabledWorkflows).length > 0;
+  if (!scheduleActive && preserve.length === 0 && !filtersWorkflows) {
     return upstreamTip;
   }
   return buildMirrorTip({
@@ -468,8 +473,8 @@ export async function buildOriginTip(args: {
             mode: config?.mode === 'no-public' ? 'no-public' : 'standard',
           }
         : null,
-    enabledWorkflows: config?.enabledWorkflows ?? [],
-    disabledWorkflows: config?.disabledWorkflows ?? [],
+    enabledWorkflows,
+    disabledWorkflows,
     preserve,
     previousMirrorTip,
     cwd,

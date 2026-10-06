@@ -286,3 +286,57 @@ describe('log.showSignature in the user git config', () => {
     );
   });
 });
+
+describe('workflow lists without a schedule', () => {
+  const DEPLOY = '.github/workflows/deploy.yml';
+  const CI = '.github/workflows/ci.yml';
+
+  test('a block list applies when only preserve is active', async () => {
+    await fx.commitOnUpstream({ [DEPLOY]: 'deploy\n', [CI]: 'ci\n' });
+    await seedPreserve(fx, ['tools/m.txt']);
+    await updateVenforkConfig(fx.work, { disabledWorkflows: ['deploy.yml'] });
+    await fx.commitOnOrigin({ 'tools/m.txt': 'm\n' });
+
+    await sync();
+
+    expect(await workflowNames()).toBe(CI);
+    expect(await fx.fileAt(fx.origin, 'main', 'tools/m.txt')).toBe('m\n');
+  });
+
+  test('a block list alone puts one managed commit on top of upstream', async () => {
+    await fx.commitOnUpstream({ [DEPLOY]: 'deploy\n', [CI]: 'ci\n' });
+    await updateVenforkConfig(fx.work, { disabledWorkflows: ['deploy.yml'] });
+
+    await sync();
+
+    expect(await workflowNames()).toBe(CI);
+    expect(await fx.git(fx.origin, 'rev-parse', 'main^')).toBe(
+      await fx.sha(fx.upstream, 'main')
+    );
+    expect(await fx.git(fx.origin, 'log', '-1', '--format=%s', 'main')).toBe(
+      'chore: venfork-managed mirror commit'
+    );
+  });
+
+  test('an allowlist alone filters without a schedule', async () => {
+    await fx.commitOnUpstream({ [DEPLOY]: 'deploy\n', [CI]: 'ci\n' });
+    await updateVenforkConfig(fx.work, { enabledWorkflows: ['ci.yml'] });
+
+    await sync();
+
+    expect(await workflowNames()).toBe(CI);
+  });
+
+  test('disabling the schedule keeps the block list applied', async () => {
+    await fx.commitOnUpstream({ [DEPLOY]: 'deploy\n', [CI]: 'ci\n' });
+    await enableSchedule({ disabledWorkflows: ['deploy.yml'] });
+    await sync();
+    await updateVenforkConfig(fx.work, {
+      schedule: { enabled: false, cron: '0 * * * *' },
+    });
+
+    await sync();
+
+    expect(await workflowNames()).toBe(CI);
+  });
+});
