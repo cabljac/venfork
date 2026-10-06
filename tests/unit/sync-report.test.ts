@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -250,15 +250,16 @@ describe('reportSyncBlocked', () => {
     let dir: string;
     let outputFile: string;
 
-    beforeEach(async () => {
-      dir = await mkdtemp(path.join(os.tmpdir(), 'venfork-output-'));
+    // Sync fs: another unit file mocks node:fs/promises and the mock leaks.
+    beforeEach(() => {
+      dir = mkdtempSync(path.join(os.tmpdir(), 'venfork-output-'));
       outputFile = path.join(dir, 'output');
-      await writeFile(outputFile, 'earlier=1\n');
+      writeFileSync(outputFile, 'earlier=1\n');
       process.env.GITHUB_OUTPUT = outputFile;
     });
 
-    afterEach(async () => {
-      await rm(dir, { recursive: true, force: true });
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
     });
 
     test.each([
@@ -272,7 +273,7 @@ describe('reportSyncBlocked', () => {
 
       await reportSyncBlocked({ cwd: '/m', error: ORIGIN_ONLY });
 
-      expect(await readFile(outputFile, 'utf8')).toBe(
+      expect(readFileSync(outputFile, 'utf8')).toBe(
         'earlier=1\nreported=true\n'
       );
     });
@@ -285,7 +286,7 @@ describe('reportSyncBlocked', () => {
 
       await reportSyncBlocked({ cwd: '/m', error: ORIGIN_ONLY });
 
-      expect(await readFile(outputFile, 'utf8')).toBe('earlier=1\n');
+      expect(readFileSync(outputFile, 'utf8')).toBe('earlier=1\n');
     });
   });
 

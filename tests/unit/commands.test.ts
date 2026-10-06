@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import * as realFsPromises from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
 import * as clack from '@clack/prompts';
 
@@ -233,8 +234,11 @@ function streamRejectedPush(stderr: string): Promise<unknown> & {
   return Object.assign(promise, { stdout, stderr: stderrStream });
 }
 
-// Mock fs.rm and fs.access BEFORE any imports
+// Mock fs.rm and fs.access BEFORE any imports. The real module is spread
+// first: mock.module leaks across files in one bun process, and other
+// files' tests write real files through the functions not stubbed here.
 mock.module('node:fs/promises', () => ({
+  ...realFsPromises,
   mkdtemp: mock((prefix: string) => {
     tempDirCounter += 1;
     return Promise.resolve(`${prefix}${tempDirCounter}`);
