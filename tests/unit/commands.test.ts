@@ -348,7 +348,7 @@ function mockManagedCommitOnBranch(
     `git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/${branch}`,
     { exitCode: 0, stdout: sha, stderr: '' }
   );
-  mockResponses.set(`git log -1 --format=%s ${sha}`, {
+  mockResponses.set(`git log -1 --no-show-signature --format=%s ${sha}`, {
     exitCode: 0,
     stdout: 'chore: venfork-managed mirror commit',
     stderr: '',
@@ -1184,11 +1184,14 @@ describe('syncCommand', () => {
       'git diff-tree -r -z --no-commit-id --name-only -m --first-parent v2v2v2v2v2v2v2v2',
       { exitCode: 0, stdout: 'agent.yml\0', stderr: '' }
     );
-    mockResponses.set('git log -1 --format=%s v2v2v2v2v2v2v2v2', {
-      exitCode: 0,
-      stdout: 'mirror: bump agent to v2\n',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git log -1 --no-show-signature --format=%s v2v2v2v2v2v2v2v2',
+      {
+        exitCode: 0,
+        stdout: 'mirror: bump agent to v2\n',
+        stderr: '',
+      }
+    );
 
     try {
       await syncCommand('main');
@@ -1241,11 +1244,14 @@ describe('syncCommand', () => {
       stdout: '',
       stderr: '',
     });
-    mockResponses.set('git log -1 --format=%s orphancommit11111', {
-      exitCode: 0,
-      stdout: 'mirror: add agent caller workflow\n',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git log -1 --no-show-signature --format=%s orphancommit11111',
+      {
+        exitCode: 0,
+        stdout: 'mirror: add agent caller workflow\n',
+        stderr: '',
+      }
+    );
     mockResponses.set(
       'git diff-tree -r -z --no-commit-id --name-only -m --first-parent orphancommit11111',
       { exitCode: 0, stdout: 'agent.yml\0', stderr: '' }
@@ -1297,11 +1303,14 @@ describe('syncCommand', () => {
       stderr: '',
     });
     // Subject = the OLD message string. Must be recognized as managed.
-    mockResponses.set('git log -1 --format=%s legacycommit11111', {
-      exitCode: 0,
-      stdout: 'chore: add/update scheduled sync workflow (venfork)\n',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git log -1 --no-show-signature --format=%s legacycommit11111',
+      {
+        exitCode: 0,
+        stdout: 'chore: add/update scheduled sync workflow (venfork)\n',
+        stderr: '',
+      }
+    );
 
     try {
       await syncCommand('main');
@@ -1352,11 +1361,14 @@ describe('syncCommand', () => {
       }
     );
     // Subject doesn't match the workflow message — would normally count as divergent.
-    mockResponses.set('git log -1 --format=%s feedfacecafebabe', {
-      exitCode: 0,
-      stdout: 'mirror: add caller workflow\n',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git log -1 --no-show-signature --format=%s feedfacecafebabe',
+      {
+        exitCode: 0,
+        stdout: 'mirror: add caller workflow\n',
+        stderr: '',
+      }
+    );
     mockResponses.set(
       'git rev-parse --verify refs/remotes/origin/main^{commit}',
       {
@@ -1477,26 +1489,32 @@ describe('stageCommand', () => {
       'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
       { exitCode: 0, stdout: 'mgd111\nfeat222', stderr: '' }
     );
-    mockResponses.set('git log -1 --format=%s mgd111', {
+    mockResponses.set('git log -1 --no-show-signature --format=%s mgd111', {
       exitCode: 0,
       stdout: 'chore: venfork-managed mirror commit',
       stderr: '',
     });
-    mockResponses.set('git show -z --name-only --pretty=format: mgd111', {
-      exitCode: 0,
-      stdout: 'internal/NOTES.md',
-      stderr: '',
-    });
-    mockResponses.set('git log -1 --format=%s feat222', {
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: mgd111',
+      {
+        exitCode: 0,
+        stdout: 'internal/NOTES.md',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git log -1 --no-show-signature --format=%s feat222', {
       exitCode: 0,
       stdout: 'feat: real feature work',
       stderr: '',
     });
-    mockResponses.set('git show -z --name-only --pretty=format: feat222', {
-      exitCode: 0,
-      stdout: 'src/index.ts',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: feat222',
+      {
+        exitCode: 0,
+        stdout: 'src/index.ts',
+        stderr: '',
+      }
+    );
 
     try {
       await stageCommand('feature-branch');
@@ -1535,7 +1553,7 @@ describe('stageCommand', () => {
       'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
       { exitCode: 0, stdout: 'feat222', stderr: '' }
     );
-    mockResponses.set('git log -1 --format=%s feat222', {
+    mockResponses.set('git log -1 --no-show-signature --format=%s feat222', {
       exitCode: 0,
       stdout: 'feat: real feature work',
       stderr: '',
@@ -1612,38 +1630,47 @@ describe('stageCommand', () => {
       }
     );
     // Feature commits — not workflow-only.
-    mockResponses.set('git log -1 --format=%s feat111', {
+    mockResponses.set('git log -1 --no-show-signature --format=%s feat111', {
       exitCode: 0,
       stdout: 'feat: real feature work',
       stderr: '',
     });
-    mockResponses.set('git show -z --name-only --pretty=format: feat111', {
-      exitCode: 0,
-      stdout: 'src/index.ts',
-      stderr: '',
-    });
-    mockResponses.set('git log -1 --format=%s feat333', {
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: feat111',
+      {
+        exitCode: 0,
+        stdout: 'src/index.ts',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git log -1 --no-show-signature --format=%s feat333', {
       exitCode: 0,
       stdout: 'feat: more real feature work',
       stderr: '',
     });
-    mockResponses.set('git show -z --name-only --pretty=format: feat333', {
-      exitCode: 0,
-      stdout: 'src/other.ts',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: feat333',
+      {
+        exitCode: 0,
+        stdout: 'src/other.ts',
+        stderr: '',
+      }
+    );
     // A leftover workflow-only commit (touches only .github/workflows/*).
-    mockResponses.set('git log -1 --format=%s wf222', {
+    mockResponses.set('git log -1 --no-show-signature --format=%s wf222', {
       exitCode: 0,
       stdout: 'chore(venfork): hourly sync public fork via dedicated PAT',
       stderr: '',
     });
-    mockResponses.set('git log -1 --format=%ae%n%ce wf222', {
-      exitCode: 0,
-      stdout:
-        'venfork-bot@users.noreply.github.com\nvenfork-bot@users.noreply.github.com',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git log -1 --no-show-signature --format=%ae%n%ce wf222',
+      {
+        exitCode: 0,
+        stdout:
+          'venfork-bot@users.noreply.github.com\nvenfork-bot@users.noreply.github.com',
+        stderr: '',
+      }
+    );
     mockResponses.set(
       'git diff-tree -r -z --no-renames --root --no-commit-id --name-status wf222',
       {
@@ -1652,11 +1679,14 @@ describe('stageCommand', () => {
         stderr: '',
       }
     );
-    mockResponses.set('git show -z --name-only --pretty=format: wf222', {
-      exitCode: 0,
-      stdout: '.github/workflows/venfork-sync.yml',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: wf222',
+      {
+        exitCode: 0,
+        stdout: '.github/workflows/venfork-sync.yml',
+        stderr: '',
+      }
+    );
 
     try {
       await stageCommand('feature-branch');
@@ -1698,16 +1728,19 @@ describe('stageCommand', () => {
         stderr: '',
       }
     );
-    mockResponses.set('git log -1 --format=%s userci1', {
+    mockResponses.set('git log -1 --no-show-signature --format=%s userci1', {
       exitCode: 0,
       stdout: 'ci: tighten test matrix on ci.yml',
       stderr: '',
     });
-    mockResponses.set('git show -z --name-only --pretty=format: userci1', {
-      exitCode: 0,
-      stdout: '.github/workflows/ci.yml',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: userci1',
+      {
+        exitCode: 0,
+        stdout: '.github/workflows/ci.yml',
+        stderr: '',
+      }
+    );
 
     try {
       await stageCommand('feature-branch');
@@ -1837,16 +1870,19 @@ describe('stageCommand', () => {
         stderr: '',
       }
     );
-    mockResponses.set('git log -1 --format=%s feat111', {
+    mockResponses.set('git log -1 --no-show-signature --format=%s feat111', {
       exitCode: 0,
       stdout: 'feat: real feature work',
       stderr: '',
     });
-    mockResponses.set('git show -z --name-only --pretty=format: feat111', {
-      exitCode: 0,
-      stdout: 'src/feature.ts',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: feat111',
+      {
+        exitCode: 0,
+        stdout: 'src/feature.ts',
+        stderr: '',
+      }
+    );
 
     try {
       await stageCommand('feature-branch');
@@ -1890,16 +1926,19 @@ describe('stageCommand', () => {
       }
     );
     for (const sha of ['feat111', 'feat222']) {
-      mockResponses.set(`git log -1 --format=%s ${sha}`, {
+      mockResponses.set(`git log -1 --no-show-signature --format=%s ${sha}`, {
         exitCode: 0,
         stdout: `feat: work ${sha}`,
         stderr: '',
       });
-      mockResponses.set(`git show -z --name-only --pretty=format: ${sha}`, {
-        exitCode: 0,
-        stdout: 'src/feature.ts',
-        stderr: '',
-      });
+      mockResponses.set(
+        `git show --no-show-signature -z --name-only --pretty=format: ${sha}`,
+        {
+          exitCode: 0,
+          stdout: 'src/feature.ts',
+          stderr: '',
+        }
+      );
     }
 
     try {
@@ -3052,22 +3091,29 @@ describe('syncCommand - error paths', () => {
       stdout: 'abc123\n',
       stderr: '',
     });
-    mockResponses.set('git log -1 --format=%s abc123', {
+    mockResponses.set('git log -1 --no-show-signature --format=%s abc123', {
       exitCode: 0,
       stdout: 'chore(workflows): Add workflows for venfork sync',
       stderr: '',
     });
-    mockResponses.set('git log -1 --format=%ae%n%ce abc123', {
-      exitCode: 0,
-      stdout:
-        'venfork-bot@users.noreply.github.com\nvenfork-bot@users.noreply.github.com',
-      stderr: '',
-    });
-    mockResponses.set('git show -z --name-only --pretty=format: abc123', {
-      exitCode: 0,
-      stdout: '.github/workflows/sync.yml\0.github/workflows/venfork-sync.yml',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git log -1 --no-show-signature --format=%ae%n%ce abc123',
+      {
+        exitCode: 0,
+        stdout:
+          'venfork-bot@users.noreply.github.com\nvenfork-bot@users.noreply.github.com',
+        stderr: '',
+      }
+    );
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: abc123',
+      {
+        exitCode: 0,
+        stdout:
+          '.github/workflows/sync.yml\0.github/workflows/venfork-sync.yml',
+        stderr: '',
+      }
+    );
     mockResponses.set(
       'git diff-tree -r -z --no-renames --root --no-commit-id --name-status abc123',
       {
@@ -3093,16 +3139,19 @@ describe('syncCommand - error paths', () => {
       stdout: 'deadbee\n',
       stderr: '',
     });
-    mockResponses.set('git log -1 --format=%s deadbee', {
+    mockResponses.set('git log -1 --no-show-signature --format=%s deadbee', {
       exitCode: 0,
       stdout: 'feat: real work on main',
       stderr: '',
     });
-    mockResponses.set('git show -z --name-only --pretty=format: deadbee', {
-      exitCode: 0,
-      stdout: '.github/workflows/sync.yml\0src/index.ts',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: deadbee',
+      {
+        exitCode: 0,
+        stdout: '.github/workflows/sync.yml\0src/index.ts',
+        stderr: '',
+      }
+    );
 
     await expect(syncCommand('main')).rejects.toBeInstanceOf(
       SyncDivergenceError
@@ -3126,16 +3175,19 @@ describe('syncCommand - error paths', () => {
       stdout: 'userci1\n',
       stderr: '',
     });
-    mockResponses.set('git log -1 --format=%s userci1', {
+    mockResponses.set('git log -1 --no-show-signature --format=%s userci1', {
       exitCode: 0,
       stdout: 'ci: tighten test matrix on ci.yml',
       stderr: '',
     });
-    mockResponses.set('git show -z --name-only --pretty=format: userci1', {
-      exitCode: 0,
-      stdout: '.github/workflows/ci.yml',
-      stderr: '',
-    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: userci1',
+      {
+        exitCode: 0,
+        stdout: '.github/workflows/ci.yml',
+        stderr: '',
+      }
+    );
 
     await expect(syncCommand('main')).rejects.toBeInstanceOf(
       SyncDivergenceError

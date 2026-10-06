@@ -290,6 +290,7 @@ export async function buildMirrorTip(args: {
       await mustGit(git, [
         'show',
         '-s',
+        '--no-show-signature',
         '--format=%cd',
         '--date=raw',
         upstreamTip,

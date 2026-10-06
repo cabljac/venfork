@@ -39,7 +39,7 @@ export async function hasManagedTrailer(
   const result = await $({
     ...(cwd ? { cwd } : {}),
     reject: false,
-  })`git log -1 --format=%(trailers:key=${MANAGED_COMMIT_TRAILER_KEY},valueonly) ${ref}`;
+  })`git log -1 --no-show-signature --format=%(trailers:key=${MANAGED_COMMIT_TRAILER_KEY},valueonly) ${ref}`;
   return result.exitCode === 0 && result.stdout.trim() === '1';
 }
 
@@ -51,7 +51,7 @@ async function commitSubject(
   const result = await $({
     ...cwdOpt,
     reject: false,
-  })`git log -1 --format=%s ${ref}`;
+  })`git log -1 --no-show-signature --format=%s ${ref}`;
   if (result.exitCode !== 0) {
     return null;
   }
@@ -66,7 +66,7 @@ async function commitTouchesWorkflowPath(
   const filesResult = await $({
     ...cwdOpt,
     reject: false,
-  })`git show -z --name-only --pretty=format: ${ref}`;
+  })`git show --no-show-signature -z --name-only --pretty=format: ${ref}`;
   if (filesResult.exitCode !== 0) {
     return false;
   }
@@ -138,7 +138,7 @@ async function identityEmails(
   const result = await $({
     ...(cwd ? { cwd } : {}),
     reject: false,
-  })`git log -1 --format=%ae%n%ce ${ref}`;
+  })`git log -1 --no-show-signature --format=%ae%n%ce ${ref}`;
   if (result.exitCode !== 0) return null;
   const [author = '', committer = ''] = result.stdout.trim().split('\n');
   return { author, committer };

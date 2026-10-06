@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { mkdir, symlink } from 'node:fs/promises';
+import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { $ } from 'execa';
 import { quietPrompts } from '../harness/prompts.js';
@@ -199,6 +199,90 @@ describe('preserved paths read from trees', () => {
 
     expect(await fx.fileAt(fx.origin, 'main', 'docs/p.md')).toBe(
       'upstream p\n'
+    );
+  });
+});
+
+describe('log.showSignature in the user git config', () => {
+  let restoreConfig: () => void;
+
+  async function signingKey(): Promise<string> {
+    const key = path.join(fx.root, 'signing-key');
+    await $`ssh-keygen -q -t ed25519 -N ${''} -f ${key}`;
+    return key;
+  }
+
+  beforeEach(() => {
+    const previous = process.env.GIT_CONFIG_PARAMETERS;
+    process.env.GIT_CONFIG_PARAMETERS = "'log.showsignature'='true'";
+    restoreConfig = () => {
+      if (previous === undefined) delete process.env.GIT_CONFIG_PARAMETERS;
+      else process.env.GIT_CONFIG_PARAMETERS = previous;
+    };
+  });
+
+  afterEach(() => restoreConfig());
+
+  test('sync builds the managed commit on a signed upstream tip', async () => {
+    const key = await signingKey();
+    const dir = path.join(fx.root, 'upstream-dev');
+    await fx.git(dir, 'pull', '--quiet', '--ff-only');
+    await writeFile(path.join(dir, 'signed.txt'), 'signed\n');
+    await fx.git(dir, 'add', '--', 'signed.txt');
+    await fx.git(
+      dir,
+      '-c',
+      'gpg.format=ssh',
+      '-c',
+      `user.signingkey=${key}`,
+      '-c',
+      'commit.gpgsign=true',
+      'commit',
+      '--quiet',
+      '-m',
+      'feat: signed upstream change'
+    );
+    await fx.git(dir, 'push', '--quiet', 'origin', 'main');
+    await enableSchedule();
+
+    await sync();
+
+    expect(await fx.git(fx.origin, 'rev-parse', 'main^')).toBe(
+      await fx.sha(fx.upstream, 'main')
+    );
+    expect(await fx.git(fx.origin, 'log', '-1', '--format=%s', 'main')).toBe(
+      'chore: venfork-managed mirror commit'
+    );
+  });
+
+  test('a signed managed commit on origin is not divergence', async () => {
+    await enableSchedule();
+    await sync();
+    const key = await signingKey();
+    const tip = await fx.sha(fx.origin, 'main');
+    const bot = 'venfork-bot@users.noreply.github.com';
+    const resigned = await $({
+      cwd: fx.work,
+      env: {
+        GIT_AUTHOR_NAME: 'venfork-bot',
+        GIT_AUTHOR_EMAIL: bot,
+        GIT_COMMITTER_NAME: 'venfork-bot',
+        GIT_COMMITTER_EMAIL: bot,
+      },
+    })`git -c gpg.format=ssh -c user.signingkey=${key} commit-tree -S ${`${tip}^{tree}`} -p ${`${tip}^`} -m ${'chore: venfork-managed mirror commit'} -m ${'Venfork-Managed: 1'}`;
+    await fx.git(
+      fx.work,
+      'push',
+      '--quiet',
+      '--force',
+      'origin',
+      `${resigned.stdout.trim()}:refs/heads/main`
+    );
+
+    await sync();
+
+    expect(await fx.git(fx.origin, 'cat-file', 'commit', 'main')).not.toContain(
+      'gpgsig'
     );
   });
 });
