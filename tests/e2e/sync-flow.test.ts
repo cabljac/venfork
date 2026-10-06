@@ -34,6 +34,7 @@ import {
   tmpRoot,
   UPSTREAM_OWNER,
   waitForDispatchedRun,
+  waitForOpenIssuesWithLabel,
   waitForRunCompletion,
 } from './helpers.js';
 
@@ -607,10 +608,11 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
           defaultBranch
         )
       ).toBe(mirrorShaBefore);
-      const blocked = await listOpenIssuesWithLabel(
+      const blocked = await waitForOpenIssuesWithLabel(
         GITHUB_ORG,
         names.noPublicMirror,
-        'venfork-sync-blocked'
+        'venfork-sync-blocked',
+        1
       );
       expect(blocked).toHaveLength(1);
       const issue = await getIssueMeta({

@@ -410,6 +410,29 @@ export async function listOpenIssuesWithLabel(
     .map(Number);
 }
 
+/**
+ * Polls {@link listOpenIssuesWithLabel} until it returns `count` issues or
+ * `timeoutMs` passes, then returns the last listing. GitHub's issue list
+ * endpoints are eventually consistent: an issue created seconds earlier can
+ * be missing from one listing and present in the next.
+ */
+export async function waitForOpenIssuesWithLabel(
+  owner: string,
+  repo: string,
+  label: string,
+  count: number,
+  timeoutMs = 90_000
+): Promise<number[]> {
+  const deadline = Date.now() + timeoutMs;
+  let last: number[] = [];
+  while (Date.now() < deadline) {
+    last = await listOpenIssuesWithLabel(owner, repo, label);
+    if (last.length === count) return last;
+    await Bun.sleep(3_000);
+  }
+  return last;
+}
+
 interface WorkflowRun {
   databaseId: number;
   status: string;
