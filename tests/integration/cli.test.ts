@@ -17,6 +17,8 @@ const repoRoot = path.resolve(import.meta.dir, '..', '..');
 let tmp: string;
 let entry: string;
 let stubPath: string;
+/** PATH whose gh passes `gh auth status` and fails everything else. */
+let authedPath: string;
 
 beforeAll(async () => {
   tmp = await mkdtemp(path.join(os.tmpdir(), 'venfork-cli-'));
@@ -30,6 +32,14 @@ beforeAll(async () => {
   await writeFile(path.join(bin, 'gh'), '#!/bin/sh\nexit 1\n');
   await chmod(path.join(bin, 'gh'), 0o755);
   stubPath = `${bin}${path.delimiter}${process.env.PATH ?? ''}`;
+  const authedBin = path.join(tmp, 'authed-bin');
+  await mkdir(authedBin);
+  await writeFile(
+    path.join(authedBin, 'gh'),
+    '#!/bin/sh\n[ "$1 $2" = "auth status" ] && exit 0\nexit 1\n'
+  );
+  await chmod(path.join(authedBin, 'gh'), 0o755);
+  authedPath = `${authedBin}${path.delimiter}${process.env.PATH ?? ''}`;
 });
 
 afterAll(async () => {
@@ -59,6 +69,32 @@ describe('built CLI entry point', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe(pkg.version);
+  });
+
+  test('input that ends at a prompt exits 130 instead of 0', async () => {
+    const result = await $({
+      cwd: tmp,
+      reject: false,
+      stdin: { file: '/dev/null' },
+      env: { PATH: authedPath },
+    })`node ${entry} setup a/b --org c`;
+
+    expect(result.exitCode).toBe(130);
+    expect(result.stderr).toBe('Cancelled: input ended at a prompt');
+    expect(result.stdout).toContain('Private mirror repo name?');
+    expect(result.stdout).not.toContain('Cancelled');
+  });
+
+  test('a command that finishes is not reported as an abandoned prompt', async () => {
+    const result = await $({
+      cwd: tmp,
+      reject: false,
+      stdin: { file: '/dev/null' },
+      env: { PATH: authedPath },
+    })`node ${entry} --version`;
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
   });
 
   test('setup without gh auth exits 1 with the AuthenticationError message', async () => {

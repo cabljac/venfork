@@ -158,9 +158,22 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(
-    `Error: ${error instanceof Error ? error.message : String(error)}`
-  );
-  process.exit(1);
-});
+// A clack prompt whose stdin hits EOF never resolves; the loop then drains
+// with the command still pending, and Node would exit 0.
+function exitOnAbandonedPrompt(): void {
+  if (process.stdout.isTTY) process.stdout.write('\x1b[?25h');
+  process.stderr.write('Cancelled: input ended at a prompt\n');
+  process.exit(130);
+}
+
+process.on('beforeExit', exitOnAbandonedPrompt);
+main()
+  .finally(() => {
+    process.off('beforeExit', exitOnAbandonedPrompt);
+  })
+  .catch((error) => {
+    console.error(
+      `Error: ${error instanceof Error ? error.message : String(error)}`
+    );
+    process.exit(1);
+  });
