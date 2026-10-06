@@ -8,7 +8,7 @@ import {
 /** Parsed `venfork stage [branch] <name> ...` arguments. */
 export type ParsedStageBranchArgs = {
   kind: 'branch';
-  branch?: string;
+  branch: string;
   /** When true, also open an upstream PR after staging. */
   createPr: boolean;
   /** When true, the upstream PR is opened as a draft. Implies --pr. */
@@ -129,6 +129,10 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   }
   const extra = first === 'branch' ? rest[1] : rest[0];
   if (extra !== undefined) throw unexpectedArgument(extra, USAGE);
+
+  if (branch === undefined) {
+    throw new Error(`Missing branch name. Usage: ${USAGE}`);
+  }
 
   return {
     kind: 'branch',

@@ -50,8 +50,14 @@ describe('parsePullCliArgs pr', () => {
     );
   });
 
-  test('a missing ref parses to undefined', () => {
-    expect(parsePr([]).ref).toBeUndefined();
+  test('a missing ref throws a usage error', () => {
+    expect(() => parsePr([])).toThrow(
+      'Missing PR number or URL. Usage: venfork pull pr'
+    );
+    expect(() => parsePr(['--no-push'])).toThrow('Missing PR number or URL');
+    expect(() => parseIssue([])).toThrow(
+      'Missing issue number or URL. Usage: venfork pull issue'
+    );
   });
 });
 

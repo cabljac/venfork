@@ -168,6 +168,25 @@ describe('per-command help', () => {
   });
 });
 
+describe('usage errors', () => {
+  for (const [args, usage] of [
+    [['stage'], 'venfork stage <branch>'],
+    [
+      ['schedule', 'frobnicate'],
+      'venfork schedule <status|set <cron>|disable>',
+    ],
+    [['schedule', 'set'], 'venfork schedule <status|set <cron>|disable>'],
+  ] as const) {
+    test(`${args.join(' ')} reports usage on stderr only`, async () => {
+      const result = await runCli(...args);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain(usage);
+    });
+  }
+});
+
 describe('doctor --json output', () => {
   test('stays pure JSON in every state, including an invalid cron', async () => {
     const fx = await createMirrorFixture();

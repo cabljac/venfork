@@ -250,3 +250,12 @@ describe('parseStageCliArgs strictness', () => {
     ).toBe(7);
   });
 });
+
+describe('parseStageCliArgs missing branch', () => {
+  test('throws a usage error when no branch is given', () => {
+    expect(() => parseStageUnion([])).toThrow(
+      'Missing branch name. Usage: venfork stage <branch>'
+    );
+    expect(() => parseStageUnion(['--pr'])).toThrow('Missing branch name');
+  });
+});

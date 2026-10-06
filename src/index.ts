@@ -20,6 +20,7 @@ import { parseDoctorCliArgs } from './doctor-args.js';
 import { ensureGhAuth } from './git.js';
 import { parsePreserveCliArgs } from './preserve-args.js';
 import { parsePullCliArgs } from './pull-args.js';
+import { parseScheduleCliArgs } from './schedule-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
 import { parseStageCliArgs } from './stage-args.js';
 import { parseSyncCliArgs } from './sync-args.js';
@@ -91,9 +92,11 @@ async function main(): Promise<void> {
       await syncCommand(parsed.branch, { reportIssues: parsed.reportIssues });
       break;
     }
-    case 'schedule':
-      await scheduleCommand(args[1], args[2]);
+    case 'schedule': {
+      const parsed = parseScheduleCliArgs(args.slice(1));
+      await scheduleCommand(parsed.action, parsed.cron);
       break;
+    }
     case 'stage': {
       const parsed = parseStageCliArgs(args.slice(1));
       if (parsed.kind === 'issue') {

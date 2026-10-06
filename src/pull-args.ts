@@ -9,7 +9,7 @@ import {
 export type ParsedPullPrArgs = {
   kind: 'pr';
   /** PR number or URL. */
-  ref?: string;
+  ref: string;
   branchName?: string;
   push: boolean;
 };
@@ -18,7 +18,7 @@ export type ParsedPullPrArgs = {
 export type ParsedPullIssueArgs = {
   kind: 'issue';
   /** Issue number or URL. */
-  ref?: string;
+  ref: string;
   title?: string;
 };
 
@@ -69,12 +69,18 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
   if (sub === 'pr') {
     if (titleFlag) throw unknownOption(titleFlag, PR_USAGE);
     if (rest.length > 1) throw unexpectedArgument(rest[1], PR_USAGE);
+    if (rest.length === 0) {
+      throw new Error(`Missing PR number or URL. Usage: ${PR_USAGE}`);
+    }
     return { kind: 'pr', ref: rest[0], branchName, push: noPush === undefined };
   }
   if (sub === 'issue') {
     const stray = noPush ?? branchNameFlag;
     if (stray) throw unknownOption(stray, ISSUE_USAGE);
     if (rest.length > 1) throw unexpectedArgument(rest[1], ISSUE_USAGE);
+    if (rest.length === 0) {
+      throw new Error(`Missing issue number or URL. Usage: ${ISSUE_USAGE}`);
+    }
     return { kind: 'issue', ref: rest[0], title };
   }
   if (sub === undefined) {
