@@ -1,12 +1,50 @@
 import * as p from '@clack/prompts';
-import { readVenforkConfigFromRepo, updateVenforkConfig } from '../config.js';
+import {
+  readVenforkConfigFromRepo,
+  updateVenforkConfig,
+  type VenforkConfigPatch,
+} from '../config.js';
 import { normalizeWorkflowList } from '../shared/mirror-commit.js';
+import type { WorkflowsAction } from '../workflows-args.js';
+
+const LIST_EDITS: Record<
+  'allow' | 'block' | 'unallow' | 'unblock',
+  {
+    patch: keyof VenforkConfigPatch &
+      `${'enabled' | 'disabled'}Workflows${'Add' | 'Remove'}`;
+    list: 'enabledWorkflows' | 'disabledWorkflows';
+    label: string;
+  }
+> = {
+  allow: {
+    patch: 'enabledWorkflowsAdd',
+    list: 'enabledWorkflows',
+    label: 'Allowed workflow files',
+  },
+  unallow: {
+    patch: 'enabledWorkflowsRemove',
+    list: 'enabledWorkflows',
+    label: 'Allowed workflow files',
+  },
+  block: {
+    patch: 'disabledWorkflowsAdd',
+    list: 'disabledWorkflows',
+    label: 'Blocked workflow files',
+  },
+  unblock: {
+    patch: 'disabledWorkflowsRemove',
+    list: 'disabledWorkflows',
+    label: 'Blocked workflow files',
+  },
+};
 
 /**
- * Workflows command: manage workflow allowlist in venfork-config.
+ * Workflows command: shows or edits the workflow allowlist and block list in
+ * venfork-config. `allow`/`block` add files, `unallow`/`unblock` remove
+ * them, `clear` empties both.
  */
 export async function workflowsCommand(
-  action: 'status' | 'allow' | 'block' | 'clear',
+  action: WorkflowsAction,
   workflows: string[]
 ): Promise<void> {
   p.intro('🧩 Venfork Workflows');
@@ -56,26 +94,18 @@ export async function workflowsCommand(
       return;
     }
 
-    const normalized = normalizeWorkflowList(workflows);
-    if (action === 'allow') {
-      await updateVenforkConfig(repoDir, { enabledWorkflows: normalized });
-      p.note(
-        normalized.map((name) => `- ${name}`).join('\n'),
-        'Allowed workflow files'
-      );
-      p.outro(
-        '✨ Workflow allowlist updated. Run `venfork sync` to apply on the private mirror default branch.'
-      );
-      return;
-    }
-
-    await updateVenforkConfig(repoDir, { disabledWorkflows: normalized });
+    const names = normalizeWorkflowList(workflows);
+    const { patch, list, label } = LIST_EDITS[action];
+    const updated = await updateVenforkConfig(repoDir, { [patch]: names });
+    const current = updated[list] ?? [];
     p.note(
-      normalized.map((name) => `- ${name}`).join('\n'),
-      'Blocked workflow files'
+      current.length > 0
+        ? current.map((name) => `- ${name}`).join('\n')
+        : '(empty)',
+      label
     );
     p.outro(
-      '✨ Workflow blocklist updated. Run `venfork sync` to apply on the private mirror default branch.'
+      '✨ Workflow policy updated. Run `venfork sync` to apply on the private mirror default branch.'
     );
   } catch (error) {
     p.log.error(error instanceof Error ? error.message : String(error));

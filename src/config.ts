@@ -149,8 +149,18 @@ export type VenforkConfigPatch = Omit<
 > & {
   /** Merged into the current schedule; `null` removes it. */
   schedule?: VenforkConfig['schedule'] | null;
+  /** Replaces the whole allowlist; `null` clears it. */
   enabledWorkflows?: string[] | null;
+  /** Replaces the whole block list; `null` clears it. */
   disabledWorkflows?: string[] | null;
+  /** Workflow files to add to the allowlist as read at write time. */
+  enabledWorkflowsAdd?: string[];
+  /** Workflow files to drop from the allowlist as read at write time. */
+  enabledWorkflowsRemove?: string[];
+  /** Workflow files to add to the block list as read at write time. */
+  disabledWorkflowsAdd?: string[];
+  /** Workflow files to drop from the block list as read at write time. */
+  disabledWorkflowsRemove?: string[];
   /** Replaces the whole list; `null` clears it. */
   preserve?: string[] | null;
   /**
@@ -820,6 +830,18 @@ export async function readVenforkConfigFromRepoWithSha(
   return { config: parseConfig(fetched.raw, options), sha: fetched.sha };
 }
 
+function applyListDelta(
+  list: string[] | undefined,
+  add: string[] | undefined,
+  remove: string[] | undefined
+): string[] | undefined {
+  if (!add && !remove) return list;
+  const entries = new Set(list ?? []);
+  for (const entry of remove ?? []) entries.delete(entry);
+  for (const entry of add ?? []) entries.add(entry);
+  return entries.size > 0 ? [...entries] : undefined;
+}
+
 /**
  * Apply a `VenforkConfigPatch` on top of an already-read config and return
  * the fully merged + normalized result, without writing it. The retry loop
@@ -836,6 +858,10 @@ export function applyPatchAndNormalize(
   const {
     enabledWorkflows: _enabledWorkflowsPatch,
     disabledWorkflows: _disabledWorkflowsPatch,
+    enabledWorkflowsAdd: _enabledWorkflowsAddPatch,
+    enabledWorkflowsRemove: _enabledWorkflowsRemovePatch,
+    disabledWorkflowsAdd: _disabledWorkflowsAddPatch,
+    disabledWorkflowsRemove: _disabledWorkflowsRemovePatch,
     preserve: _preservePatch,
     preserveAdd: _preserveAddPatch,
     preserveRemove: _preserveRemovePatch,
@@ -872,21 +898,30 @@ export function applyPatchAndNormalize(
     merged.disabledWorkflows = patch.disabledWorkflows;
   }
 
+  merged.enabledWorkflows = applyListDelta(
+    merged.enabledWorkflows,
+    patch.enabledWorkflowsAdd,
+    patch.enabledWorkflowsRemove
+  );
+  if (merged.enabledWorkflows === undefined) delete merged.enabledWorkflows;
+  merged.disabledWorkflows = applyListDelta(
+    merged.disabledWorkflows,
+    patch.disabledWorkflowsAdd,
+    patch.disabledWorkflowsRemove
+  );
+  if (merged.disabledWorkflows === undefined) delete merged.disabledWorkflows;
+
   if (patch.preserve === null) {
     delete merged.preserve;
   } else if (patch.preserve !== undefined) {
     merged.preserve = patch.preserve;
   }
-  if (patch.preserveAdd || patch.preserveRemove) {
-    const entries = new Set(merged.preserve ?? []);
-    for (const entry of patch.preserveRemove ?? []) entries.delete(entry);
-    for (const entry of patch.preserveAdd ?? []) entries.add(entry);
-    if (entries.size > 0) {
-      merged.preserve = [...entries];
-    } else {
-      delete merged.preserve;
-    }
-  }
+  merged.preserve = applyListDelta(
+    merged.preserve,
+    patch.preserveAdd,
+    patch.preserveRemove
+  );
+  if (merged.preserve === undefined) delete merged.preserve;
 
   if (patch.shippedBranches === null) {
     delete merged.shippedBranches;

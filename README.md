@@ -499,7 +499,7 @@ If you miss the window, set the secret afterwards and run `venfork sync` locally
 - **Upgrades.** The workflow pins the venfork version that wrote it. Install a newer venfork locally and run `venfork sync` to move the mirror to it.
 - **Right after a release.** A release tag can exist for a few minutes before `npm publish` finishes. A local sync in that window can pin a version that npm does not have yet. The scheduled run then fails at "Install venfork" and opens the `venfork-sync-blocked` issue. The next run after the publish succeeds and closes it. To bridge the gap, set `VENFORK_INSTALL_SPEC` (see above).
 
-### `venfork workflows <status|allow|block|clear> [workflow-file ...]`
+### `venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...]`
 
 Manage which upstream workflow files should remain active in the private mirror when managed sync commit logic runs.
 
@@ -508,13 +508,14 @@ Manage which upstream workflow files should remain active in the private mirror 
 venfork workflows status
 venfork workflows allow ci.yml lint.yml
 venfork workflows block deploy.yml e2e.yml
+venfork workflows unblock e2e.yml
 venfork workflows clear
 ```
 
 **What it does:**
 1. Stores `enabledWorkflows` / `disabledWorkflows` in `.venfork/config.json` on `venfork-config`
-2. `allow` sets the allowlist by workflow filename
-3. `block` sets the blocklist by workflow filename
+2. `allow` adds workflow filenames to the allowlist; `unallow` removes them
+3. `block` adds workflow filenames to the blocklist; `unblock` removes them. Blocking one more file never unblocks the files already on the list
 4. `clear` removes both lists
 5. Precedence: if `enabledWorkflows` is non-empty, it is used and `disabledWorkflows` is ignored
 6. Changes apply to the mirror default branch on next `venfork sync` (a non-empty allow or block list is enough to put the managed commit on the mirror, with or without a schedule or a preserve list)

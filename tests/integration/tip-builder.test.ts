@@ -6,7 +6,7 @@ import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
-import { syncCommand } from '../../src/commands.js';
+import { syncCommand, workflowsCommand } from '../../src/commands.js';
 import { updateVenforkConfig } from '../../src/config.js';
 import {
   createMirrorFixture,
@@ -316,6 +316,21 @@ describe('workflow lists without a schedule', () => {
     expect(await fx.git(fx.origin, 'log', '-1', '--format=%s', 'main')).toBe(
       'chore: venfork-managed mirror commit'
     );
+  });
+
+  test('blocking a second workflow keeps the first blocked', async () => {
+    const OTHER = '.github/workflows/other.yml';
+    await fx.commitOnUpstream({
+      [DEPLOY]: 'deploy\n',
+      [CI]: 'ci\n',
+      [OTHER]: 'other\n',
+    });
+    await workflowsCommand('block', ['deploy.yml']);
+    await workflowsCommand('block', ['other.yml']);
+
+    await sync();
+
+    expect(await workflowNames()).toBe(CI);
   });
 
   test('an allowlist alone filters without a schedule', async () => {

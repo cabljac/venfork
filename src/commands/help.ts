@@ -100,8 +100,10 @@ venfork pull issue <number-or-url> [--title <text>]
   ],
   [
     'workflows',
-    `venfork workflows <status|allow|block|clear> [workflow-file ...]
-  Configure workflow allowlist/blocklist policy in venfork-config`,
+    `venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...]
+  Configure workflow allowlist/blocklist policy in venfork-config
+  allow/block add files to their list; unallow/unblock remove them;
+  clear empties both lists`,
   ],
   [
     'preserve',

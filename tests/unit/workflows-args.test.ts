@@ -40,6 +40,21 @@ describe('parseWorkflowsCliArgs', () => {
     expect(() => parseWorkflowsCliArgs(['block'])).toThrow();
   });
 
+  test.each(['unblock', 'unallow'] as const)('parses %s values', (action) => {
+    expect(parseWorkflowsCliArgs([action, 'ci.yml,lint.yml', 'x.yml'])).toEqual(
+      { action, workflows: ['ci.yml', 'lint.yml', 'x.yml'] }
+    );
+  });
+
+  test.each(['unblock', 'unallow'])(
+    'throws for %s without values',
+    (action) => {
+      expect(() => parseWorkflowsCliArgs([action])).toThrow(
+        `Usage: venfork workflows ${action} <workflow-file>`
+      );
+    }
+  );
+
   test('throws for unknown action', () => {
     expect(() => parseWorkflowsCliArgs(['unknown'])).toThrow();
   });

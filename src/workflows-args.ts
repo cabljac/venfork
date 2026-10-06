@@ -1,12 +1,28 @@
 import { scanArgs, unexpectedArgument } from './shared/args.js';
 
+/** A `venfork workflows` action. */
+export type WorkflowsAction =
+  | 'status'
+  | 'allow'
+  | 'block'
+  | 'unallow'
+  | 'unblock'
+  | 'clear';
+
 export type ParsedWorkflowsArgs = {
-  action: 'status' | 'allow' | 'block' | 'clear';
+  action: WorkflowsAction;
   workflows: string[];
 };
 
 const USAGE =
-  'venfork workflows <status|allow|block|clear> [workflow-file ...]';
+  'venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...]';
+
+const LIST_ACTIONS: readonly WorkflowsAction[] = [
+  'allow',
+  'block',
+  'unallow',
+  'unblock',
+];
 
 /**
  * Parse `venfork workflows ...` argv after the `workflows` token.
@@ -25,7 +41,8 @@ export function parseWorkflowsCliArgs(
     return { action: actionRaw, workflows: [] };
   }
 
-  if (actionRaw === 'allow' || actionRaw === 'block') {
+  const action = LIST_ACTIONS.find((candidate) => candidate === actionRaw);
+  if (action) {
     const values = rest.flatMap((entry) =>
       entry
         .split(',')
@@ -34,10 +51,10 @@ export function parseWorkflowsCliArgs(
     );
     if (values.length === 0) {
       throw new Error(
-        `Usage: venfork workflows ${actionRaw} <workflow-file> [more-workflow-files]`
+        `Usage: venfork workflows ${action} <workflow-file> [more-workflow-files]`
       );
     }
-    return { action: actionRaw, workflows: values };
+    return { action, workflows: values };
   }
 
   throw new Error(`Usage: ${USAGE}`);

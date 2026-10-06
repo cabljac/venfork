@@ -236,6 +236,42 @@ describe('updateVenforkConfig', () => {
     expect(written.preserve).toEqual(['tools/a.txt', 'tools/c.txt']);
   });
 
+  test('workflow list deltas apply to the lists as read', async () => {
+    mockResponses.set(
+      'git show FETCH_HEAD:.venfork/config.json',
+      mockReadResponse({
+        ...baseConfig,
+        enabledWorkflows: ['ci.yml', 'lint.yml'],
+        disabledWorkflows: ['deploy.yml'],
+      })
+    );
+
+    const updated = await updateVenforkConfig('/tmp/repo', {
+      enabledWorkflowsAdd: ['build.yml', 'ci.yml'],
+      enabledWorkflowsRemove: ['lint.yml'],
+      disabledWorkflowsAdd: ['e2e.yml'],
+    });
+
+    expect(updated.enabledWorkflows).toEqual(['build.yml', 'ci.yml']);
+    expect(updated.disabledWorkflows).toEqual(['deploy.yml', 'e2e.yml']);
+    const written = JSON.parse(writeFileCalls.at(-1)?.content ?? '{}');
+    expect(written.disabledWorkflows).toEqual(['deploy.yml', 'e2e.yml']);
+  });
+
+  test('removing the last workflow from a list drops the field', async () => {
+    mockResponses.set(
+      'git show FETCH_HEAD:.venfork/config.json',
+      mockReadResponse({ ...baseConfig, disabledWorkflows: ['deploy.yml'] })
+    );
+
+    const updated = await updateVenforkConfig('/tmp/repo', {
+      disabledWorkflowsRemove: ['deploy.yml'],
+    });
+
+    expect(updated.disabledWorkflows).toBeUndefined();
+    expect(writeFileCalls.at(-1)?.content).not.toContain('disabledWorkflows');
+  });
+
   test('preserveRemove of the last entry drops the field', async () => {
     mockResponses.set(
       'git show FETCH_HEAD:.venfork/config.json',

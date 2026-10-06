@@ -2726,6 +2726,78 @@ describe('workflowsCommand', () => {
       )
     ).toBe(true);
   });
+
+  async function writtenPolicy(
+    current: Record<string, unknown>,
+    action: Parameters<typeof workflowsCommand>[0],
+    workflows: string[]
+  ): Promise<Record<string, unknown>> {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        ...current,
+      }),
+      stderr: '',
+    });
+
+    await workflowsCommand(action, workflows);
+
+    const write = writeFileCalls
+      .filter((w) => w.path.endsWith('.venfork/config.json'))
+      .at(-1);
+    return JSON.parse(write?.content ?? '{}');
+  }
+
+  test('block adds to the block list instead of replacing it', async () => {
+    const written = await writtenPolicy(
+      { disabledWorkflows: ['ci.yml'] },
+      'block',
+      ['.github/workflows/other.yml', 'other.yml']
+    );
+
+    expect(written.disabledWorkflows).toEqual(['ci.yml', 'other.yml']);
+  });
+
+  test('allow adds to the allowlist instead of replacing it', async () => {
+    const written = await writtenPolicy(
+      { enabledWorkflows: ['ci.yml'] },
+      'allow',
+      ['lint.yml']
+    );
+
+    expect(written.enabledWorkflows).toEqual(['ci.yml', 'lint.yml']);
+  });
+
+  test('unblock removes only the named files from the block list', async () => {
+    const written = await writtenPolicy(
+      {
+        disabledWorkflows: ['ci.yml', 'deploy.yml'],
+        enabledWorkflows: ['x.yml'],
+      },
+      'unblock',
+      ['.github/workflows/ci.yml']
+    );
+
+    expect(written.disabledWorkflows).toEqual(['deploy.yml']);
+    expect(written.enabledWorkflows).toEqual(['x.yml']);
+  });
+
+  test('unallow removes only the named files from the allowlist', async () => {
+    const written = await writtenPolicy(
+      {
+        enabledWorkflows: ['ci.yml', 'lint.yml'],
+        disabledWorkflows: ['ci.yml'],
+      },
+      'unallow',
+      ['lint.yml']
+    );
+
+    expect(written.enabledWorkflows).toEqual(['ci.yml']);
+    expect(written.disabledWorkflows).toEqual(['ci.yml']);
+  });
 });
 
 describe('setupCommand - organization tests', () => {
