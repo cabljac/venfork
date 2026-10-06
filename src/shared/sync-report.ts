@@ -80,7 +80,11 @@ export async function resolveReportRepo(cwd: string): Promise<string | null> {
   return repo;
 }
 
-/** Open labelled issue numbers. REST, not `gh issue list`: its search index lags a just-opened issue. */
+/**
+ * Open labelled issue numbers. Every GitHub issue listing is eventually
+ * consistent, so this only de-duplicates across runs; within a run the
+ * sync step reports once and tells the failure step via `$GITHUB_OUTPUT`.
+ */
 async function listOpenIssues(cwd: string, repo: string): Promise<number[]> {
   const out = await gh(cwd, [
     'api',
