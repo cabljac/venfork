@@ -72,6 +72,32 @@ export function parseRepoPath(url: string): string {
   return /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(repoPath) ? repoPath : '';
 }
 
+/** Transport for github.com remotes, as `gh config get git_protocol` reports it. */
+export type GitProtocol = 'https' | 'ssh';
+
+const GITHUB_URL_PREFIX =
+  /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?(?:www\.|ssh\.)?github\.com(?::\d+)?[:/]/i;
+
+/**
+ * Rewrites a github.com repo URL to `protocol`
+ * (`https://github.com/<owner>/<repo>.git` or `git@github.com:<owner>/<repo>.git`).
+ * Any other URL, a bare `owner/repo` or a local path, is returned unchanged.
+ *
+ * @param url Remote URL as recorded.
+ * @param protocol Transport to use, or null to keep `url` as is.
+ */
+export function githubUrlForProtocol(
+  url: string,
+  protocol: GitProtocol | null
+): string {
+  if (!protocol || !GITHUB_URL_PREFIX.test(url.trim())) return url;
+  const repoPath = parseRepoPath(url);
+  if (!repoPath) return url;
+  return protocol === 'https'
+    ? `https://github.com/${repoPath}.git`
+    : `git@github.com:${repoPath}.git`;
+}
+
 /**
  * Extracts owner from a GitHub URL
  *

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   DEFAULT_REPO_NAME,
+  githubUrlForProtocol,
   normalizeGitHubRepoInput,
   parseOwner,
   parseRepoName,
@@ -224,6 +225,39 @@ describe('parseOwner', () => {
   test('extracts owner from URL with www', () => {
     expect(parseOwner('https://www.github.com/facebook/react.git')).toBe(
       'facebook'
+    );
+  });
+});
+
+describe('githubUrlForProtocol', () => {
+  test.each([
+    [
+      'git@github.com:acme/widget.git',
+      'https',
+      'https://github.com/acme/widget.git',
+    ],
+    ['https://github.com/acme/widget', 'ssh', 'git@github.com:acme/widget.git'],
+    [
+      'ssh://git@github.com/acme/widget.git',
+      'https',
+      'https://github.com/acme/widget.git',
+    ],
+  ] as const)('rewrites %s for %s', (url, protocol, expected) => {
+    expect(githubUrlForProtocol(url, protocol)).toBe(expected);
+  });
+
+  test.each([
+    'git@git.example.com:team/widget.git',
+    'https://gitlab.com/team/widget.git',
+    '/tmp/fixture/upstream.git',
+    'acme/widget',
+  ])('keeps %s unchanged', (url) => {
+    expect(githubUrlForProtocol(url, 'https')).toBe(url);
+  });
+
+  test('keeps the URL when gh reports no protocol', () => {
+    expect(githubUrlForProtocol('git@github.com:acme/widget.git', null)).toBe(
+      'git@github.com:acme/widget.git'
     );
   });
 });

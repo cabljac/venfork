@@ -6,10 +6,16 @@ import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { createConfigBranch, readVenforkConfigFromRepo } from '../config.js';
 import { ConfigError } from '../errors.js';
-import { getGitHubUsername, ghRepoExists, ghRepoIsForkOf } from '../git.js';
+import {
+  getGitHubUsername,
+  ghGitProtocol,
+  ghRepoExists,
+  ghRepoIsForkOf,
+} from '../git.js';
 import { pathExists } from '../shared/fs.js';
 import { netExec, runNetOp, seedMirrorInChunks } from '../shared/net.js';
 import {
+  githubUrlForProtocol,
   normalizeGitHubRepoInput,
   parseRepoName,
   parseRepoPath,
@@ -24,8 +30,7 @@ async function ensureVenforkRemotes(
   const setOrAdd = async (name: string, fetchUrl: string) => {
     const cur = await $({ cwd, reject: false })`git remote get-url ${name}`;
     if (cur.exitCode === 0) {
-      const existing = cur.stdout.trim();
-      if (parseRepoPath(existing) !== parseRepoPath(fetchUrl)) {
+      if (cur.stdout.trim() !== fetchUrl) {
         await $({ cwd })`git remote set-url ${name} ${fetchUrl}`;
       }
     } else {
@@ -429,11 +434,18 @@ export async function setupCommand(
     // Step 7: Venfork config branch, checked before any remote is rewired
     s.start('Creating venfork configuration');
     const mode = noPublic ? 'no-public' : 'standard';
+    const protocol = await ghGitProtocol();
+    const upstreamRemoteUrl = githubUrlForProtocol(
+      config.upstreamUrl,
+      protocol
+    );
+    const publicRemoteUrl =
+      publicForkUrl && githubUrlForProtocol(publicForkUrl, protocol);
     try {
       await createConfigBranch(
         repoDir,
-        noPublic ? null : (publicForkUrl ?? null),
-        config.upstreamUrl,
+        publicRemoteUrl ?? null,
+        upstreamRemoteUrl,
         mode
       );
       s.stop('Venfork configuration created');
@@ -441,15 +453,15 @@ export async function setupCommand(
       if (!(err instanceof ConfigError && err.reason === 'exists')) throw err;
       await assertExistingConfigAgrees(repoDir, {
         mode,
-        upstreamUrl: config.upstreamUrl,
-        publicForkUrl: publicForkUrl ?? null,
+        upstreamUrl: upstreamRemoteUrl,
+        publicForkUrl: publicRemoteUrl ?? null,
       });
       s.stop('Keeping the existing venfork configuration');
     }
 
     // Step 8: Configure remotes
     s.start('Configuring git remotes');
-    await ensureVenforkRemotes(repoDir, publicForkUrl, config.upstreamUrl);
+    await ensureVenforkRemotes(repoDir, publicRemoteUrl, upstreamRemoteUrl);
     s.stop('Git remotes configured');
 
     const recovered = forkPreexisted || mirrorPreexisted;

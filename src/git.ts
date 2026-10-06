@@ -1,6 +1,7 @@
 import { $ } from 'execa';
 import { AuthenticationError, GitError } from './errors.js';
 import { netExec, netFailureReason } from './shared/net.js';
+import type { GitProtocol } from './utils.js';
 
 /**
  * Checks if GitHub CLI is authenticated
@@ -24,6 +25,18 @@ export async function ensureGhAuth(): Promise<void> {
   if (!(await checkGhAuth())) {
     throw new AuthenticationError();
   }
+}
+
+/**
+ * The transport gh uses for github.com (`gh config get git_protocol`), or
+ * null when gh does not say, in which case URLs are kept as recorded.
+ */
+export async function ghGitProtocol(): Promise<GitProtocol | null> {
+  const result = await $({
+    reject: false,
+  })`gh config get git_protocol --host github.com`;
+  const value = result.exitCode === 0 ? result.stdout.trim() : '';
+  return value === 'https' || value === 'ssh' ? value : null;
 }
 
 /**

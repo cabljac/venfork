@@ -3138,6 +3138,109 @@ describe('cloneCommand', () => {
   });
 });
 
+describe('setupCommand remote transport', () => {
+  test.each([
+    ['https', 'https://github.com/test/repo.git', 'https://github.com/'],
+    ['ssh', 'git@github.com:test/repo.git', 'git@github.com:'],
+  ])(
+    'records and adds remotes over %s when gh uses it',
+    async (protocol, upstream, prefix) => {
+      mockResponses.set('gh config get git_protocol', {
+        exitCode: 0,
+        stdout: `${protocol}\n`,
+        stderr: '',
+      });
+      mockResponses.set('git remote get-url upstream', {
+        exitCode: 2,
+        stdout: '',
+        stderr: "error: No such remote 'upstream'",
+      });
+
+      try {
+        await setupCommand(
+          'git@github.com:test/repo.git',
+          'test-vendor',
+          'acme'
+        );
+      } catch {
+        // Expected in mocked env
+      }
+
+      const configWrite = writeFileCalls.find((w) =>
+        w.path.endsWith('.venfork/config.json')
+      );
+      const parsed = JSON.parse(configWrite?.content ?? '{}');
+      expect(parsed.upstreamUrl).toBe(upstream);
+      expect(parsed.publicForkUrl).toBe(`${prefix}acme/repo.git`);
+      expect(execaCalls).toContain(`git remote add upstream ${upstream}`);
+    }
+  );
+});
+
+describe('cloneCommand remote transport', () => {
+  function useRecordedConfig(protocol: string): void {
+    mockResponses.set('test -d', () =>
+      Promise.reject(new Error('no such directory'))
+    );
+    mockResponses.set('gh config get git_protocol', {
+      exitCode: 0,
+      stdout: `${protocol}\n`,
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:acme/project.git',
+        upstreamUrl: 'https://github.com/upstream/project',
+      }),
+      stderr: '',
+    });
+  }
+
+  test.each([
+    [
+      'https',
+      'git remote add public https://github.com/acme/project.git',
+      'git remote add upstream https://github.com/upstream/project.git',
+    ],
+    [
+      'ssh',
+      'git remote add public git@github.com:acme/project.git',
+      'git remote add upstream git@github.com:upstream/project.git',
+    ],
+  ])(
+    'adds public and upstream over %s when gh uses it',
+    async (protocol, publicAdd, upstreamAdd) => {
+      useRecordedConfig(protocol);
+
+      await cloneCommand('acme/project-private');
+
+      const adds = execaCalls.filter((cmd) => cmd.startsWith('git remote add'));
+      expect(adds).toEqual([publicAdd, upstreamAdd]);
+    }
+  );
+
+  test('keeps a non-github.com URL as recorded', async () => {
+    useRecordedConfig('https');
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        mode: 'no-public',
+        upstreamUrl: 'git@git.example.com:team/project.git',
+      }),
+      stderr: '',
+    });
+
+    await cloneCommand('acme/project-private');
+
+    expect(
+      execaCalls.filter((cmd) => cmd.startsWith('git remote add'))
+    ).toEqual(['git remote add upstream git@git.example.com:team/project.git']);
+  });
+});
+
 describe('cloneCommand - error paths', () => {
   test('requires vendor repo URL', async () => {
     try {

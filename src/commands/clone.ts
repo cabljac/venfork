@@ -1,7 +1,9 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { fetchVenforkConfig } from '../config.js';
+import { ghGitProtocol } from '../git.js';
 import {
+  githubUrlForProtocol,
   normalizeGitHubRepoInput,
   parseOwner,
   parseRepoName,
@@ -213,6 +215,10 @@ export async function cloneCommand(
 
     // Step 4: Configure remotes
     s.start('Configuring git remotes');
+    const protocol = await ghGitProtocol();
+    publicForkUrl =
+      publicForkUrl && githubUrlForProtocol(publicForkUrl, protocol);
+    upstreamUrl = githubUrlForProtocol(upstreamUrl, protocol);
 
     // origin is already configured from clone
 
