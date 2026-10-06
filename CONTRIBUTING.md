@@ -271,6 +271,12 @@ Releases are automated by [release-please](https://github.com/googleapis/release
 2. The release PR contains the bumped version in `package.json`, the new section in `CHANGELOG.md`, and `.release-please-manifest.json` updated. Review and merge it when you're ready to ship.
 3. Merging the release PR creates the git tag (e.g. `v0.5.0`) and triggers the npm publish + binary release jobs in the same workflow.
 
+   npm publishing uses [trusted publishing](https://docs.npmjs.com/trusted-publishers): the package's trusted publisher on npmjs.com names this repository and `release.yml`, and no npm token is stored. If the npm job fails after the tag exists, publish that tag again without a new release:
+
+   ```bash
+   gh workflow run release.yml -f tag=v0.11.0
+   ```
+
 ### Maintainer responsibilities
 
 - Make sure commits landing on `main` use conventional prefixes (otherwise the release PR won't include them in the changelog).
