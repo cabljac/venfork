@@ -1,5 +1,29 @@
 # venfork
 
+## [0.11.0](https://github.com/cabljac/venfork/compare/v0.10.0...v0.11.0) (2026-10-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* `venfork status` is removed; use `venfork doctor`. `pull-request <n>` is now `pull pr <n>`, `issue pull <n>` is `pull issue <n>`, `issue stage <n>` is `stage issue <n>`; the old names print the replacement. `stage issue` and `stage branch` are subcommands, so a branch named `issue` or `branch` needs `stage branch <name>`.
+* Unknown options and extra arguments are rejected by every command; an entry starting with `-` needs `--` before it. `workflows allow` and `workflows block` now add to their lists instead of replacing them; use `workflows unallow` and `workflows unblock` to remove entries. A prompt that hits end of input exits 130.
+* Preserve entries must be single files already committed on origin's default branch; globs, directories and the sync workflow are rejected, and old entries block sync and schedule until removed with `venfork preserve remove <entry>`.
+* Stage always rewrites the branch history (SHAs change) and refuses commits, file contents, PR titles and bodies that reference the private mirror.
+* `VENFORK_PUSH_TOKEN` is required in both modes and the generated workflow no longer falls back to the job token; use a fine-grained token scoped to the mirror and the public fork, not `gh auth token`. `VENFORK_INSTALL_SPEC` must be `venfork@<semver>` or an https `.tgz` URL.
+* Scheduled mirrors created by 0.10 or earlier must run `venfork sync` locally once after upgrading; until then every scheduled run fails with the migration message. See the README section on upgrading.
+* `clone` and `setup` record every remote over the transport `gh config get git_protocol` reports.
+* The `bun-windows-arm64` binary is no longer published.
+
+### Features
+
+* **issue:** carry upstream comments into the mirror on issue pull ([#50](https://github.com/cabljac/venfork/issues/50)) ([8453867](https://github.com/cabljac/venfork/commit/84538672eb144a35cd53c0ddd1353c6774142936))
+* make scheduled sync idempotent and the private mirror invisible to upstream ([#83](https://github.com/cabljac/venfork/issues/83)) ([5ea0eb3](https://github.com/cabljac/venfork/commit/5ea0eb3ed66e22d78443a6d360a548805fa238bf))
+
+
+### Bug Fixes
+
+* **stage:** stop leaking the private mirror into upstream PRs ([#48](https://github.com/cabljac/venfork/issues/48)) ([40d00c5](https://github.com/cabljac/venfork/commit/40d00c5c8799131b0cde1b94f1b09be893fce330))
+
 ## [0.10.0](https://github.com/cabljac/venfork/compare/v0.9.0...v0.10.0) (2026-05-18)
 
 
