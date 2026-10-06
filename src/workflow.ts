@@ -1,6 +1,9 @@
+import { VENFORK_VERSION } from './version.js';
+
 const WORKFLOW_NAME = 'Venfork Sync';
 const WORKFLOW_FILENAME = '.github/workflows/venfork-sync.yml';
 
+/** Repo-relative path of the managed sync workflow file. */
 export function getSyncWorkflowPath(): string {
   return WORKFLOW_FILENAME;
 }
@@ -19,10 +22,14 @@ function escapeCronForYaml(cron: string): string {
  * In `'standard'` mode the workflow configures both `upstream` and `public`
  * remotes; in `'no-public'` mode the public-remote block is omitted so the
  * sync only mirrors upstream → origin.
+ *
+ * The runner installs exactly `version` (default: the running CLI), so the
+ * YAML a runner regenerates matches the YAML already on the default branch.
  */
 export function generateSyncWorkflow(
   cron: string,
-  mode: 'standard' | 'no-public' = 'standard'
+  mode: 'standard' | 'no-public' = 'standard',
+  version: string = VENFORK_VERSION
 ): string {
   const safeCron = escapeCronForYaml(cron);
   const noPublic = mode === 'no-public';
@@ -62,15 +69,45 @@ on:
 
 permissions:
   contents: write
+  issues: write
+
+concurrency:
+  group: venfork-sync-\${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
+      - name: Check VENFORK_PUSH_TOKEN
+        id: token-check
+        shell: bash
+        env:
+          VENFORK_PUSH_TOKEN: \${{ secrets.VENFORK_PUSH_TOKEN }}
+        run: |
+          if [ -z "$VENFORK_PUSH_TOKEN" ]; then
+            echo "::error::VENFORK_PUSH_TOKEN is not set on this repository. Create a fine-grained token with Contents and Workflows write for the mirror and the public fork, then: gh secret set VENFORK_PUSH_TOKEN --repo $GITHUB_REPOSITORY --body <token>"
+            exit 1
+          fi
+      - name: Install venfork
+        env:
+          VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SPEC="\${VENFORK_INSTALL_SPEC:-venfork@${version}}"
+          SEMVER_SPEC='^venfork@[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          TARBALL_SPEC='^https://[^[:space:]]+\\.tgz$'
+          if ! [[ "$SPEC" =~ $SEMVER_SPEC ]] && ! [[ "$SPEC" =~ $TARBALL_SPEC ]]; then
+            echo "::error::VENFORK_INSTALL_SPEC must be venfork@<semver> or an https:// URL ending in .tgz"
+            exit 1
+          fi
+          npm install -g --ignore-scripts "$SPEC"
       - name: Checkout mirror
         uses: actions/checkout@v4
         with:
-          token: \${{ secrets.VENFORK_PUSH_TOKEN || github.token }}
+          token: \${{ secrets.VENFORK_PUSH_TOKEN }}
           fetch-depth: 0
       - name: Rewrite SSH GitHub URLs to HTTPS
         shell: bash
@@ -82,13 +119,44 @@ jobs:
           # value is a separate entry under the same key.
           git config --global --add url."https://github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
-      - name: Install venfork
-        run: npm install -g venfork
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com:22/"
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@ssh.github.com:443/"
+          git config --global --add url."https://github.com/".insteadOf "git@GitHub.com:"
       - name: Configure venfork remotes
         shell: bash
         run: |
 ${remotesScript}
       - name: Sync from upstream
-        run: venfork sync
+        id: sync
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: venfork sync --report-issues
+      - name: Report failed sync
+        if: failure() && steps.sync.outputs.reported != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: \${{ github.token }}
+          RUN_URL: \${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}
+          TOKEN_CHECK: \${{ steps.token-check.outcome }}
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          MESSAGE="Scheduled venfork sync failed. See $RUN_URL"
+          if [ "$TOKEN_CHECK" = "failure" ]; then
+            MESSAGE="$MESSAGE"$'\\n\\n'"Cause: the VENFORK_PUSH_TOKEN secret is not set. Create a fine-grained token with Contents and Workflows write for the mirror and the public fork, then run: gh secret set VENFORK_PUSH_TOKEN --repo $REPO --body <token>"
+          fi
+          if ! gh label list --repo "$REPO" --search venfork-sync-blocked --json name --jq '.[].name' | grep -qx venfork-sync-blocked; then
+            gh label create venfork-sync-blocked --repo "$REPO" --color B60205 --description "Scheduled venfork sync is blocked"
+          fi
+          NUMBER="$(gh api "repos/$REPO/issues?labels=venfork-sync-blocked&state=open&per_page=100" --jq 'map(select(.pull_request == null))[0].number // empty')"
+          if [ -z "$NUMBER" ]; then
+            gh issue create --repo "$REPO" --label venfork-sync-blocked --title "Scheduled sync failed" --body "$MESSAGE"
+          # A blocked sync already wrote this run URL into the issue body.
+          else
+            BODY="$(gh issue view "$NUMBER" --repo "$REPO" --json body --jq '.body')"
+            if ! grep -qF "$RUN_URL" <<<"$BODY"; then
+              gh issue comment "$NUMBER" --repo "$REPO" --body "$MESSAGE"
+            fi
+          fi
 `;
 }

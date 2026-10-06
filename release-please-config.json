@@ -4,7 +4,8 @@
     ".": {
       "release-type": "node",
       "include-component-in-tag": false,
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": true
     }
   }
 }

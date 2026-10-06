@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import * as p from '@clack/prompts';
 import { parseCloneCliArgs } from './clone-args.js';
+import { commandHelp } from './commands/help.js';
 import {
   cloneCommand,
+  doctorCommand,
   issueCommand,
   preserveCommand,
   pullRequestCommand,
@@ -11,16 +12,28 @@ import {
   setupCommand,
   showHelp,
   stageCommand,
-  statusCommand,
   syncCommand,
   workflowsCommand,
 } from './commands.js';
-import { parseIssueCliArgs } from './issue-args.js';
+import { requiresGhAuth } from './dispatch.js';
+import { parseDoctorCliArgs } from './doctor-args.js';
+import { ensureGhAuth } from './git.js';
 import { parsePreserveCliArgs } from './preserve-args.js';
-import { parsePullRequestCliArgs } from './pull-request-args.js';
+import { parsePullCliArgs } from './pull-args.js';
+import { parseScheduleCliArgs } from './schedule-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
 import { parseStageCliArgs } from './stage-args.js';
+import { parseSyncCliArgs } from './sync-args.js';
+import { VENFORK_VERSION } from './version.js';
 import { parseWorkflowsCliArgs } from './workflows-args.js';
+
+const RENAMED: Record<string, string> = {
+  'pull-request':
+    '`venfork pull-request` is now `venfork pull pr <number-or-url>`.',
+  issue:
+    '`venfork issue` was split: use `venfork pull issue <number-or-url>` to bring an upstream issue in, or `venfork stage issue <number-or-url>` to publish a mirror issue.',
+  status: '`venfork status` is now `venfork doctor`.',
+};
 
 /**
  * Main CLI entry point
@@ -35,8 +48,29 @@ async function main(): Promise<void> {
     command === '--help' ||
     command === '-h'
   ) {
-    showHelp();
+    const [target, ...targetRest] = args.slice(1);
+    const usage = target ? commandHelp(target, targetRest) : null;
+    if (usage) {
+      console.log(usage);
+    } else {
+      showHelp();
+    }
     return;
+  }
+
+  if (command === '--version' || command === '-v' || command === 'version') {
+    console.log(VENFORK_VERSION);
+    return;
+  }
+
+  const usage = commandHelp(command, args.slice(1));
+  if (usage && args.slice(1).some((arg) => arg === '-h' || arg === '--help')) {
+    console.log(usage);
+    return;
+  }
+
+  if (requiresGhAuth(command, args.slice(1))) {
+    await ensureGhAuth();
   }
 
   switch (command) {
@@ -59,14 +93,22 @@ async function main(): Promise<void> {
       });
       break;
     }
-    case 'sync':
-      await syncCommand(args[1]);
+    case 'sync': {
+      const parsed = parseSyncCliArgs(args.slice(1));
+      await syncCommand(parsed.branch, { reportIssues: parsed.reportIssues });
       break;
-    case 'schedule':
-      await scheduleCommand(args[1], args[2]);
+    }
+    case 'schedule': {
+      const parsed = parseScheduleCliArgs(args.slice(1));
+      await scheduleCommand(parsed.action, parsed.cron);
       break;
+    }
     case 'stage': {
       const parsed = parseStageCliArgs(args.slice(1));
+      if (parsed.kind === 'issue') {
+        await issueCommand('stage', parsed.ref, { title: parsed.title });
+        break;
+      }
       await stageCommand(parsed.branch, {
         createPr: parsed.createPr,
         draft: parsed.draft,
@@ -77,9 +119,13 @@ async function main(): Promise<void> {
       });
       break;
     }
-    case 'status':
-      await statusCommand();
+    case 'doctor': {
+      const parsed = parseDoctorCliArgs(args.slice(1));
+      if (!(await doctorCommand({ json: parsed.json }))) {
+        process.exitCode = 1;
+      }
       break;
+    }
     case 'workflows': {
       const parsed = parseWorkflowsCliArgs(args.slice(1));
       await workflowsCommand(parsed.action, parsed.workflows);
@@ -90,29 +136,44 @@ async function main(): Promise<void> {
       await preserveCommand(parsed.action, parsed.paths);
       break;
     }
-    case 'pull-request': {
-      const parsed = parsePullRequestCliArgs(args.slice(1));
-      await pullRequestCommand(parsed.pr, {
-        branchName: parsed.branchName,
-        push: parsed.push,
-      });
+    case 'pull': {
+      const parsed = parsePullCliArgs(args.slice(1));
+      if (parsed.kind === 'pr') {
+        await pullRequestCommand(parsed.ref, {
+          branchName: parsed.branchName,
+          push: parsed.push,
+        });
+      } else {
+        await issueCommand('pull', parsed.ref, { title: parsed.title });
+      }
       break;
     }
-    case 'issue': {
-      const parsed = parseIssueCliArgs(args.slice(1));
-      await issueCommand(parsed.action, parsed.target, {
-        title: parsed.title,
-      });
-      break;
-    }
-    default:
-      p.log.error(`Unknown command: ${command}`);
-      showHelp();
+    default: {
+      const renamed = RENAMED[command];
+      console.error(
+        renamed ?? `Unknown command: ${command}. Run \`venfork help\`.`
+      );
       process.exit(1);
+    }
   }
 }
 
-main().catch((error) => {
-  p.log.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+// A clack prompt whose stdin hits EOF never resolves; the loop then drains
+// with the command still pending, and Node would exit 0.
+function exitOnAbandonedPrompt(): void {
+  if (process.stdout.isTTY) process.stdout.write('\x1b[?25h');
+  process.stderr.write('Cancelled: input ended at a prompt\n');
+  process.exit(130);
+}
+
+process.on('beforeExit', exitOnAbandonedPrompt);
+main()
+  .finally(() => {
+    process.off('beforeExit', exitOnAbandonedPrompt);
+  })
+  .catch((error) => {
+    console.error(
+      `Error: ${error instanceof Error ? error.message : String(error)}`
+    );
+    process.exit(1);
+  });

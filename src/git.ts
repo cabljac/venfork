@@ -1,4 +1,7 @@
 import { $ } from 'execa';
+import { AuthenticationError, GitError } from './errors.js';
+import { netExec, netFailureReason } from './shared/net.js';
+import type { GitProtocol } from './utils.js';
 
 /**
  * Checks if GitHub CLI is authenticated
@@ -12,6 +15,28 @@ export async function checkGhAuth(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Throws `AuthenticationError` unless the GitHub CLI is authenticated.
+ * Called by the CLI dispatcher for commands that talk to GitHub through gh.
+ */
+export async function ensureGhAuth(): Promise<void> {
+  if (!(await checkGhAuth())) {
+    throw new AuthenticationError();
+  }
+}
+
+/**
+ * The transport gh uses for github.com (`gh config get git_protocol`), or
+ * null when gh does not say, in which case URLs are kept as recorded.
+ */
+export async function ghGitProtocol(): Promise<GitProtocol | null> {
+  const result = await $({
+    reject: false,
+  })`gh config get git_protocol --host github.com`;
+  const value = result.exitCode === 0 ? result.stdout.trim() : '';
+  return value === 'https' || value === 'ssh' ? value : null;
 }
 
 /**
@@ -57,37 +82,38 @@ export async function isGitRepository(): Promise<boolean> {
 }
 
 /**
- * Gets all git remotes with their URLs
+ * Reads every git remote's fetch and push URL with `git remote get-url`
+ * (and `--push`), so URLs and paths containing spaces come back intact.
  *
- * @returns Object mapping remote names to their fetch/push URLs
+ * @param cwd Repository to read; defaults to the current directory.
+ * @returns Object mapping remote names to their fetch/push URLs; empty when
+ *   the directory is not a repository.
  */
-export async function getRemotes(): Promise<
-  Record<string, { fetch: string; push: string }>
-> {
+export async function getRemotes(
+  cwd?: string
+): Promise<Record<string, { fetch: string; push: string }>> {
+  const cwdOpt = cwd ? { cwd } : {};
   try {
-    const result = await $({ reject: false })`git remote -v`;
-    if (result.exitCode !== 0) {
+    const list = await $({ ...cwdOpt, reject: false })`git remote`;
+    if (list.exitCode !== 0) {
       return {};
     }
-
     const remotes: Record<string, { fetch: string; push: string }> = {};
-    const lines = result.stdout.trim().split('\n');
-
-    for (const line of lines) {
-      const match = line.match(/^(\S+)\s+(\S+)\s+\((\w+)\)$/);
-      if (match) {
-        const [, name, url, type] = match;
-        if (!remotes[name]) {
-          remotes[name] = { fetch: '', push: '' };
-        }
-        if (type === 'fetch') {
-          remotes[name].fetch = url;
-        } else if (type === 'push') {
-          remotes[name].push = url;
-        }
-      }
+    for (const name of list.stdout.split('\n').map((line) => line.trim())) {
+      if (!name) continue;
+      const fetchUrl = await $({
+        ...cwdOpt,
+        reject: false,
+      })`git remote get-url ${name}`;
+      const pushUrl = await $({
+        ...cwdOpt,
+        reject: false,
+      })`git remote get-url --push ${name}`;
+      remotes[name] = {
+        fetch: fetchUrl.exitCode === 0 ? fetchUrl.stdout.trim() : '',
+        push: pushUrl.exitCode === 0 ? pushUrl.stdout.trim() : '',
+      };
     }
-
     return remotes;
   } catch {
     return {};
@@ -138,7 +164,12 @@ export async function ghRepoIsForkOf(
  *
  * @param remote - Remote name (default: 'upstream')
  * @param cwd - Optional working directory (must be a git repo with that remote)
+ * `git remote set-head -a` needs the branch already fetched, so callers
+ * fetch `remote` first.
+ *
  * @returns Default branch name (e.g., 'main', 'master', 'develop')
+ * @throws GitError naming the remote when neither `set-head -a` nor an
+ *   existing `refs/remotes/<remote>/HEAD` yields a branch.
  *
  * @example
  * await getDefaultBranch('upstream') // "main"
@@ -148,28 +179,26 @@ export async function getDefaultBranch(
   remote = 'upstream',
   cwd?: string
 ): Promise<string> {
-  const cwdOpt = cwd ? { cwd } : {};
-  try {
-    // First, try to update the remote HEAD to detect the default branch
-    await $({ ...cwdOpt, reject: false })`git remote set-head ${remote} -a`;
+  const setHead = await netExec(cwd, {
+    bufferOutput: true,
+  })`git remote set-head ${remote} -a`;
 
-    // Get the symbolic ref for the remote HEAD
-    const result = await $({
-      ...cwdOpt,
-      reject: false,
-    })`git symbolic-ref refs/remotes/${remote}/HEAD`;
+  const result = await $({
+    ...(cwd ? { cwd } : {}),
+    reject: false,
+  })`git symbolic-ref refs/remotes/${remote}/HEAD`;
+  const match =
+    result.exitCode === 0
+      ? result.stdout.trim().match(/^refs\/remotes\/[^/]+\/(.+)$/)
+      : null;
+  if (match?.[1]) return match[1];
 
-    if (result.exitCode === 0) {
-      // Output is like "refs/remotes/upstream/main"
-      const match = result.stdout.trim().match(/refs\/remotes\/[^/]+\/(.+)$/);
-      if (match?.[1]) {
-        return match[1];
-      }
-    }
-  } catch {
-    // Fall through to default
-  }
-
-  // Fallback to 'main' if detection fails
-  return 'main';
+  const reason =
+    setHead.exitCode !== 0
+      ? netFailureReason(setHead)
+      : result.stderr?.trim() || result.stdout.trim() || 'no remote HEAD';
+  throw new GitError(
+    `cannot tell the default branch of remote '${remote}' (${reason}). Run \`git fetch ${remote}\` and retry.`,
+    `git remote set-head ${remote} -a`
+  );
 }

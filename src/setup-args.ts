@@ -1,3 +1,5 @@
+import { consumeValue, scanArgs, unexpectedArgument } from './shared/args.js';
+
 export type ParsedSetupArgs = {
   upstreamUrl?: string;
   privateMirrorName?: string;
@@ -6,49 +8,35 @@ export type ParsedSetupArgs = {
   noPublic: boolean;
 };
 
+const USAGE =
+  'venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public]';
+
 /**
  * Parse `venfork setup ...` argv after the `setup` token.
  */
 export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
-  const positional: string[] = [];
   let organization: string | undefined;
   let publicForkRepoName: string | undefined;
   let noPublic = false;
 
-  for (let i = 0; i < setupArgs.length; i++) {
-    const a = setupArgs[i];
-    if (a === '--org') {
-      const val = setupArgs[++i];
-      if (!val || val.startsWith('--'))
-        throw new Error('--org requires a value');
-      organization = val;
-      continue;
+  const positional = scanArgs(setupArgs, USAGE, (a, i) => {
+    if (a === '--org' || a.startsWith('--org=')) {
+      const { value, consumed } = consumeValue('--org', setupArgs, i);
+      organization = value;
+      return consumed;
     }
-    if (a.startsWith('--org=')) {
-      const val = a.slice('--org='.length);
-      if (!val) throw new Error('--org requires a value');
-      organization = val;
-      continue;
-    }
-    if (a === '--fork-name') {
-      const val = setupArgs[++i];
-      if (!val || val.startsWith('--'))
-        throw new Error('--fork-name requires a value');
-      publicForkRepoName = val;
-      continue;
-    }
-    if (a.startsWith('--fork-name=')) {
-      const val = a.slice('--fork-name='.length);
-      if (!val) throw new Error('--fork-name requires a value');
-      publicForkRepoName = val;
-      continue;
+    if (a === '--fork-name' || a.startsWith('--fork-name=')) {
+      const { value, consumed } = consumeValue('--fork-name', setupArgs, i);
+      publicForkRepoName = value;
+      return consumed;
     }
     if (a === '--no-public') {
       noPublic = true;
-      continue;
+      return 0;
     }
-    positional.push(a);
-  }
+    return undefined;
+  });
+  if (positional.length > 2) throw unexpectedArgument(positional[2], USAGE);
 
   const trimmedForkName = publicForkRepoName?.trim() || undefined;
   if (noPublic && trimmedForkName) {

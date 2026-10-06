@@ -57,7 +57,7 @@ body:
     id: output
     attributes:
       label: Relevant Output
-      description: If applicable, paste output from venfork status or other commands
+      description: If applicable, paste output from venfork doctor or other commands
       render: shell
       placeholder: Paste command output here
 

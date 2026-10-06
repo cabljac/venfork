@@ -10,12 +10,14 @@
     "build": "bun build ./src/index.ts --outdir ./dist --target node",
     "compile": "bun build ./src/index.ts --compile --outfile ./dist/venfork",
     "dev": "bun run ./src/index.ts",
-    "test": "bun test",
-    "test:watch": "bun test --watch",
-    "test:coverage": "bun test --coverage",
-    "test:e2e": "VENFORK_E2E=1 bun test tests/e2e --timeout 900000",
-    "test:e2e:dispatch": "VENFORK_E2E=1 VENFORK_E2E_REAL_DISPATCH=1 bun test tests/e2e --timeout 900000",
-    "test:e2e:cron": "VENFORK_E2E=1 VENFORK_E2E_REAL_CRON=1 bun test tests/e2e --timeout 1800000",
+    "test": "bun scripts/run-suite.ts unit && bun scripts/run-suite.ts integration",
+    "test:unit": "bun test ./tests/unit",
+    "test:integration": "bun test --timeout 30000 ./tests/integration",
+    "test:watch": "bun test --watch ./tests/unit",
+    "test:coverage": "bun test --coverage ./tests/unit && bun test --coverage --timeout 30000 ./tests/integration",
+    "test:e2e": "VENFORK_E2E=1 bun test ./tests/e2e --timeout 900000",
+    "test:e2e:dispatch": "VENFORK_E2E=1 VENFORK_E2E_REAL_DISPATCH=1 bun test ./tests/e2e --timeout 900000",
+    "smoke:node": "bun scripts/node-smoke.ts",
     "setup": "bun install && bun run build",
     "link": "bun link",
     "unlink": "bun unlink",
@@ -51,7 +53,7 @@
   "homepage": "https://github.com/cabljac/venfork#readme",
   "dependencies": {
     "@clack/prompts": "^0.11.0",
-    "execa": "^9.6.0"
+    "execa": "^9.6.1"
   },
   "devDependencies": {
     "@biomejs/biome": "latest",
@@ -59,6 +61,6 @@
     "typescript": "^5.7.3"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "^18.19.0 || >=20.5.0"
   }
 }

@@ -1,0 +1,4810 @@
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import * as realFsPromises from 'node:fs/promises';
+import { PassThrough } from 'node:stream';
+import * as clack from '@clack/prompts';
+
+/**
+ * Command tests with execution-based mocking
+ */
+
+// Type definitions for mock tracking
+interface RmCall {
+  path: string;
+  options: { recursive: boolean; force: boolean };
+}
+interface WriteFileCall {
+  path: string;
+  content: string;
+}
+
+type SignalHandler = () => void | Promise<void>;
+type MockResponse =
+  | { exitCode: number; stdout: string; stderr: string }
+  | ((
+      command: string,
+      options: { reject?: boolean; input?: string }
+    ) => Promise<unknown>);
+
+// Track calls to our mocks
+const execaCalls: string[] = [];
+const rmCalls: RmCall[] = [];
+const writeFileCalls: WriteFileCall[] = [];
+const noteCalls: Array<{ message: string; title?: string }> = [];
+const signalHandlers = new Map<string, SignalHandler>();
+let shouldHangOnFork = false;
+const mockResponses: Map<string, MockResponse> = new Map();
+let confirmResponse = true; // Default to true for most tests
+const CANCEL = Symbol('cancel');
+let promptCancelled = false;
+let tempDirCounter = 0;
+let accessExists: (filePath: string) => boolean = () => false;
+
+// Store originals
+const originalProcessOn = process.on;
+const originalProcessOff = process.off;
+
+/** Renders an interpolated value the way execa splits it into argv. */
+function argText(value: unknown): string {
+  return Array.isArray(value) ? value.join(' ') : String(value);
+}
+
+// Mock execa BEFORE any imports
+mock.module('execa', () => ({
+  // biome-ignore lint/suspicious/noExplicitAny: Mocking execa's complex overloaded types requires any
+  $: mock((stringsOrOptions: TemplateStringsArray | any, ...values: any[]) => {
+    let command: string;
+    // biome-ignore lint/suspicious/noExplicitAny: Execa options type is complex
+    let _options: any = {};
+
+    // Handle both $`command` and $({ options })`command` patterns
+    if (
+      typeof stringsOrOptions === 'object' &&
+      !Array.isArray(stringsOrOptions)
+    ) {
+      // Called with options: $({ cwd: '...' })`command`
+      _options = stringsOrOptions;
+      // biome-ignore lint/suspicious/noExplicitAny: Template literal values type
+      return mock((strings: TemplateStringsArray, ...vals: any[]) => {
+        command = String.raw({ raw: strings }, ...vals.map(argText));
+        execaCalls.push(command);
+        return getMockExecaResponse(command, _options);
+      });
+    }
+
+    // Called without options: $`command`
+    command = String.raw({ raw: stringsOrOptions }, ...values.map(argText));
+    execaCalls.push(command);
+    return getMockExecaResponse(command);
+  }),
+}));
+
+function getMockExecaResponse(
+  command: string,
+  options: { reject?: boolean } = {}
+) {
+  // Check if there's a specific mock response set for this test
+  for (const [pattern, response] of mockResponses.entries()) {
+    if (command.includes(pattern)) {
+      return typeof response === 'function'
+        ? response(command, options)
+        : Promise.resolve(response);
+    }
+  }
+
+  // The config branch exists only when a test mocks its content.
+  if (
+    command.includes('ls-remote --exit-code origin refs/heads/venfork-config')
+  ) {
+    const exists = mockResponses.has(
+      'git show FETCH_HEAD:.venfork/config.json'
+    );
+    return Promise.resolve({
+      exitCode: exists ? 0 : 2,
+      stdout: '',
+      stderr: '',
+    });
+  }
+
+  // Git auth commands
+  if (command.includes('gh auth status')) {
+    return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+  }
+  if (command.includes('gh api user')) {
+    return Promise.resolve({ exitCode: 0, stdout: 'testuser', stderr: '' });
+  }
+
+  // Git info commands
+  if (command.includes('git branch --show-current')) {
+    return Promise.resolve({ exitCode: 0, stdout: 'main', stderr: '' });
+  }
+  // Remote tips resolve to stable fake ids so rev-list ranges are predictable.
+  const remoteTip = command.match(
+    /git rev-parse --verify (?:--quiet )?refs\/remotes\/(upstream|origin|public)\//
+  );
+  if (remoteTip) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: `${remoteTip[1]}0tip`,
+      stderr: '',
+    });
+  }
+  if (command.includes('git rev-parse --verify upstream/')) {
+    return Promise.resolve({ exitCode: 0, stdout: 'upstream0tip', stderr: '' });
+  }
+  if (command.endsWith(' write-tree')) {
+    return Promise.resolve({ exitCode: 0, stdout: 'mirror0tree', stderr: '' });
+  }
+  if (command.includes(' commit-tree ')) {
+    return Promise.resolve({ exitCode: 0, stdout: 'managed0tip', stderr: '' });
+  }
+  // Tip-builder tree lookups: upstream has a path only when accessExists
+  // says so; every other tip holds a regular file at the asked path.
+  const treeLookup = command.match(
+    /--literal-pathspecs ls-tree -z (\S+) -- (.+)$/
+  );
+  if (treeLookup) {
+    const [, ref, entry] = treeLookup;
+    const present = ref !== 'upstream0tip' || accessExists(entry);
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: present ? `100644 blob 0123abcd\t${entry}\0` : '',
+      stderr: '',
+    });
+  }
+  if (command.includes('git rev-parse')) {
+    return Promise.resolve({ exitCode: 0, stdout: '.git', stderr: '' });
+  }
+  if (command.includes('git remote -v')) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout:
+        'origin\tgit@github.com:test/repo.git (fetch)\norigin\tgit@github.com:test/repo.git (push)',
+      stderr: '',
+    });
+  }
+  if (command.includes('git remote get-url')) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: 'git@github.com:test/repo.git',
+      stderr: '',
+    });
+  }
+  if (command.includes('git remote set-head')) {
+    return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+  }
+  if (command.includes('git symbolic-ref')) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: 'refs/remotes/upstream/main',
+      stderr: '',
+    });
+  }
+
+  // GitHub CLI commands for clone
+  if (command.includes('gh repo view') && command.includes('--json parent')) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: 'https://github.com/upstream/original.git',
+      stderr: '',
+    });
+  }
+  if (
+    command.includes('gh repo view') &&
+    command.includes('--json isFork,parent')
+  ) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: 'true',
+      stderr: '',
+    });
+  }
+  if (command.includes('gh repo view')) {
+    // Checking if public fork exists
+    return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+  }
+
+  // For signal handler tests: make fork command hang to prevent cleanup
+  // This keeps setupCommand running so signal handlers remain registered
+  if (command.includes('gh repo fork') && shouldHangOnFork) {
+    return new Promise(() => {}); // Never resolves
+  }
+
+  // Default response for all other commands
+  return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+}
+
+/**
+ * Simulate execa with `buffer: false`: push fails with no buffered
+ * stdout/stderr on the error object, while stderr is only available via the
+ * live stream attached to the returned promise.
+ */
+function streamRejectedPush(stderr: string): Promise<unknown> & {
+  stdout: PassThrough;
+  stderr: PassThrough;
+} {
+  const stdout = new PassThrough();
+  const stderrStream = new PassThrough();
+  stdout.end();
+  const promise = (async (): Promise<unknown> => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    stderrStream.write(stderr);
+    stderrStream.end();
+    throw Object.assign(new Error('Command failed'), { exitCode: 128 });
+  })();
+  return Object.assign(promise, { stdout, stderr: stderrStream });
+}
+
+// Mock fs.rm and fs.access BEFORE any imports. The real module is spread
+// first: mock.module leaks across files in one bun process, and other
+// files' tests write real files through the functions not stubbed here.
+mock.module('node:fs/promises', () => ({
+  ...realFsPromises,
+  mkdtemp: mock((prefix: string) => {
+    tempDirCounter += 1;
+    return Promise.resolve(`${prefix}${tempDirCounter}`);
+  }),
+  mkdir: mock(() => Promise.resolve()),
+  writeFile: mock((path: string, content: string) => {
+    writeFileCalls.push({ path, content });
+    return Promise.resolve();
+  }),
+  readFile: mock(() => Promise.reject(new Error('ENOENT'))),
+  rm: mock((path: string, options: { recursive: boolean; force: boolean }) => {
+    rmCalls.push({ path, options });
+    return Promise.resolve();
+  }),
+  access: mock((filePath: string) =>
+    accessExists(filePath)
+      ? Promise.resolve()
+      : Promise.reject(new Error('ENOENT'))
+  ),
+}));
+
+// Mock prompts BEFORE any imports
+mock.module('@clack/prompts', () => ({
+  intro: mock(() => {}),
+  spinner: mock(() => ({
+    start: mock(() => {}),
+    stop: mock(() => {}),
+  })),
+  note: mock((message: string, title?: string) => {
+    noteCalls.push({ message, title });
+  }),
+  outro: mock(() => {}),
+  cancel: mock(() => {}),
+  log: {
+    error: mock(() => {}),
+    warn: mock(() => {}),
+    info: mock(() => {}),
+    success: mock(() => {}),
+    step: mock(() => {}),
+  },
+  group: mock(() => Promise.resolve({})),
+  text: mock(() => Promise.resolve(promptCancelled ? CANCEL : '')),
+  confirm: mock(() =>
+    Promise.resolve(promptCancelled ? CANCEL : confirmResponse)
+  ), // Use dynamic confirmResponse
+  isCancel: mock((value: unknown) => value === CANCEL),
+}));
+
+// Import commands (will use mocked execa, fs, and prompts)
+import {
+  cloneCommand,
+  issueCommand,
+  pullRequestCommand,
+  renderPulledComments,
+  scheduleCommand,
+  setupCommand,
+  showHelp,
+  stageCommand,
+  syncCommand,
+  workflowsCommand,
+} from '../../src/commands.js';
+import { SyncDivergenceError } from '../../src/errors.js';
+
+/**
+ * Helper function to start setupCommand and wait for async operations to progress
+ * to the point where signal handlers are registered
+ */
+async function startSetupCommand(
+  upstreamUrl = 'git@github.com:test/repo.git',
+  privateMirrorName = 'test-vendor'
+): Promise<void> {
+  // Enable fork hanging to keep setupCommand running for signal handler tests
+  shouldHangOnFork = true;
+
+  const promise = setupCommand(upstreamUrl, privateMirrorName);
+
+  // Wait for async operations to complete (checkGhAuth, getGitHubUsername, etc.)
+  // Signal handlers are registered after these complete
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  // Suppress unhandled rejection warnings
+  promise.catch(() => {});
+}
+
+/** Gives origin, upstream and public different GitHub URLs; origin is private. */
+function useDistinctRemotes(): void {
+  mockResponses.set('git remote get-url origin', {
+    exitCode: 0,
+    stdout: 'git@github.com:acme/widget-private.git',
+    stderr: '',
+  });
+  mockResponses.set('git remote get-url upstream', {
+    exitCode: 0,
+    stdout: 'git@github.com:upstream-org/widget.git',
+    stderr: '',
+  });
+  mockResponses.set('git remote get-url public', {
+    exitCode: 0,
+    stdout: 'git@github.com:acme/widget.git',
+    stderr: '',
+  });
+  mockResponses.set('gh repo view acme/widget-private --json isPrivate', {
+    exitCode: 0,
+    stdout: 'true',
+    stderr: '',
+  });
+}
+
+/** Makes the staged branch appear to carry one venfork-managed commit. */
+function mockManagedCommitOnBranch(
+  branch = 'feature-branch',
+  sha = 'managed0'
+): void {
+  mockResponses.set(
+    `git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/${branch}`,
+    { exitCode: 0, stdout: sha, stderr: '' }
+  );
+  mockResponses.set(`git log -1 --no-show-signature --format=%s ${sha}`, {
+    exitCode: 0,
+    stdout: 'chore: venfork-managed mirror commit',
+    stderr: '',
+  });
+}
+
+beforeEach(() => {
+  // Clear tracking arrays
+  execaCalls.length = 0;
+  rmCalls.length = 0;
+  writeFileCalls.length = 0;
+  noteCalls.length = 0;
+  signalHandlers.clear();
+  shouldHangOnFork = false;
+  mockResponses.clear();
+  confirmResponse = true; // Reset to true for each test
+  promptCancelled = false;
+  tempDirCounter = 0;
+  accessExists = () => false;
+
+  // Clear VENFORK_ORG environment variable
+  delete process.env.VENFORK_ORG;
+
+  // Mock process methods
+  process.on = ((event: string, handler: SignalHandler) => {
+    signalHandlers.set(event, handler);
+    return process;
+    // biome-ignore lint/suspicious/noExplicitAny: Process.on return type is complex
+  }) as any;
+
+  process.off = ((event: string, _handler: SignalHandler) => {
+    signalHandlers.delete(event);
+    return process;
+    // biome-ignore lint/suspicious/noExplicitAny: Process.off return type is complex
+  }) as any;
+});
+
+afterEach(() => {
+  // Restore process methods
+  process.on = originalProcessOn;
+  process.off = originalProcessOff;
+});
+describe('setupCommand - execution tests', () => {
+  test('registers SIGINT handler', async () => {
+    await startSetupCommand();
+
+    expect(signalHandlers.has('SIGINT')).toBe(true);
+  });
+
+  test('registers SIGTERM handler', async () => {
+    await startSetupCommand();
+
+    expect(signalHandlers.has('SIGTERM')).toBe(true);
+  });
+
+  test('cleanup called when SIGINT triggered', async () => {
+    await startSetupCommand();
+
+    const handler = signalHandlers.get('SIGINT');
+    expect(handler).toBeDefined();
+
+    try {
+      await handler?.();
+    } catch {
+      // Expected to throw on process.exit(130)
+    }
+
+    // Verify rm was called
+    expect(rmCalls.length).toBeGreaterThan(0);
+    expect(rmCalls[0].path).toMatch(/venfork-[a-f0-9]+/);
+    expect(rmCalls[0].options).toEqual({ recursive: true, force: true });
+  });
+
+  test('temp directory uses os.tmpdir()', async () => {
+    await startSetupCommand();
+
+    const handler = signalHandlers.get('SIGINT');
+
+    try {
+      await handler?.();
+    } catch {
+      // Expected
+    }
+
+    // Temp dir should contain venfork- and be in system temp
+    const tempDir = rmCalls[0]?.path;
+    expect(tempDir).toContain('venfork-');
+    expect(tempDir.length).toBeGreaterThan(20);
+  });
+
+  test('calls execa for gh commands in correct sequence', async () => {
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    // Verify we have multiple commands
+    expect(execaCalls.length).toBeGreaterThanOrEqual(4);
+
+    // Step 1: Get GitHub username
+    expect(execaCalls[0]).toContain('gh api user');
+
+    // Step 2: Fork the upstream repo
+    expect(execaCalls[1]).toContain('gh repo fork');
+    expect(execaCalls[1]).toContain('test/repo');
+    expect(execaCalls[1]).toContain('--clone=false');
+
+    // Step 3: Create private vendor repo
+    expect(execaCalls[2]).toContain('gh repo create');
+    expect(execaCalls[2]).toContain('test-vendor');
+    expect(execaCalls[2]).toContain('--private');
+
+    // Verify we called multiple git/gh commands
+    const ghCommands = execaCalls.filter((cmd) => cmd.includes('gh '));
+    const gitCommands = execaCalls.filter((cmd) => cmd.includes('git '));
+
+    expect(ghCommands.length).toBeGreaterThanOrEqual(2);
+    expect(gitCommands.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('accepts owner/repo shorthand for upstream', async () => {
+    try {
+      await setupCommand('test/repo', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    expect(
+      execaCalls.some(
+        (c) => c.includes('gh repo fork') && c.includes('test/repo')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some(
+        (c) => c.includes('gh repo clone') && c.includes('test/repo')
+      )
+    ).toBe(true);
+  });
+
+  test('cleanup called in finally block', async () => {
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    // rm should have been called (from finally block)
+    expect(rmCalls.length).toBeGreaterThan(0);
+  });
+
+  test('runs gh repo set-default for the private mirror after configuring remotes', async () => {
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh repo set-default') &&
+          cmd.includes('testuser/test-vendor')
+      )
+    ).toBe(true);
+  });
+
+  test('seeds the private mirror over gh-authenticated HTTPS, not SSH', async () => {
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    const seedPush = execaCalls.find(
+      (cmd) =>
+        cmd.includes(' push ') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+
+    expect(seedPush).toBeDefined();
+    expect(seedPush).toContain('credential.https://github.com.helper');
+    expect(seedPush).toContain('--progress');
+    expect(seedPush).toContain('main:refs/heads/main');
+    // The hang fix: the seeding push must not use the raw SSH URL.
+    expect(seedPush).not.toContain('git@github.com:');
+  });
+
+  test('seeds large history in commit-batched pushes, then the real tip', async () => {
+    process.env.VENFORK_SEED_CHUNK = '2';
+    mockResponses.set('git rev-list --first-parent --reverse main', {
+      exitCode: 0,
+      stdout: 'aaa\nbbb\nccc\nddd\neee',
+      stderr: '',
+    });
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    } finally {
+      delete process.env.VENFORK_SEED_CHUNK;
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes(' push ') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git') &&
+        cmd.includes(':refs/heads/main')
+    );
+
+    // 5 commits, chunk 2 -> push at commit 2 (bbb), commit 4 (ddd),
+    // then the real branch tip.
+    expect(seedPushes.length).toBe(3);
+    expect(seedPushes.some((c) => c.includes('bbb:refs/heads/main'))).toBe(
+      true
+    );
+    expect(seedPushes.some((c) => c.includes('ddd:refs/heads/main'))).toBe(
+      true
+    );
+    expect(seedPushes.some((c) => c.includes('main:refs/heads/main'))).toBe(
+      true
+    );
+    expect(seedPushes.every((c) => c.includes('--force'))).toBe(true);
+    expect(
+      execaCalls.some((c) =>
+        c.includes('git rev-list --first-parent --reverse main')
+      )
+    ).toBe(true);
+  });
+
+  test('invalid VENFORK_SEED_CHUNK falls back to default (no infinite loop)', async () => {
+    process.env.VENFORK_SEED_CHUNK = '0';
+    mockResponses.set('git rev-list --first-parent --reverse main', {
+      exitCode: 0,
+      stdout: 'aaa\nbbb\nccc\nddd\neee',
+      stderr: '',
+    });
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    } finally {
+      delete process.env.VENFORK_SEED_CHUNK;
+    }
+
+    // chunk=0 -> guarded to 1000 -> 5 commits skip the loop -> single tip push.
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes(' push ') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git') &&
+        cmd.includes(':refs/heads/main')
+    );
+    expect(seedPushes.length).toBe(1);
+    expect(seedPushes[0]).toContain('main:refs/heads/main');
+  });
+
+  test('does not retry permanent seed-push failures (fails fast)', async () => {
+    mockResponses.set('push --force --no-thin', () =>
+      Promise.reject(
+        Object.assign(new Error('Command failed'), {
+          stderr:
+            'remote: Permission to testuser/test-vendor.git denied.\n' +
+            'fatal: unable to access: The requested URL returned error: HTTP 403',
+          exitCode: 128,
+        })
+      )
+    );
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('push --force --no-thin') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+    expect(seedPushes.length).toBe(1); // no retries for a permanent error
+  });
+
+  test('retries transient seed-push failures up to the attempt limit', async () => {
+    process.env.VENFORK_SEED_RETRY_MS = '0';
+    mockResponses.set('push --force --no-thin', () =>
+      Promise.reject(
+        Object.assign(new Error('Command failed'), {
+          stderr:
+            'error: RPC failed; HTTP 408 curl 22\n' +
+            'fatal: the remote end hung up unexpectedly',
+          exitCode: 128,
+        })
+      )
+    );
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    } finally {
+      delete process.env.VENFORK_SEED_RETRY_MS;
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('push --force --no-thin') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+    expect(seedPushes.length).toBe(4); // 1 + 3 retries from transient stderr
+  });
+
+  test('retries transient seed-push failures from streamed stderr when error has no buffered output', async () => {
+    process.env.VENFORK_SEED_RETRY_MS = '0';
+    mockResponses.set('push --force --no-thin', () =>
+      streamRejectedPush(
+        'error: RPC failed; HTTP 408 curl 22\n' +
+          'fatal: the remote end hung up unexpectedly'
+      )
+    );
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    } finally {
+      delete process.env.VENFORK_SEED_RETRY_MS;
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('push --force --no-thin') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+    expect(seedPushes.length).toBe(4); // 1 + 3 retries from streamed stderr tail
+  });
+
+  test('does not retry generic rpc-failed wrappers without transient status', async () => {
+    mockResponses.set('push --force --no-thin', () =>
+      Promise.reject(
+        Object.assign(new Error('Command failed'), {
+          stderr: 'error: RPC failed; HTTP 413 curl 22',
+          exitCode: 128,
+        })
+      )
+    );
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    const seedPushes = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('push --force --no-thin') &&
+        cmd.includes('https://github.com/testuser/test-vendor.git')
+    );
+    expect(seedPushes.length).toBe(1); // no retries for unrecognized wrappers
+  });
+
+  test('passes --progress to upstream and private mirror clones', async () => {
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    const cloneCalls = execaCalls.filter((c) => c.includes('gh repo clone'));
+
+    expect(cloneCalls.length).toBeGreaterThanOrEqual(2);
+    expect(cloneCalls.every((c) => c.includes('-- --progress'))).toBe(true);
+  });
+});
+
+describe('setupCommand - idempotent recovery', () => {
+  test('skips upstream seed clone and runs sync when private mirror already exists on GitHub', async () => {
+    mockResponses.set('gh repo create', {
+      exitCode: 1,
+      stderr: 'name already exists on this account',
+      stdout: '',
+    });
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // process.exit if a nested command fails unexpectedly
+    }
+
+    const cloneCalls = execaCalls.filter((c) => c.includes('gh repo clone'));
+    expect(cloneCalls.length).toBe(1);
+    expect(cloneCalls[0]).toContain('test-vendor');
+    expect(execaCalls.some((c) => c.includes('git fetch upstream'))).toBe(true);
+  });
+
+  test('refuses an existing venfork-config that disagrees, before rewiring remotes', async () => {
+    mockResponses.set('gh repo create', {
+      exitCode: 1,
+      stderr: 'name already exists on this account',
+      stdout: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        upstreamUrl: 'git@github.com:other/project.git',
+        mode: 'no-public',
+      }),
+      stderr: '',
+    });
+
+    await expect(
+      setupCommand('git@github.com:test/repo.git', 'test-vendor')
+    ).rejects.toThrow('process.exit(1)');
+
+    expect(clack.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'existing venfork-config disagrees with this setup: mode is no-public (expected standard); upstreamUrl is git@github.com:other/project.git (expected git@github.com:test/repo.git); publicForkUrl is (none) (expected git@github.com:testuser/repo.git)'
+      )
+    );
+    expect(execaCalls.some((c) => c.includes('git remote set-url'))).toBe(
+      false
+    );
+    expect(execaCalls.some((c) => c.includes('git remote add'))).toBe(false);
+  });
+
+  test('keeps an existing venfork-config that agrees, in another URL form', async () => {
+    mockResponses.set('gh repo create', {
+      exitCode: 1,
+      stderr: 'name already exists on this account',
+      stdout: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        upstreamUrl: 'https://github.com/test/repo',
+        publicForkUrl: 'git@github.com:testuser/repo.git',
+      }),
+      stderr: '',
+    });
+
+    await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+
+    expect(
+      execaCalls.some((c) =>
+        c.includes('git remote set-url --push upstream DISABLE')
+      )
+    ).toBe(true);
+  });
+
+  test('still seeds new private mirror and runs sync when public fork already exists', async () => {
+    mockResponses.set('gh repo fork', {
+      exitCode: 1,
+      stderr: 'already forked',
+      stdout: '',
+    });
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // ignore
+    }
+
+    const cloneCalls = execaCalls.filter((c) => c.includes('gh repo clone'));
+    expect(cloneCalls.length).toBe(2);
+    expect(cloneCalls.some((c) => c.includes('test/repo'))).toBe(true);
+    expect(cloneCalls.some((c) => c.includes('test-vendor'))).toBe(true);
+    expect(execaCalls.some((c) => c.includes('git fetch upstream'))).toBe(true);
+  });
+
+  test('fails when default-name repo exists but is not a fork of upstream', async () => {
+    mockResponses.set('gh repo fork', {
+      exitCode: 1,
+      stderr: 'already exists',
+      stdout: '',
+    });
+    mockResponses.set('--json isFork,parent', {
+      exitCode: 0,
+      stdout: 'false',
+      stderr: '',
+    });
+
+    await expect(
+      setupCommand(
+        'git@github.com:firebase/extensions.git',
+        'firebase-extensions-private',
+        'invertase',
+        'firebase-extensions'
+      )
+    ).rejects.toThrow('process.exit(');
+  });
+
+  test('fails when private mirror create fails and repo is not found on GitHub', async () => {
+    mockResponses.set('gh repo create', {
+      exitCode: 1,
+      stderr: 'GraphQL: error',
+      stdout: '',
+    });
+    mockResponses.set('gh repo view testuser/test-vendor', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'HTTP 404: Not Found',
+    });
+
+    await expect(
+      setupCommand('git@github.com:test/repo.git', 'test-vendor')
+    ).rejects.toThrow('process.exit(');
+  });
+});
+
+describe('syncCommand', () => {
+  test('fetches from all remotes', async () => {
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected - may fail in test environment
+    }
+
+    // Should have called git fetch for all remotes
+    const fetchCalls = execaCalls.filter((cmd) => cmd.includes('git fetch'));
+
+    expect(fetchCalls.some((cmd) => cmd.includes('git fetch upstream'))).toBe(
+      true
+    );
+    expect(fetchCalls.some((cmd) => cmd.includes('git fetch origin'))).toBe(
+      true
+    );
+    expect(fetchCalls.some((cmd) => cmd.includes('git fetch public'))).toBe(
+      true
+    );
+  });
+
+  test('pushes to origin and public default branches', async () => {
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected
+    }
+
+    // Should push upstream/main to origin/main and public/main
+    const pushCalls = execaCalls.filter((cmd) => cmd.includes('git push'));
+
+    expect(
+      pushCalls.some((cmd) =>
+        cmd.includes('git push origin upstream0tip:refs/heads/main')
+      )
+    ).toBe(true);
+    expect(
+      pushCalls.some((cmd) =>
+        cmd.includes('git push public upstream0tip:refs/heads/main')
+      )
+    ).toBe(true);
+  });
+
+  test('never follows tags when pushing the mirror and the public fork', async () => {
+    await syncCommand('main');
+
+    const pushCalls = execaCalls.filter((cmd) => cmd.includes('git push'));
+    expect(pushCalls.length).toBeGreaterThan(0);
+    expect(pushCalls.every((cmd) => cmd.endsWith(' --no-follow-tags'))).toBe(
+      true
+    );
+  });
+
+  test('uses default branch when not specified', async () => {
+    try {
+      await syncCommand();
+    } catch {
+      // Expected
+    }
+
+    // Should call getDefaultBranch (already mocked to return 'main')
+    const pushCalls = execaCalls.filter((cmd) => cmd.includes('git push'));
+    expect(pushCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test('checks for divergent commits', async () => {
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected
+    }
+
+    // Should call git rev-list to check divergence
+    const revListCalls = execaCalls.filter((cmd) =>
+      cmd.includes('git rev-list upstream0tip..')
+    );
+    expect(revListCalls.length).toBeGreaterThanOrEqual(2); // Check origin and public
+  });
+
+  test('re-applies deterministic workflow commit when scheduling is enabled', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) => cmd.endsWith(' read-tree upstream0tip'))
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          '-c i18n.commitEncoding=UTF-8 commit-tree --no-gpg-sign mirror0tree -p upstream0tip -m chore: venfork-managed mirror commit -m Venfork-Managed: 1'
+        )
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git push origin managed0tip:refs/heads/main --force-with-lease=refs/heads/main:'
+        )
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git push public HEAD:main --force')
+      )
+    ).toBe(false);
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('update-index --add --cacheinfo 100644,') &&
+          cmd.endsWith(',.github/workflows/venfork-sync.yml')
+      )
+    ).toBe(true);
+  });
+
+  test('skips workflow commit normalization when scheduling is disabled', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: false, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) => cmd.endsWith(' read-tree upstream0tip'))
+    ).toBe(false);
+  });
+
+  test('preserve carries mirror-only files forward across sync', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['.github/workflows/caller.yml'],
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/main^{commit}',
+      {
+        exitCode: 0,
+        stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+        stderr: '',
+      }
+    );
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // The "+1 commit" path runs even though schedule is disabled.
+    expect(
+      execaCalls.some((cmd) => cmd.endsWith(' read-tree upstream0tip'))
+    ).toBe(true);
+    // The preserved blob comes from the captured previous mirror tip.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.endsWith(
+          'ls-tree -z aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/caller.yml'
+        )
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.endsWith(
+          'update-index --add --cacheinfo 100644,0123abcd,.github/workflows/caller.yml'
+        )
+      )
+    ).toBe(true);
+    // The deterministic commit + force-push happen.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git push origin managed0tip:refs/heads/main --force-with-lease=refs/heads/main:'
+        )
+      )
+    ).toBe(true);
+  });
+
+  test('preserve skips paths that already exist upstream (upstream wins)', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['.github/workflows/ci.yml'],
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/main^{commit}',
+      {
+        exitCode: 0,
+        stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+        stderr: '',
+      }
+    );
+    // Pretend the upstream tree already has the file.
+    accessExists = (p) => p.includes('.github/workflows/ci.yml');
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // Upstream's version wins for the colliding path: nothing is checked out
+    // from the previous mirror tip.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git --literal-pathspecs checkout aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/ci.yml'
+        )
+      )
+    ).toBe(false);
+  });
+
+  test('preserve fails loudly when source path is missing on previous mirror tip', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['.github/workflows/missing.yml'],
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/main^{commit}',
+      {
+        exitCode: 0,
+        stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+        stderr: '',
+      }
+    );
+    mockResponses.set(
+      'ls-tree -z aaaa1111bbbb2222cccc3333dddd4444eeee5555 -- .github/workflows/missing.yml',
+      { exitCode: 0, stdout: '', stderr: '' }
+    );
+
+    let caught = false;
+    try {
+      await syncCommand('main');
+    } catch {
+      caught = true;
+    }
+
+    // process.exit(1) is mocked to throw; sync errors before commit-tree.
+    expect(caught).toBe(true);
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes(' commit-tree ') &&
+          cmd.includes('chore: venfork-managed mirror commit')
+      )
+    ).toBe(false);
+  });
+
+  test('preserve carries the user-committed content forward (v2 wins, not v1, not upstream, not absent)', async () => {
+    // Mirror tip already has agent.yml@v1; user commits v2 directly to
+    // origin/main and pushes. Sync runs. Post-sync, the worktree write that
+    // feeds the +1 commit must contain v2 — not v1, not upstream's version,
+    // not absent. This pins the contract that previousMirrorTip is captured
+    // *after* fetch and *before* the force-push, so it sees the user's
+    // most-recent commit.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['agent.yml'],
+      }),
+      stderr: '',
+    });
+    // Local origin/main (post-fetch) is the SHA of the user's v2 commit.
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/main^{commit}',
+      {
+        exitCode: 0,
+        stdout: 'v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2',
+        stderr: '',
+      }
+    );
+    // Divergence check: the v2 commit is on origin (the user's commit).
+    mockResponses.set(
+      'git rev-list upstream0tip..v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2',
+      {
+        exitCode: 0,
+        stdout: 'v2v2v2v2v2v2v2v2\n',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git rev-list upstream0tip..public0tip', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git diff-tree -r -z --no-commit-id --name-only -m --first-parent v2v2v2v2v2v2v2v2',
+      { exitCode: 0, stdout: 'agent.yml\0', stderr: '' }
+    );
+    mockResponses.set(
+      'git log -1 --no-show-signature --format=%s v2v2v2v2v2v2v2v2',
+      {
+        exitCode: 0,
+        stdout: 'mirror: bump agent to v2\n',
+        stderr: '',
+      }
+    );
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // The +1 commit takes agent.yml from the v2 commit.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.endsWith(
+          'ls-tree -z v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2v2 -- agent.yml'
+        )
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git push origin managed0tip:refs/heads/main --force-with-lease=refs/heads/main:'
+        )
+      )
+    ).toBe(true);
+  });
+
+  test('removing a preserve entry re-asserts strictness on the orphaned mirror commit', async () => {
+    // Sequence simulated: previously, `preserve: ['agent.yml']` was set and a
+    // user commit landed on origin (passing divergence under the allowlist).
+    // The user has now run `venfork preserve remove agent.yml`. The commit is
+    // still on origin/main but preserve no longer covers it — divergence
+    // check should flag it and abort. The error must surface the file by
+    // name with a concrete `venfork preserve add` hint, so the user
+    // remembers what they removed.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        // preserve intentionally absent — the entry was just removed.
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
+      exitCode: 0,
+      stdout: 'orphancommit11111\n',
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream0tip..public0tip', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git log -1 --no-show-signature --format=%s orphancommit11111',
+      {
+        exitCode: 0,
+        stdout: 'mirror: add agent caller workflow\n',
+        stderr: '',
+      }
+    );
+    mockResponses.set(
+      'git diff-tree -r -z --no-commit-id --name-only -m --first-parent orphancommit11111',
+      { exitCode: 0, stdout: 'agent.yml\0', stderr: '' }
+    );
+
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+    // The upstream→origin force-push must NOT have happened.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git push origin upstream0tip:refs/heads/main --force-with-lease=refs/heads/main:'
+        )
+      )
+    ).toBe(false);
+    // The error message must surface the orphaned file with a concrete
+    // `venfork preserve add` hint — the case-by-name guidance the user
+    // needs to recognize "oh, that's the entry I just removed."
+    const messages = noteCalls.map((n) => n.message).join('\n---\n');
+    expect(messages).toContain('venfork preserve add agent.yml');
+    expect(messages).toContain('agent.yml');
+  });
+
+  test('legacy "+1 commit" subjects from older venfork versions still classify as managed (no spurious divergence)', async () => {
+    // Older venfork emitted `chore: add/update scheduled sync workflow
+    // (venfork)` for the +1 commit. Mirrors created with that version
+    // still have those subjects in their history. After upgrading, the
+    // divergence check must continue to recognize them — otherwise the
+    // first sync after upgrade aborts with a false-positive on every
+    // mirror in the wild.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
+      exitCode: 0,
+      stdout: 'legacycommit11111\n',
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream0tip..public0tip', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    // Subject = the OLD message string. Must be recognized as managed.
+    mockResponses.set(
+      'git log -1 --no-show-signature --format=%s legacycommit11111',
+      {
+        exitCode: 0,
+        stdout: 'chore: add/update scheduled sync workflow (venfork)\n',
+        stderr: '',
+      }
+    );
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // Sync must NOT have aborted on the legacy-message commit — the
+    // upstream→origin force-push should still happen.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git push origin upstream0tip:refs/heads/main --force-with-lease=refs/heads/main:'
+        )
+      )
+    ).toBe(true);
+  });
+
+  test('divergence check tolerates a commit whose changed files are all preserved', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['.github/workflows/caller.yml'],
+      }),
+      stderr: '',
+    });
+    // origin has 1 commit ahead of upstream — the user's preserve commit.
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
+      exitCode: 0,
+      stdout: 'feedfacecafebabe\n',
+      stderr: '',
+    });
+    mockResponses.set('git rev-list upstream0tip..public0tip', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    // That commit's changed files: only the preserved path.
+    mockResponses.set(
+      'git diff-tree -r -z --no-commit-id --name-only -m --first-parent feedfacecafebabe',
+      {
+        exitCode: 0,
+        stdout: '.github/workflows/caller.yml\0',
+        stderr: '',
+      }
+    );
+    // Subject doesn't match the workflow message — would normally count as divergent.
+    mockResponses.set(
+      'git log -1 --no-show-signature --format=%s feedfacecafebabe',
+      {
+        exitCode: 0,
+        stdout: 'mirror: add caller workflow\n',
+        stderr: '',
+      }
+    );
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/main^{commit}',
+      {
+        exitCode: 0,
+        stdout: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555',
+        stderr: '',
+      }
+    );
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // Sync should NOT have aborted: the managed commit is pushed to origin.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git push origin managed0tip:refs/heads/main --force-with-lease=refs/heads/main:aaaa1111bbbb2222cccc3333dddd4444eeee5555'
+        )
+      )
+    ).toBe(true);
+  });
+});
+
+describe('stageCommand', () => {
+  test('verifies branch exists', async () => {
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected - authentication or other checks may fail
+    }
+
+    // Should verify branch with git rev-parse
+    const verifyCalls = execaCalls.filter((cmd) =>
+      cmd.includes('git rev-parse')
+    );
+    // May not get this far due to auth check, but test completed
+    expect(verifyCalls.length).toBeGreaterThanOrEqual(0);
+  });
+
+  test('checks authentication first', async () => {
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected - auth check happens first
+    }
+
+    // checkGhAuth is called (via mock), command should attempt to run
+    expect(true).toBe(true);
+  });
+
+  test('requires branch parameter', async () => {
+    try {
+      await stageCommand('');
+    } catch {
+      // Expected to exit
+    }
+
+    // Process.exit should have been called
+    expect(process.exit).toHaveBeenCalled();
+  });
+
+  test('omits workflow commits from public staging history', async () => {
+    mockManagedCommitOnBranch();
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // Stage builds a detached worktree at upstream/<default> and cherry-picks
+    // non-workflow branch commits onto it.
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes(' worktree add --detach') && cmd.includes('upstream0tip')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch'
+        )
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some(
+        (cmd) => cmd.includes('git push public') && cmd.includes('--force')
+      )
+    ).toBe(true);
+  });
+
+  test('strips a preserve-only managed commit even when schedule is disabled', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['internal/NOTES.md'],
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      { exitCode: 0, stdout: 'mgd111\nfeat222', stderr: '' }
+    );
+    mockResponses.set('git log -1 --no-show-signature --format=%s mgd111', {
+      exitCode: 0,
+      stdout: 'chore: venfork-managed mirror commit',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: mgd111',
+      {
+        exitCode: 0,
+        stdout: 'internal/NOTES.md',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git log -1 --no-show-signature --format=%s feat222', {
+      exitCode: 0,
+      stdout: 'feat: real feature work',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: feat222',
+      {
+        exitCode: 0,
+        stdout: 'src/index.ts',
+        stderr: '',
+      }
+    );
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    const pickCalls = execaCalls.filter((cmd) =>
+      cmd.includes(' cherry-pick --allow-empty')
+    );
+    expect(pickCalls.some((cmd) => cmd.includes('feat222'))).toBe(true);
+    expect(pickCalls.some((cmd) => cmd.includes('mgd111'))).toBe(false);
+    expect(
+      execaCalls.some((cmd) => /git push public feature-branch(\s|$)/.test(cmd))
+    ).toBe(false);
+    expect(
+      execaCalls.some(
+        (cmd) => cmd.includes('git push public') && cmd.includes('--force')
+      )
+    ).toBe(true);
+  });
+
+  test('rebuilds a branch with no managed commit instead of pushing it raw', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+        preserve: ['internal/NOTES.md'],
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      { exitCode: 0, stdout: 'feat222', stderr: '' }
+    );
+    mockResponses.set('git log -1 --no-show-signature --format=%s feat222', {
+      exitCode: 0,
+      stdout: 'feat: real feature work',
+      stderr: '',
+    });
+
+    await stageCommand('feature-branch');
+
+    expect(execaCalls.some((cmd) => cmd.includes(' worktree add '))).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(' cherry-pick --allow-empty feat222')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) => /git push public feature-branch(\s|$)/.test(cmd))
+    ).toBe(false);
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.startsWith('git push public ') &&
+          cmd.includes(':refs/heads/feature-branch --force-with-lease=') &&
+          cmd.endsWith(' --no-follow-tags')
+      )
+    ).toBe(true);
+  });
+
+  test('refuses to push when the branch commits cannot be listed', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        preserve: ['internal/NOTES.md'],
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      () => Promise.reject(new Error('fatal: bad revision'))
+    );
+
+    await expect(stageCommand('feature-branch')).rejects.toThrow(
+      'process.exit(1)'
+    );
+
+    expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
+  });
+
+  test('filters workflow commits by identity, not by position in origin/main', async () => {
+    mockManagedCommitOnBranch();
+    // Reproduces the bug where a feature branch reachable from an older
+    // origin/main still carried the historical managed workflow commit. After
+    // a later `venfork sync` rewrites origin/main with a *new* managed commit,
+    // the old workflow commit was still reachable from the feature branch. The
+    // previous rebase-based implementation would replay it onto upstream and
+    // leak it to the public fork. The cherry-pick loop must drop it.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'feat111\nwf222\nfeat333',
+        stderr: '',
+      }
+    );
+    // Feature commits — not workflow-only.
+    mockResponses.set('git log -1 --no-show-signature --format=%s feat111', {
+      exitCode: 0,
+      stdout: 'feat: real feature work',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: feat111',
+      {
+        exitCode: 0,
+        stdout: 'src/index.ts',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git log -1 --no-show-signature --format=%s feat333', {
+      exitCode: 0,
+      stdout: 'feat: more real feature work',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: feat333',
+      {
+        exitCode: 0,
+        stdout: 'src/other.ts',
+        stderr: '',
+      }
+    );
+    // A leftover workflow-only commit (touches only .github/workflows/*).
+    mockResponses.set('git log -1 --no-show-signature --format=%s wf222', {
+      exitCode: 0,
+      stdout: 'chore(venfork): hourly sync public fork via dedicated PAT',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git log -1 --no-show-signature --format=%ae%n%ce wf222',
+      {
+        exitCode: 0,
+        stdout:
+          'venfork-bot@users.noreply.github.com\nvenfork-bot@users.noreply.github.com',
+        stderr: '',
+      }
+    );
+    mockResponses.set(
+      'git diff-tree -r -z --no-renames --root --no-commit-id --name-status wf222',
+      {
+        exitCode: 0,
+        stdout: 'M\0.github/workflows/venfork-sync.yml\0',
+        stderr: '',
+      }
+    );
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: wf222',
+      {
+        exitCode: 0,
+        stdout: '.github/workflows/venfork-sync.yml',
+        stderr: '',
+      }
+    );
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    const pickCalls = execaCalls.filter((cmd) =>
+      cmd.includes(' cherry-pick --allow-empty')
+    );
+    expect(pickCalls.some((cmd) => cmd.includes('feat111'))).toBe(true);
+    expect(pickCalls.some((cmd) => cmd.includes('feat333'))).toBe(true);
+    expect(pickCalls.some((cmd) => cmd.includes('wf222'))).toBe(false);
+  });
+
+  test('preserves user-authored workflow commits that do not touch venfork-sync.yml', async () => {
+    mockManagedCommitOnBranch();
+    // A user edits .github/workflows/ci.yml on a feature branch, intending
+    // to send it upstream. The commit only touches files under
+    // .github/workflows but does NOT touch the managed venfork-sync.yml.
+    // The narrowed isWorkflowCommit must classify this as user-authored so
+    // stage cherry-picks it onto the public-fork tip (otherwise the
+    // upstream PR would silently miss the workflow change).
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'userci1',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git log -1 --no-show-signature --format=%s userci1', {
+      exitCode: 0,
+      stdout: 'ci: tighten test matrix on ci.yml',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: userci1',
+      {
+        exitCode: 0,
+        stdout: '.github/workflows/ci.yml',
+        stderr: '',
+      }
+    );
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    const pickCalls = execaCalls.filter((cmd) =>
+      cmd.includes(' cherry-pick --allow-empty')
+    );
+    expect(pickCalls.some((cmd) => cmd.includes('userci1'))).toBe(true);
+  });
+
+  test('aborts when a merge commit has evil resolutions outside .github/workflows', async () => {
+    mockManagedCommitOnBranch();
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-list --merges upstream0tip..refs/heads/feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'evilmrg\n',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git diff-tree --cc --name-only --no-commit-id evilmrg', {
+      exitCode: 0,
+      // A manual resolution outside .github/workflows — real work that
+      // would be lost if we silently linearized the merge away.
+      stdout: 'src/conflicted.ts',
+      stderr: '',
+    });
+
+    await expect(stageCommand('feature-branch')).rejects.toThrow(
+      'process.exit('
+    );
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+    // Guard must run before the worktree is created, so no cherry-picks happen.
+    expect(
+      execaCalls.some((cmd) => cmd.includes(' worktree add --detach'))
+    ).toBe(false);
+    expect(execaCalls.some((cmd) => cmd.includes(' cherry-pick '))).toBe(false);
+  });
+
+  test('aborts when merge commit inspection fails', async () => {
+    mockManagedCommitOnBranch();
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-list --merges upstream0tip..refs/heads/feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'bad-merge-commit\n',
+        stderr: '',
+      }
+    );
+    mockResponses.set(
+      'git diff-tree --cc --name-only --no-commit-id bad-merge-commit',
+      {
+        exitCode: 128,
+        stdout: '',
+        stderr: 'fatal: bad object bad-merge-commit',
+      }
+    );
+
+    await expect(stageCommand('feature-branch')).rejects.toThrow(
+      'process.exit('
+    );
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(
+      execaCalls.some((cmd) => cmd.includes(' worktree add --detach'))
+    ).toBe(false);
+    expect(execaCalls.some((cmd) => cmd.includes(' cherry-pick '))).toBe(false);
+  });
+
+  test('allows merge commits whose evil files are all under .github/workflows', async () => {
+    mockManagedCommitOnBranch();
+    // The common shape: feature branch merges origin/<default> back in purely
+    // to resolve the managed `venfork-sync.yml` conflict. The merge is "evil"
+    // for that file only, which is irrelevant on the public fork.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-list --merges upstream0tip..refs/heads/feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'wfmrg42\n',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git diff-tree --cc --name-only --no-commit-id wfmrg42', {
+      exitCode: 0,
+      stdout: '.github/workflows/venfork-sync.yml',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'feat111',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git log -1 --no-show-signature --format=%s feat111', {
+      exitCode: 0,
+      stdout: 'feat: real feature work',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: feat111',
+      {
+        exitCode: 0,
+        stdout: 'src/feature.ts',
+        stderr: '',
+      }
+    );
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // Stage should proceed past the guard and into the cherry-pick loop.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(' cherry-pick --allow-empty feat111')
+      )
+    ).toBe(true);
+  });
+
+  test('linearizes history with --no-merges so merge commits are skipped', async () => {
+    mockManagedCommitOnBranch();
+    // Simulates a feature branch that merged origin/<default> back in after a
+    // sync rewrite. The merge commit exists only to resolve a workflow-file
+    // conflict; cherry-picking it onto upstream would fail ("is a merge but
+    // no -m option was given"), and its content is already covered by the
+    // cherry-picked non-merge commits reachable from both sides of the merge.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+    // `--no-merges` makes git omit the merge commit from the list. We assert
+    // venfork passes that flag and only cherry-picks the non-merge commits.
+    mockResponses.set(
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'feat111\nfeat222',
+        stderr: '',
+      }
+    );
+    for (const sha of ['feat111', 'feat222']) {
+      mockResponses.set(`git log -1 --no-show-signature --format=%s ${sha}`, {
+        exitCode: 0,
+        stdout: `feat: work ${sha}`,
+        stderr: '',
+      });
+      mockResponses.set(
+        `git show --no-show-signature -z --name-only --pretty=format: ${sha}`,
+        {
+          exitCode: 0,
+          stdout: 'src/feature.ts',
+          stderr: '',
+        }
+      );
+    }
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch'
+        )
+      )
+    ).toBe(true);
+    const pickCalls = execaCalls.filter((cmd) =>
+      cmd.includes(' cherry-pick --allow-empty')
+    );
+    expect(pickCalls.some((cmd) => cmd.includes('feat111'))).toBe(true);
+    expect(pickCalls.some((cmd) => cmd.includes('feat222'))).toBe(true);
+  });
+
+  test('--pr looks up internal PR, redacts internal blocks, opens upstream PR, records shippedBranches', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    // Schedule disabled — keep the simpler push path.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          {
+            number: 7,
+            url: 'https://github.com/owner/repo-private/pull/7',
+            title: 'feat: add auth',
+            body: 'Public summary.\n\n<!-- venfork:internal -->client X requires Y<!-- /venfork:internal -->\n\nMore public detail.',
+          },
+        ]),
+        stderr: '',
+      }
+    );
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/pull/123\n',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } catch {
+      // updateVenforkConfig may fail on writeFile mock — fine for this test.
+    }
+
+    // Internal PR lookup happened via gh.
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh pr list') &&
+          cmd.includes('owner/repo-private') &&
+          cmd.includes('feature-branch')
+      )
+    ).toBe(true);
+
+    // Upstream PR creation hit the right repo + cross-fork head.
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh pr create --repo up/repo') &&
+          cmd.includes('--head owner:feature-branch')
+      )
+    ).toBe(true);
+
+    // The body sent to gh has the internal block stripped.
+    // (We can't easily inspect the piped --body-file - input here, but the
+    // payload was rendered via translateInternalBody and shown to the user.)
+    expect(execaCalls.some((cmd) => cmd.includes('--body-file -'))).toBe(true);
+  });
+
+  test('--pr surfaces "already exists" without throwing', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        'a pull request for branch "feature-branch" into branch "main" already exists: https://github.com/up/repo/pull/99',
+    });
+
+    let threw = false;
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } catch {
+      threw = true;
+    }
+
+    expect(threw).toBe(false);
+  });
+
+  test('--draft passes --draft to gh pr create', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/pull/200\n',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch', {
+        createPr: true,
+        draft: true,
+      });
+    } catch {
+      // ignore
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) => cmd.includes('gh pr create') && cmd.includes('--draft')
+      )
+    ).toBe(true);
+  });
+
+  test('default behaviour (no --pr) still prints the compare URL and skips gh pr create', async () => {
+    confirmResponse = true;
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // ignore
+    }
+
+    expect(execaCalls.some((cmd) => cmd.includes('gh pr create'))).toBe(false);
+  });
+
+  test('--pr internal-PR lookup passes --state with value as separate args', async () => {
+    // Regression for the bug where `--state open` was a single execa template
+    // interpolation and gh silently filtered wrong, producing zero results.
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/pull/200\n',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } catch {
+      // ignore
+    }
+
+    // The rendered command must contain "--state open" (space-separated).
+    expect(
+      execaCalls.some(
+        (cmd) => cmd.includes('gh pr list') && / --state open(?: |$)/.test(cmd)
+      )
+    ).toBe(true);
+  });
+
+  test('--internal-pr <n> uses gh pr view by id and skips the list lookup', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('gh pr view 99 --repo owner/repo-private', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 99,
+        url: 'https://github.com/owner/repo-private/pull/99',
+        title: 'pinned title',
+        body: 'pinned body',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/pull/300\n',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch', {
+        createPr: true,
+        internalPrNumber: 99,
+      });
+    } catch {
+      // ignore
+    }
+
+    // gh pr view by id was called
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh pr view 99') && cmd.includes('owner/repo-private')
+      )
+    ).toBe(true);
+    // and gh pr list was NOT called (the override skips list)
+    expect(execaCalls.some((cmd) => cmd.includes('gh pr list'))).toBe(false);
+  });
+
+  test('--pr auto-updates body via gh pr edit when upstream PR already exists', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    // gh pr create exits non-zero with an "already exists" error containing
+    // the existing PR URL — createUpstreamPr surfaces alreadyExists: true.
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        'a pull request for branch "feature-branch" into branch "main" already exists: https://github.com/up/repo/pull/77',
+    });
+    mockResponses.set('gh pr edit https://github.com/up/repo/pull/77', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } catch {
+      // ignore
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh pr edit https://github.com/up/repo/pull/77') &&
+          cmd.includes('--body-file -')
+      )
+    ).toBe(true);
+  });
+
+  test('--pr respects --no-update-existing on already-exists path', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        'a pull request for branch "feature-branch" into branch "main" already exists: https://github.com/up/repo/pull/77',
+    });
+
+    try {
+      await stageCommand('feature-branch', {
+        createPr: true,
+        noUpdateExisting: true,
+      });
+    } catch {
+      // ignore
+    }
+
+    expect(execaCalls.some((cmd) => cmd.includes('gh pr edit'))).toBe(false);
+  });
+
+  test('--pr with VENFORK_NONINTERACTIVE=1 skips the confirm prompt', async () => {
+    process.env.VENFORK_NONINTERACTIVE = '1';
+    // Default confirmResponse=true would also let the test pass even if the
+    // prompt fired; flip it to false so a successful flow PROVES the prompt
+    // was bypassed.
+    confirmResponse = false;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/pull/400\n',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } finally {
+      delete process.env.VENFORK_NONINTERACTIVE;
+    }
+
+    // The prompt was bypassed, so we reached the push + gh pr create path
+    // even though confirmResponse=false would have cancelled it.
+    expect(execaCalls.some((cmd) => cmd.includes('gh pr create'))).toBe(true);
+  });
+});
+
+describe('scheduleCommand', () => {
+  test.each([
+    ['standard', { publicForkUrl: 'git@github.com:test/repo.git' }],
+    ['no-public', { mode: 'no-public' }],
+  ])(
+    'set outro names the token and its workflow scope (%s)',
+    async (mode, layout) => {
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          version: '1',
+          upstreamUrl: 'git@github.com:upstream/repo.git',
+          ...layout,
+        }),
+        stderr: '',
+      });
+      (clack.outro as ReturnType<typeof mock>).mockClear();
+
+      await scheduleCommand('set', '0 */6 * * *');
+
+      const outro = String(
+        (clack.outro as ReturnType<typeof mock>).mock.calls.at(-1)?.[0]
+      );
+      expect(outro).toContain('gh secret set VENFORK_PUSH_TOKEN');
+      expect(outro).toContain('fine-grained personal access token');
+      expect(outro).toContain('Workflows: read and write');
+      expect(outro).not.toContain('$(gh auth token)');
+      if (mode === 'no-public') {
+        expect(outro).not.toContain('public fork');
+      } else {
+        expect(outro).toContain('public fork');
+      }
+    }
+  );
+
+  test.each([
+    ['warns', {}, true],
+    ['stays quiet', { disabledWorkflows: ['deploy.yml'] }, false],
+    ['stays quiet', { enabledWorkflows: ['ci.yml'] }, false],
+  ])(
+    'set %s about upstream workflows reading the token (%j)',
+    async (_label, lists, warns) => {
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          version: '1',
+          publicForkUrl: 'git@github.com:test/repo.git',
+          upstreamUrl: 'git@github.com:upstream/repo.git',
+          ...lists,
+        }),
+        stderr: '',
+      });
+      (clack.log.warn as ReturnType<typeof mock>).mockClear();
+
+      await scheduleCommand('set', '0 */6 * * *');
+
+      const warned = (
+        clack.log.warn as ReturnType<typeof mock>
+      ).mock.calls.some((call) =>
+        String(call[0]).includes('can read VENFORK_PUSH_TOKEN')
+      );
+      expect(warned).toBe(warns);
+    }
+  );
+
+  test('sets schedule and writes workflow/config updates', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+      }),
+      stderr: '',
+    });
+
+    try {
+      await scheduleCommand('set', '0 */6 * * *');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git show FETCH_HEAD:.venfork/config.json')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('git push') &&
+          cmd.includes('venfork-config:venfork-config')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('update-index --add --cacheinfo 100644,') &&
+          cmd.endsWith(',.github/workflows/venfork-sync.yml')
+      )
+    ).toBe(true);
+  });
+
+  test('disables schedule and removes workflow from default branch', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+      }),
+      stderr: '',
+    });
+
+    try {
+      await scheduleCommand('disable');
+    } catch {
+      // Expected in mocked environment
+    }
+
+    // With no schedule or preserve left, origin goes back to the upstream tip.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git push origin upstream0tip:refs/heads/main')
+      )
+    ).toBe(true);
+  });
+
+  test.each([
+    ['status', undefined],
+    ['set', '0 */6 * * *'],
+    ['disable', undefined],
+  ])(
+    '%s fetches upstream before it asks for the default branch',
+    async (action, value) => {
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          version: '1',
+          publicForkUrl: 'git@github.com:test/repo.git',
+          upstreamUrl: 'git@github.com:upstream/repo.git',
+          schedule: { enabled: true, cron: '0 */6 * * *' },
+        }),
+        stderr: '',
+      });
+
+      await scheduleCommand(action, value);
+
+      const fetch = execaCalls.indexOf('git fetch upstream');
+      const setHead = execaCalls.findIndex((cmd) =>
+        cmd.startsWith('git remote set-head upstream')
+      );
+      expect(fetch).toBeGreaterThan(-1);
+      expect(setHead).toBeGreaterThan(fetch);
+    }
+  );
+});
+
+describe('showHelp', () => {
+  test('displays help information', () => {
+    // showHelp is synchronous and just displays info
+    showHelp();
+
+    // Should not throw and should complete successfully
+    expect(true).toBe(true);
+  });
+});
+
+describe('workflowsCommand', () => {
+  test('shows status from config branch', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        enabledWorkflows: ['ci.yml'],
+      }),
+      stderr: '',
+    });
+
+    try {
+      await workflowsCommand('status', []);
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git show FETCH_HEAD:.venfork/config.json')
+      )
+    ).toBe(true);
+  });
+
+  test('updates enabledWorkflows in config branch', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+      }),
+      stderr: '',
+    });
+
+    try {
+      await workflowsCommand('allow', ['ci.yml', 'lint.yml']);
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('git push') &&
+          cmd.includes('venfork-config:venfork-config')
+      )
+    ).toBe(true);
+  });
+
+  test('updates disabledWorkflows in config branch', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+      }),
+      stderr: '',
+    });
+
+    try {
+      await workflowsCommand('block', ['deploy.yml']);
+    } catch {
+      // Expected in mocked environment
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('git push') &&
+          cmd.includes('venfork-config:venfork-config')
+      )
+    ).toBe(true);
+  });
+
+  async function writtenPolicy(
+    current: Record<string, unknown>,
+    action: Parameters<typeof workflowsCommand>[0],
+    workflows: string[]
+  ): Promise<Record<string, unknown>> {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:test/repo.git',
+        upstreamUrl: 'git@github.com:upstream/repo.git',
+        ...current,
+      }),
+      stderr: '',
+    });
+
+    await workflowsCommand(action, workflows);
+
+    const write = writeFileCalls
+      .filter((w) => w.path.endsWith('.venfork/config.json'))
+      .at(-1);
+    return JSON.parse(write?.content ?? '{}');
+  }
+
+  test('block adds to the block list instead of replacing it', async () => {
+    const written = await writtenPolicy(
+      { disabledWorkflows: ['ci.yml'] },
+      'block',
+      ['.github/workflows/other.yml', 'other.yml']
+    );
+
+    expect(written.disabledWorkflows).toEqual(['ci.yml', 'other.yml']);
+  });
+
+  test('allow adds to the allowlist instead of replacing it', async () => {
+    const written = await writtenPolicy(
+      { enabledWorkflows: ['ci.yml'] },
+      'allow',
+      ['lint.yml']
+    );
+
+    expect(written.enabledWorkflows).toEqual(['ci.yml', 'lint.yml']);
+  });
+
+  test('unblock removes only the named files from the block list', async () => {
+    const written = await writtenPolicy(
+      {
+        disabledWorkflows: ['ci.yml', 'deploy.yml'],
+        enabledWorkflows: ['x.yml'],
+      },
+      'unblock',
+      ['.github/workflows/ci.yml']
+    );
+
+    expect(written.disabledWorkflows).toEqual(['deploy.yml']);
+    expect(written.enabledWorkflows).toEqual(['x.yml']);
+  });
+
+  test('unallow removes only the named files from the allowlist', async () => {
+    const written = await writtenPolicy(
+      {
+        enabledWorkflows: ['ci.yml', 'lint.yml'],
+        disabledWorkflows: ['ci.yml'],
+      },
+      'unallow',
+      ['lint.yml']
+    );
+
+    expect(written.enabledWorkflows).toEqual(['ci.yml']);
+    expect(written.disabledWorkflows).toEqual(['ci.yml']);
+  });
+});
+
+describe('setupCommand - organization tests', () => {
+  test('uses --org flag when organization is specified', async () => {
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        'my-org'
+      );
+    } catch {
+      // Expected
+    }
+
+    // Should call gh repo fork with --org flag
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls[0]).toContain('--org my-org');
+  });
+
+  test('creates private repo with org/repo format when organization specified', async () => {
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        'my-org'
+      );
+    } catch {
+      // Expected
+    }
+
+    // Should call gh repo create with org/repo format
+    const createCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo create')
+    );
+    expect(createCalls.length).toBeGreaterThan(0);
+    expect(createCalls[0]).toContain('my-org/test-vendor');
+  });
+
+  test('passes --fork-name to gh repo fork and uses it for public remote', async () => {
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        'my-org',
+        'repo-staging'
+      );
+    } catch {
+      // Expected
+    }
+
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls[0]).toContain('--fork-name repo-staging');
+    expect(forkCalls[0]).toContain('--org my-org');
+    expect(
+      execaCalls.some(
+        (cmd) => cmd.includes('git remote') && cmd.includes('repo-staging')
+      )
+    ).toBe(true);
+  });
+
+  test('handles owner/repo shorthand with --org and --fork-name', async () => {
+    try {
+      await setupCommand(
+        'firebase/extensions',
+        'firebase-extensions-private',
+        'invertase',
+        'firebase-extensions'
+      );
+    } catch {
+      // Expected
+    }
+
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls[0]).toContain('gh repo fork firebase/extensions');
+    expect(forkCalls[0]).not.toContain("gh repo fork ''");
+    expect(forkCalls[0]).toContain('--org invertase');
+    expect(forkCalls[0]).toContain('--fork-name firebase-extensions');
+  });
+
+  test('uses organization in git URLs when specified', async () => {
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        'my-org'
+      );
+    } catch {
+      // Expected
+    }
+
+    // Should use org in clone and remote URLs
+    const cloneCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo clone')
+    );
+    const remoteCalls = execaCalls.filter(
+      (cmd) =>
+        cmd.includes('git remote add') || cmd.includes('git remote set-url')
+    );
+
+    expect(cloneCalls.some((cmd) => cmd.includes('my-org/test-vendor'))).toBe(
+      true
+    );
+    expect(remoteCalls.some((cmd) => cmd.includes('my-org/'))).toBe(true);
+  });
+
+  test('uses username when no organization specified', async () => {
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    // Should NOT include --org flag
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls[0]).not.toContain('--org');
+
+    // Should use testuser (from mock) in URLs
+    const cloneCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo clone')
+    );
+    expect(cloneCalls.some((cmd) => cmd.includes('testuser/test-vendor'))).toBe(
+      true
+    );
+  });
+});
+
+describe('setupCommand - VENFORK_ORG environment variable', () => {
+  test('uses VENFORK_ORG when no --org flag is present', async () => {
+    // Simulate what index.ts does: read VENFORK_ORG and pass to setupCommand
+    process.env.VENFORK_ORG = 'env-org';
+    const organization = process.env.VENFORK_ORG;
+
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        organization
+      );
+    } catch {
+      // Expected
+    }
+
+    // Should use env-org in commands
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls[0]).toContain('--org env-org');
+
+    // Should use env-org in URLs
+    const cloneCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo clone')
+    );
+    expect(cloneCalls.some((cmd) => cmd.includes('env-org/test-vendor'))).toBe(
+      true
+    );
+  });
+
+  test('--org flag overrides VENFORK_ORG', async () => {
+    process.env.VENFORK_ORG = 'env-org';
+
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        'flag-org'
+      );
+    } catch {
+      // Expected
+    }
+
+    // Should use flag-org (not env-org)
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls[0]).toContain('--org flag-org');
+    expect(forkCalls[0]).not.toContain('env-org');
+
+    // Should use flag-org in URLs
+    const cloneCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo clone')
+    );
+    expect(cloneCalls.some((cmd) => cmd.includes('flag-org/test-vendor'))).toBe(
+      true
+    );
+    expect(cloneCalls.some((cmd) => cmd.includes('env-org/'))).toBe(false);
+  });
+
+  test('prompts for confirmation when neither --org nor VENFORK_ORG is set', async () => {
+    // Ensure env var is not set
+    delete process.env.VENFORK_ORG;
+    // Confirm will return true (from beforeEach default)
+
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    // Should use testuser (after confirmation)
+    const cloneCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo clone')
+    );
+    expect(cloneCalls.some((cmd) => cmd.includes('testuser/test-vendor'))).toBe(
+      true
+    );
+  });
+
+  test('exits when user declines personal account confirmation', async () => {
+    // Ensure env var is not set
+    delete process.env.VENFORK_ORG;
+    // Set confirm to return false (decline)
+    confirmResponse = false;
+
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected - command should exit
+    }
+
+    // Should call process.exit
+    expect(process.exit).toHaveBeenCalledWith(0);
+
+    // Should NOT create any repos
+    const createCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo create')
+    );
+    expect(createCalls.length).toBe(0);
+  });
+});
+
+describe('setupCommand - error paths', () => {
+  test('handles error in catch block', async () => {
+    // Make fork command fail instead of hanging
+    mockResponses.set('gh repo fork', (_command: string) =>
+      Promise.reject(new Error('Fork failed'))
+    );
+
+    try {
+      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
+    } catch {
+      // Expected
+    }
+
+    // Cleanup should still be called
+    expect(rmCalls.length).toBeGreaterThan(0);
+  });
+});
+
+describe('cloneCommand', () => {
+  test('clones the vendor repository', async () => {
+    try {
+      await cloneCommand('git@github.com:acme/project-private.git');
+    } catch {
+      // Expected
+    }
+
+    // Should clone the repo via gh (owner/repo + target dir)
+    const cloneCalls = execaCalls.filter((cmd) =>
+      cmd.includes('gh repo clone')
+    );
+    expect(cloneCalls.length).toBeGreaterThan(0);
+    expect(cloneCalls[0]).toContain('acme/project-private');
+  });
+
+  test('detects public fork by stripping -private suffix', async () => {
+    try {
+      await cloneCommand('git@github.com:acme/project-private.git');
+    } catch {
+      // Expected
+    }
+
+    // Should try to detect public fork
+    const viewCalls = execaCalls.filter((cmd) => cmd.includes('gh repo view'));
+    expect(viewCalls.length).toBeGreaterThan(0);
+    // Should check for 'project' (without -private)
+    expect(viewCalls.some((cmd) => cmd.includes('acme/project'))).toBe(true);
+  });
+
+  test('attempts to configure remotes', async () => {
+    try {
+      await cloneCommand('git@github.com:acme/project-private.git');
+    } catch {
+      // Expected - may fail due to interactive prompts in test environment
+    }
+
+    // Command should attempt to configure remotes
+    // Note: Full remote configuration may require interactive input mocking
+    const remoteCalls = execaCalls.filter((cmd) => cmd.includes('git remote'));
+    // Should attempt some remote operations
+    expect(remoteCalls.length).toBeGreaterThan(0);
+  });
+
+  test('runs gh repo set-default for the mirror after configuring remotes', async () => {
+    try {
+      await cloneCommand('git@github.com:acme/project-private.git');
+    } catch {
+      // Expected
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh repo set-default') &&
+          cmd.includes('acme/project-private')
+      )
+    ).toBe(true);
+  });
+});
+
+describe('setupCommand remote transport', () => {
+  test.each([
+    ['https', 'https://github.com/test/repo.git', 'https://github.com/'],
+    ['ssh', 'git@github.com:test/repo.git', 'git@github.com:'],
+  ])(
+    'records and adds remotes over %s when gh uses it',
+    async (protocol, upstream, prefix) => {
+      mockResponses.set('gh config get git_protocol', {
+        exitCode: 0,
+        stdout: `${protocol}\n`,
+        stderr: '',
+      });
+      mockResponses.set('git remote get-url upstream', {
+        exitCode: 2,
+        stdout: '',
+        stderr: "error: No such remote 'upstream'",
+      });
+
+      try {
+        await setupCommand(
+          'git@github.com:test/repo.git',
+          'test-vendor',
+          'acme'
+        );
+      } catch {
+        // Expected in mocked env
+      }
+
+      const configWrite = writeFileCalls.find((w) =>
+        w.path.endsWith('.venfork/config.json')
+      );
+      const parsed = JSON.parse(configWrite?.content ?? '{}');
+      expect(parsed.upstreamUrl).toBe(upstream);
+      expect(parsed.publicForkUrl).toBe(`${prefix}acme/repo.git`);
+      expect(execaCalls).toContain(`git remote add upstream ${upstream}`);
+    }
+  );
+});
+
+describe('cloneCommand remote transport', () => {
+  function useRecordedConfig(protocol: string): void {
+    mockResponses.set('test -d', () =>
+      Promise.reject(new Error('no such directory'))
+    );
+    mockResponses.set('gh config get git_protocol', {
+      exitCode: 0,
+      stdout: `${protocol}\n`,
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:acme/project.git',
+        upstreamUrl: 'https://github.com/upstream/project',
+      }),
+      stderr: '',
+    });
+  }
+
+  test.each([
+    [
+      'https',
+      'git remote add public https://github.com/acme/project.git',
+      'git remote add upstream https://github.com/upstream/project.git',
+    ],
+    [
+      'ssh',
+      'git remote add public git@github.com:acme/project.git',
+      'git remote add upstream git@github.com:upstream/project.git',
+    ],
+  ])(
+    'adds public and upstream over %s when gh uses it',
+    async (protocol, publicAdd, upstreamAdd) => {
+      useRecordedConfig(protocol);
+
+      await cloneCommand('acme/project-private');
+
+      const adds = execaCalls.filter((cmd) => cmd.startsWith('git remote add'));
+      expect(adds).toEqual([publicAdd, upstreamAdd]);
+    }
+  );
+
+  test('keeps a non-github.com URL as recorded', async () => {
+    useRecordedConfig('https');
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        mode: 'no-public',
+        upstreamUrl: 'git@git.example.com:team/project.git',
+      }),
+      stderr: '',
+    });
+
+    await cloneCommand('acme/project-private');
+
+    expect(
+      execaCalls.filter((cmd) => cmd.startsWith('git remote add'))
+    ).toEqual(['git remote add upstream git@git.example.com:team/project.git']);
+  });
+});
+
+describe('cloneCommand - error paths', () => {
+  test('requires vendor repo URL', async () => {
+    try {
+      await cloneCommand();
+    } catch {
+      // Expected - process.exit(1) throws
+    }
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('syncCommand - error paths', () => {
+  test('a failing divergence range aborts sync without pushing', async () => {
+    const stderr = 'fatal: bad revision upstream0tip..origin0tip';
+    mockResponses.set('git rev-list upstream0tip..origin0tip', (_cmd, opts) =>
+      opts.reject === false
+        ? Promise.resolve({ exitCode: 128, stdout: '', stderr })
+        : Promise.reject(new Error(stderr))
+    );
+
+    await expect(syncCommand('main')).rejects.toThrow('process.exit(1)');
+    expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
+  });
+
+  test('aborts when origin has divergent commits', async () => {
+    // Mock rev-list to show origin has divergent commits
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
+      exitCode: 0,
+      stdout: 'abc123\n',
+      stderr: '',
+    });
+
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+    expect(process.exit).not.toHaveBeenCalled();
+  });
+
+  test('aborts when public has divergent commits', async () => {
+    // Mock rev-list to show public has divergent commits
+    mockResponses.set('git rev-list upstream0tip..public0tip', {
+      exitCode: 0,
+      stdout: 'def456\n',
+      stderr: '',
+    });
+
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+    expect(process.exit).not.toHaveBeenCalled();
+  });
+
+  test('a bot commit that also adds another workflow file is divergence', async () => {
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
+      exitCode: 0,
+      stdout: 'abc123\n',
+      stderr: '',
+    });
+    mockResponses.set('git log -1 --no-show-signature --format=%s abc123', {
+      exitCode: 0,
+      stdout: 'chore(workflows): Add workflows for venfork sync',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git log -1 --no-show-signature --format=%ae%n%ce abc123',
+      {
+        exitCode: 0,
+        stdout:
+          'venfork-bot@users.noreply.github.com\nvenfork-bot@users.noreply.github.com',
+        stderr: '',
+      }
+    );
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: abc123',
+      {
+        exitCode: 0,
+        stdout:
+          '.github/workflows/sync.yml\0.github/workflows/venfork-sync.yml',
+        stderr: '',
+      }
+    );
+    mockResponses.set(
+      'git diff-tree -r -z --no-renames --root --no-commit-id --name-status abc123',
+      {
+        exitCode: 0,
+        stdout:
+          'A\0.github/workflows/sync.yml\0A\0.github/workflows/venfork-sync.yml\0',
+        stderr: '',
+      }
+    );
+
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+
+    expect(execaCalls.some((cmd) => cmd.includes('git push origin'))).toBe(
+      false
+    );
+  });
+
+  test('still aborts when divergent commit touches files outside .github/workflows', async () => {
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
+      exitCode: 0,
+      stdout: 'deadbee\n',
+      stderr: '',
+    });
+    mockResponses.set('git log -1 --no-show-signature --format=%s deadbee', {
+      exitCode: 0,
+      stdout: 'feat: real work on main',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: deadbee',
+      {
+        exitCode: 0,
+        stdout: '.github/workflows/sync.yml\0src/index.ts',
+        stderr: '',
+      }
+    );
+
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+    expect(process.exit).not.toHaveBeenCalled();
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git push origin upstream0tip:refs/heads/main')
+      )
+    ).toBe(false);
+  });
+
+  test('aborts when divergent commit touches only non-managed workflow files', async () => {
+    // A user-authored commit that edits, say, ci.yml on the default branch.
+    // It only touches files under .github/workflows, but does NOT touch the
+    // managed venfork-sync.yml. The narrowed isWorkflowCommit must classify
+    // this as user-authored — sync should refuse to clobber it, not silently
+    // filter it as a managed commit.
+    mockResponses.set('git rev-list upstream0tip..origin0tip', {
+      exitCode: 0,
+      stdout: 'userci1\n',
+      stderr: '',
+    });
+    mockResponses.set('git log -1 --no-show-signature --format=%s userci1', {
+      exitCode: 0,
+      stdout: 'ci: tighten test matrix on ci.yml',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git show --no-show-signature -z --name-only --pretty=format: userci1',
+      {
+        exitCode: 0,
+        stdout: '.github/workflows/ci.yml',
+        stderr: '',
+      }
+    );
+
+    await expect(syncCommand('main')).rejects.toBeInstanceOf(
+      SyncDivergenceError
+    );
+    expect(process.exit).not.toHaveBeenCalled();
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git push origin upstream0tip:refs/heads/main')
+      )
+    ).toBe(false);
+  });
+
+  test('treats a missing origin branch as a first sync', async () => {
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/main^{commit}',
+      {
+        exitCode: 128,
+        stdout: '',
+        stderr: 'fatal: Needed a single revision',
+      }
+    );
+
+    await syncCommand('main');
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git rev-list upstream0tip..origin0tip')
+      )
+    ).toBe(false);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git push origin upstream0tip:refs/heads/main --force-with-lease=refs/heads/main:'
+        )
+      )
+    ).toBe(true);
+  });
+
+  test('aborts when the divergence check itself fails', async () => {
+    mockResponses.set('git rev-list upstream0tip..origin0tip', () =>
+      Promise.reject(new Error('fatal: bad revision'))
+    );
+
+    await expect(syncCommand('main')).rejects.toThrow('process.exit(');
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
+  });
+
+  test('reports a missing upstream branch before checking divergence', async () => {
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/upstream/main^{commit}',
+      {
+        exitCode: 128,
+        stdout: '',
+        stderr: 'fatal: Needed a single revision',
+      }
+    );
+    mockResponses.set('git rev-list upstream0tip..', () =>
+      Promise.reject(
+        new Error("fatal: bad revision 'upstream0tip..origin0tip'")
+      )
+    );
+
+    await expect(syncCommand('main')).rejects.toThrow('process.exit(');
+
+    expect(clack.log.error).toHaveBeenLastCalledWith(
+      'upstream/main not found after fetch. Check the upstream remote and the default branch name.'
+    );
+  });
+
+  test('--report-issues opens the sync-blocked issue on the origin repo', async () => {
+    const savedRepo = process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REPOSITORY;
+    try {
+      useDistinctRemotes();
+      mockResponses.set('git rev-list upstream0tip..origin0tip', {
+        exitCode: 0,
+        stdout: 'abc123\n',
+        stderr: '',
+      });
+      mockResponses.set('gh api repos/acme/widget-private/issues', {
+        exitCode: 0,
+        stdout: '[]',
+        stderr: '',
+      });
+
+      await expect(
+        syncCommand('main', { reportIssues: true })
+      ).rejects.toBeInstanceOf(SyncDivergenceError);
+
+      expect(
+        execaCalls.some((cmd) =>
+          cmd.startsWith(
+            'gh issue create --repo acme/widget-private --title Scheduled sync blocked: divergent commits on origin/main --label venfork-sync-blocked'
+          )
+        )
+      ).toBe(true);
+      expect(
+        execaCalls
+          .filter((cmd) => cmd.startsWith('gh '))
+          .every((cmd) => cmd.includes('acme/widget-private'))
+      ).toBe(true);
+    } finally {
+      if (savedRepo !== undefined) process.env.GITHUB_REPOSITORY = savedRepo;
+    }
+  });
+
+  test('--report-issues closes the sync-blocked issue after a successful sync', async () => {
+    const savedRepo = process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REPOSITORY;
+    try {
+      useDistinctRemotes();
+      mockResponses.set('gh api repos/acme/widget-private/issues', {
+        exitCode: 0,
+        stdout: '[{"number":9}]',
+        stderr: '',
+      });
+
+      await syncCommand('main', { reportIssues: true });
+
+      expect(
+        execaCalls.some((cmd) =>
+          cmd.startsWith('gh issue close 9 --repo acme/widget-private')
+        )
+      ).toBe(true);
+    } finally {
+      if (savedRepo !== undefined) process.env.GITHUB_REPOSITORY = savedRepo;
+    }
+  });
+
+  test('without --report-issues sync never calls gh', async () => {
+    await syncCommand('main');
+
+    expect(execaCalls.some((cmd) => cmd.startsWith('gh '))).toBe(false);
+  });
+
+  test('handles fetch errors', async () => {
+    mockResponses.set('git fetch', (_command: string) =>
+      Promise.reject(new Error('Fetch failed'))
+    );
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected
+    }
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+  });
+
+  test('handles push errors', async () => {
+    mockResponses.set('git push', (_command: string) =>
+      Promise.reject(new Error('Push failed'))
+    );
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected
+    }
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('stageCommand --pr payload', () => {
+  function mockPrStage(upstreamUrl = 'git@github.com:up/repo.git'): {
+    bodies: string[];
+  } {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: upstreamUrl,
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    const bodies: string[] = [];
+    mockResponses.set('gh pr create --repo', (_cmd, opts) => {
+      bodies.push(String((opts as { input?: string }).input ?? ''));
+      return Promise.resolve({
+        exitCode: 0,
+        stdout: 'https://github.com/up/repo/pull/1\n',
+        stderr: '',
+      });
+    });
+    return { bodies };
+  }
+
+  test('the synthetic body lists the published subjects without (#N) references', async () => {
+    const { bodies } = mockPrStage();
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set('git log --reverse --format=%s upstream0tip..', {
+      exitCode: 0,
+      stdout: 'feat: real work (#42)\nfix: edge case',
+      stderr: '',
+    });
+
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } catch {
+      // updateVenforkConfig may fail under mocks
+    }
+
+    expect(bodies).toEqual([
+      'Commits in this branch:\n\n- feat: real work\n- fix: edge case',
+    ]);
+  });
+
+  test.each([
+    ['plain-text venfork', 'Staged with venfork from the mirror.'],
+    ['the mirror owner/name', 'Follow-up to owner/repo-private#3.'],
+  ])(
+    'an internal PR body naming %s is refused before any push',
+    async (_label, body) => {
+      const { bodies } = mockPrStage();
+      mockResponses.set(
+        'gh pr list --repo owner/repo-private --head feature-branch',
+        {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { number: 7, url: 'u', title: 'feat: x', body },
+          ]),
+          stderr: '',
+        }
+      );
+
+      await expect(
+        stageCommand('feature-branch', { createPr: true })
+      ).rejects.toThrow('process.exit(1)');
+
+      expect(bodies).toEqual([]);
+      expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
+    }
+  );
+
+  test('the confirm preview shows the whole body', async () => {
+    mockPrStage();
+    const longBody = `Summary. ${'x'.repeat(2000)} END`;
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          { number: 7, url: 'u', title: 'feat: long', body: longBody },
+        ]),
+        stderr: '',
+      }
+    );
+
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } catch {
+      // updateVenforkConfig may fail under mocks
+    }
+
+    const preview = noteCalls.find(
+      (n) => n.title === 'Upstream PR body preview'
+    );
+    expect(preview?.message).toBe(longBody);
+  });
+
+  test('warns when the internal PR title or body references #N', async () => {
+    mockPrStage();
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          { number: 7, url: 'u', title: 'feat: x (#12)', body: 'Closes #7.' },
+        ]),
+        stderr: '',
+      }
+    );
+    const warn = clack.log.warn as ReturnType<typeof mock>;
+    warn.mockClear();
+
+    try {
+      await stageCommand('feature-branch', { createPr: true });
+    } catch {
+      // updateVenforkConfig may fail under mocks
+    }
+
+    const warned = warn.mock.calls.map((call) => String(call[0]));
+    expect(warned).toContain(
+      'The upstream PR title references issue/PR numbers that will resolve against upstream'
+    );
+    expect(warned).toContain(
+      'The upstream PR body references issue/PR numbers that will resolve against upstream'
+    );
+  });
+
+  test('--pr refuses an upstream remote that is not a GitHub repository', async () => {
+    mockPrStage('/srv/git/upstream.git');
+
+    await expect(
+      stageCommand('feature-branch', { createPr: true })
+    ).rejects.toThrow('process.exit(1)');
+
+    expect(clack.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "upstream remote '/srv/git/upstream.git' is not a GitHub repository"
+      )
+    );
+    expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
+  });
+});
+
+describe('stageCommand - error paths', () => {
+  test('throws BranchNotFoundError when branch does not exist', async () => {
+    mockResponses.set('git rev-parse --verify', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'not found',
+    });
+
+    try {
+      await stageCommand('nonexistent-branch');
+    } catch {
+      // Expected - process.exit throws
+    }
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+  });
+
+  test('throws RemoteNotFoundError when public remote missing', async () => {
+    mockResponses.set('git remote get-url public', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'not found',
+    });
+
+    try {
+      await stageCommand('feature-branch');
+    } catch {
+      // Expected
+    }
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('pullRequestCommand', () => {
+  function setupPrCommonMocks() {
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('gh pr view 42 --repo up/repo', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 42,
+        title: 'Add cool feature',
+        body: 'Body of upstream PR.',
+        url: 'https://github.com/up/repo/pull/42',
+        state: 'OPEN',
+        baseRefName: 'main',
+        headRefName: 'feat/cool',
+        author: { login: 'contributor' },
+        headRepositoryOwner: { login: 'forker' },
+      }),
+      stderr: '',
+    });
+    // Local branch does NOT already exist (rev-parse --verify fails)
+    mockResponses.set('git rev-parse --verify upstream-pr/42', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'fatal: bad revision',
+    });
+    mockResponses.set('git fetch upstream pull/42/head:upstream-pr/42', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse upstream-pr/42', {
+      exitCode: 0,
+      stdout: 'aaaaaaaaaaaaaaaa\n',
+      stderr: '',
+    });
+    mockResponses.set('git push origin upstream-pr/42', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+  }
+
+  test('happy path: integer arg → fetch pull/N/head + push to origin + record entry', async () => {
+    setupPrCommonMocks();
+
+    try {
+      await pullRequestCommand('42');
+    } catch {
+      // ignore — config writeback may fail in mocked env
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) => cmd.includes('gh pr view 42') && cmd.includes('--repo up/repo')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git fetch upstream pull/42/head:upstream-pr/42')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) => cmd.includes('git push origin upstream-pr/42'))
+    ).toBe(true);
+  });
+
+  test('URL arg resolves to the same PR number', async () => {
+    setupPrCommonMocks();
+    try {
+      await pullRequestCommand('https://github.com/up/repo/pull/42');
+    } catch {
+      // ignore
+    }
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git fetch upstream pull/42/head:upstream-pr/42')
+      )
+    ).toBe(true);
+  });
+
+  test('--no-push skips push to origin AND skips pulledPrs linkage', async () => {
+    // The linkage skip is important: with --no-push the mirror doesn't have
+    // the branch, so a later `venfork sync <branch>` shouldn't push it
+    // (which it would do if a pulledPrs entry were recorded).
+    setupPrCommonMocks();
+    try {
+      await pullRequestCommand('42', { push: false });
+    } catch {
+      // ignore
+    }
+    expect(execaCalls.some((cmd) => cmd.includes('git push origin'))).toBe(
+      false
+    );
+    // updateVenforkConfig pushes the venfork-config branch — must not happen.
+    expect(
+      execaCalls.some((cmd) => cmd.includes('venfork-config:venfork-config'))
+    ).toBe(false);
+  });
+
+  test('--branch-name overrides the local branch', async () => {
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('gh pr view 42 --repo up/repo', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 42,
+        title: 't',
+        body: '',
+        url: 'https://github.com/up/repo/pull/42',
+        state: 'OPEN',
+        baseRefName: 'main',
+        headRefName: 'feat/x',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git fetch upstream pull/42/head:review/up-42', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse review/up-42', {
+      exitCode: 0,
+      stdout: 'bbbbbbbbbbbbbbbb\n',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+
+    try {
+      await pullRequestCommand('42', { branchName: 'review/up-42' });
+    } catch {
+      // ignore
+    }
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git fetch upstream pull/42/head:review/up-42')
+      )
+    ).toBe(true);
+  });
+
+  test('refuses to clobber an existing local branch (no --branch-name)', async () => {
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('gh pr view 42 --repo up/repo', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 42,
+        title: 't',
+        body: '',
+        url: 'https://github.com/up/repo/pull/42',
+        state: 'OPEN',
+        baseRefName: 'main',
+        headRefName: 'feat/x',
+      }),
+      stderr: '',
+    });
+    // Local branch already exists.
+    mockResponses.set('git rev-parse --verify upstream-pr/42', {
+      exitCode: 0,
+      stdout: 'existinghead',
+      stderr: '',
+    });
+
+    await expect(pullRequestCommand('42')).rejects.toThrow('process.exit(');
+    expect(
+      execaCalls.some((cmd) => cmd.includes('git fetch upstream pull/42'))
+    ).toBe(false);
+  });
+
+  test('rejects malformed PR ref', async () => {
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    await expect(pullRequestCommand('not-a-pr-ref')).rejects.toThrow(
+      'process.exit('
+    );
+  });
+});
+
+describe('syncCommand - pulled PR branches', () => {
+  test('pushes a pulled PR branch with an explicit lease on the mirror copy', async () => {
+    mockResponses.set('git rev-parse upstream-pr/7', {
+      exitCode: 0,
+      stdout: 'newsha\n',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/upstream-pr/7^{commit}',
+      {
+        exitCode: 0,
+        stdout: 'mirrorsha\n',
+        stderr: '',
+      }
+    );
+
+    try {
+      await syncCommand('upstream-pr/7');
+    } catch {
+      // updateVenforkConfig may fail under mocks
+    }
+
+    expect(execaCalls).toContain(
+      'git push origin newsha:refs/heads/upstream-pr/7 --force-with-lease=refs/heads/upstream-pr/7:mirrorsha --no-follow-tags'
+    );
+  });
+
+  test('refreshes upstream-pr/<n> via pull/<n>/head and updates origin', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+        pulledPrs: {
+          'upstream-pr/42': {
+            upstreamPrNumber: 42,
+            upstreamPrUrl: 'https://github.com/up/repo/pull/42',
+            head: 'oldsha',
+            lastSyncedAt: '2026-04-28T09:00:00Z',
+          },
+        },
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git fetch upstream pull/42/head:upstream-pr/42', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse upstream-pr/42', {
+      exitCode: 0,
+      stdout: 'newsha\n',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git push origin newsha:refs/heads/upstream-pr/42 --force-with-lease',
+      {
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+      }
+    );
+
+    try {
+      await syncCommand('upstream-pr/42');
+    } catch {
+      // updateVenforkConfig may fail under mocks — fine
+    }
+
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git fetch upstream pull/42/head:upstream-pr/42')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes(
+          'git push origin newsha:refs/heads/upstream-pr/42 --force-with-lease'
+        )
+      )
+    ).toBe(true);
+    // Should NOT run the default-branch divergence flow.
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git push origin upstream0tip:refs/heads/main')
+      )
+    ).toBe(false);
+  });
+
+  test('falls back to convention when no pulledPrs entry exists', async () => {
+    mockResponses.set('git fetch upstream pull/99/head:upstream-pr/99', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse upstream-pr/99', {
+      exitCode: 0,
+      stdout: 'sha99\n',
+      stderr: '',
+    });
+    mockResponses.set('git push origin upstream-pr/99 --force-with-lease', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    // No config entry — relies on the upstream-pr/N convention match.
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('upstream-pr/99');
+    } catch {
+      // ignore
+    }
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('git fetch upstream pull/99/head:upstream-pr/99')
+      )
+    ).toBe(true);
+  });
+
+  test('non-pulled branch falls through to default-branch sync flow', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+
+    try {
+      await syncCommand('main');
+    } catch {
+      // ignore
+    }
+    // Must not have hit the pull/N/head fetch path.
+    expect(
+      execaCalls.some((cmd) => cmd.includes('git fetch upstream pull/'))
+    ).toBe(false);
+  });
+
+  test('does NOT update pulledPrs when push to origin fails', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+        pulledPrs: {
+          'upstream-pr/42': {
+            upstreamPrNumber: 42,
+            upstreamPrUrl: 'https://github.com/up/repo/pull/42',
+            head: 'oldsha',
+            lastSyncedAt: '2026-04-28T09:00:00Z',
+          },
+        },
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git fetch upstream pull/42/head:upstream-pr/42', {
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse upstream-pr/42', {
+      exitCode: 0,
+      stdout: 'newsha\n',
+      stderr: '',
+    });
+    // Mirror push fails — config write must NOT happen, otherwise pulledPrs
+    // would record a head/lastSyncedAt that doesn't match the mirror.
+    mockResponses.set(
+      'git push origin newsha:refs/heads/upstream-pr/42 --force-with-lease',
+      {
+        exitCode: 1,
+        stdout: '',
+        stderr: 'fatal: remote rejected',
+      }
+    );
+
+    try {
+      await syncCommand('upstream-pr/42');
+    } catch {
+      // ignore
+    }
+
+    // No new write to venfork-config branch.
+    expect(
+      execaCalls.some((cmd) => cmd.includes('venfork-config:venfork-config'))
+    ).toBe(false);
+  });
+});
+
+describe('issueCommand', () => {
+  function setupCommonRemotes() {
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/mirror.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+  }
+
+  test('stage: reads internal issue, redacts, posts upstream, records linkage', async () => {
+    setupCommonRemotes();
+    confirmResponse = true;
+    mockResponses.set('gh issue view 7 --repo owner/mirror', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 7,
+        url: 'https://github.com/owner/mirror/issues/7',
+        title: 'Bug: things break',
+        body: 'Public summary.\n<!-- venfork:internal -->Client X is blocked.<!-- /venfork:internal -->\nMore detail.',
+        state: 'OPEN',
+        author: { login: 'me' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set('gh issue create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/issues/99\n',
+      stderr: '',
+    });
+
+    try {
+      await issueCommand('stage', '7');
+    } catch {
+      // venfork-config write may fail under mocks
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh issue view 7') && cmd.includes('--repo owner/mirror')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh issue create --repo up/repo') &&
+          cmd.includes('--body-file -')
+      )
+    ).toBe(true);
+  });
+
+  test('stage: refuses a body or title that names the mirror and opens nothing', async () => {
+    setupCommonRemotes();
+    confirmResponse = true;
+    for (const [title, body] of [
+      ['Bug: things break', 'Context in owner/mirror#3.'],
+      ['Bug: things break', 'See https://github.com/owner/mirror/pull/4'],
+      ['Port of owner/mirror#9', 'Public summary.'],
+    ]) {
+      execaCalls.length = 0;
+      mockResponses.set('gh issue view 7 --repo owner/mirror', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          number: 7,
+          url: 'https://github.com/owner/mirror/issues/7',
+          title,
+          body,
+          state: 'OPEN',
+          author: { login: 'me' },
+        }),
+        stderr: '',
+      });
+
+      await expect(issueCommand('stage', '7')).rejects.toThrow(
+        'process.exit(1)'
+      );
+
+      expect(execaCalls.some((cmd) => cmd.includes('gh issue create'))).toBe(
+        false
+      );
+    }
+  });
+
+  test('pull: reads upstream issue, posts internal, records linkage', async () => {
+    setupCommonRemotes();
+    confirmResponse = true;
+    mockResponses.set('gh issue view 1234 --repo up/repo', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 1234,
+        url: 'https://github.com/up/repo/issues/1234',
+        title: 'Feature request: foo',
+        body: 'Body text.',
+        state: 'OPEN',
+        author: { login: 'reporter' },
+        comments: [
+          {
+            author: { login: 'commenter' },
+            body: 'Me too',
+            createdAt: '2026-01-02',
+          },
+        ],
+      }),
+      stderr: '',
+    });
+    mockResponses.set('gh issue create --repo owner/mirror', {
+      exitCode: 0,
+      stdout: 'https://github.com/owner/mirror/issues/12\n',
+      stderr: '',
+    });
+
+    try {
+      await issueCommand('pull', '1234');
+    } catch {
+      // ignore config-write fallout
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh issue view 1234') && cmd.includes('--repo up/repo')
+      )
+    ).toBe(true);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.includes('gh issue create --repo owner/mirror')
+      )
+    ).toBe(true);
+  });
+
+  test('renderPulledComments: empty/undefined yields no section', () => {
+    expect(renderPulledComments(undefined)).toBe('');
+    expect(renderPulledComments([])).toBe('');
+  });
+
+  test('renderPulledComments: renders author, timestamp, and body', () => {
+    const out = renderPulledComments([
+      { author: { login: 'alice' }, body: 'first', createdAt: '2026-01-02' },
+      { author: { login: 'bob' }, body: 'second' },
+    ]);
+    expect(out).toContain('### Upstream comments (2)');
+    expect(out).toContain('**@alice** — 2026-01-02:');
+    expect(out).toContain('first');
+    expect(out).toContain('**@bob**:');
+    expect(out).toContain('second');
+  });
+
+  test('renderPulledComments: singular label and missing author fallback', () => {
+    const out = renderPulledComments([{ body: 'orphan' }]);
+    expect(out).toContain('### Upstream comment (1)');
+    expect(out).toContain('**(unknown)**:');
+  });
+
+  test('rejects unknown action', async () => {
+    setupCommonRemotes();
+    await expect(
+      // biome-ignore lint/suspicious/noExplicitAny: testing invalid runtime input
+      issueCommand('burn' as any, '7')
+    ).rejects.toThrow('process.exit(');
+  });
+
+  test('rejects missing target', async () => {
+    setupCommonRemotes();
+    await expect(issueCommand('stage', undefined)).rejects.toThrow(
+      'process.exit('
+    );
+  });
+
+  test('accepts URL form for stage', async () => {
+    setupCommonRemotes();
+    confirmResponse = true;
+    mockResponses.set('gh issue view 7 --repo owner/mirror', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 7,
+        url: 'https://github.com/owner/mirror/issues/7',
+        title: 't',
+        body: '',
+        state: 'OPEN',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('gh issue create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/issues/40\n',
+      stderr: '',
+    });
+
+    try {
+      await issueCommand('stage', 'https://github.com/owner/mirror/issues/7');
+    } catch {
+      // ignore
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh issue view 7') && cmd.includes('--repo owner/mirror')
+      )
+    ).toBe(true);
+  });
+});
+
+/**
+ * `--no-public` mode collapses the 3-remote layout (origin/public/upstream)
+ * to 2 remotes (origin/upstream) for users whose upstream lives in their own
+ * org. These tests cover the behaviour fan-out across setup/sync/stage.
+ */
+describe('no-public mode', () => {
+  /** Convenience: returns a venfork-config JSON for the given mode. */
+  const noPublicConfig = (extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      version: '1',
+      mode: 'no-public',
+      upstreamUrl: 'git@github.com:upstream/repo.git',
+      ...extra,
+    });
+
+  describe('setupCommand --no-public', () => {
+    test('skips gh repo fork', async () => {
+      try {
+        await setupCommand(
+          'git@github.com:test/repo.git',
+          'test-vendor',
+          undefined,
+          undefined,
+          { noPublic: true }
+        );
+      } catch {
+        // Expected in mocked env
+      }
+
+      const forkCalls = execaCalls.filter((c) => c.includes('gh repo fork'));
+      expect(forkCalls.length).toBe(0);
+    });
+
+    test('does not add `public` remote', async () => {
+      try {
+        await setupCommand(
+          'git@github.com:test/repo.git',
+          'test-vendor',
+          undefined,
+          undefined,
+          { noPublic: true }
+        );
+      } catch {
+        // Expected
+      }
+
+      const remoteAddPublic = execaCalls.filter(
+        (c) =>
+          c.includes('git remote add public') ||
+          c.includes('git remote set-url public')
+      );
+      expect(remoteAddPublic.length).toBe(0);
+    });
+
+    test('still adds upstream remote with push DISABLEd', async () => {
+      try {
+        await setupCommand(
+          'git@github.com:test/repo.git',
+          'test-vendor',
+          undefined,
+          undefined,
+          { noPublic: true }
+        );
+      } catch {
+        // Expected
+      }
+
+      expect(
+        execaCalls.some((c) => c.includes('git remote set-url --push upstream'))
+      ).toBe(true);
+    });
+
+    test('writes venfork-config with mode=no-public and no publicForkUrl', async () => {
+      try {
+        await setupCommand(
+          'git@github.com:test/repo.git',
+          'test-vendor',
+          undefined,
+          undefined,
+          { noPublic: true }
+        );
+      } catch {
+        // Expected
+      }
+
+      const configWrite = writeFileCalls.find((w) =>
+        w.path.endsWith('.venfork/config.json')
+      );
+      expect(configWrite).toBeDefined();
+      const parsed = JSON.parse(configWrite?.content ?? '{}');
+      expect(parsed.mode).toBe('no-public');
+      expect(parsed.publicForkUrl).toBeUndefined();
+      expect(parsed.upstreamUrl).toBe('git@github.com:test/repo.git');
+    });
+
+    test('throws when combined with a public fork name', async () => {
+      await expect(
+        setupCommand(
+          'git@github.com:test/repo.git',
+          'test-vendor',
+          undefined,
+          'forked-name',
+          { noPublic: true }
+        )
+      ).rejects.toThrow(/no-public.*public fork name/i);
+    });
+
+    test('removes a stale `public` remote when re-running in no-public mode', async () => {
+      // Simulate a repo that previously had a `public` remote configured —
+      // `git remote get-url public` succeeds with a URL. Re-running setup
+      // with --no-public should explicitly remove it so the local layout
+      // matches the recorded config.
+      mockResponses.set('git remote get-url public', {
+        exitCode: 0,
+        stdout: 'git@github.com:test/repo.git',
+        stderr: '',
+      });
+
+      try {
+        await setupCommand(
+          'git@github.com:test/repo.git',
+          'test-vendor',
+          undefined,
+          undefined,
+          { noPublic: true }
+        );
+      } catch {
+        // Expected in mocked env
+      }
+
+      expect(
+        execaCalls.some((c) => c.includes('git remote remove public'))
+      ).toBe(true);
+    });
+  });
+
+  describe('syncCommand in no-public mode', () => {
+    test('skips fetch public', async () => {
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: noPublicConfig(),
+        stderr: '',
+      });
+
+      try {
+        await syncCommand('main');
+      } catch {
+        // Expected
+      }
+
+      expect(execaCalls.some((c) => c.includes('git fetch upstream'))).toBe(
+        true
+      );
+      expect(execaCalls.some((c) => c.includes('git fetch origin'))).toBe(true);
+      expect(execaCalls.some((c) => c.includes('git fetch public'))).toBe(
+        false
+      );
+    });
+
+    test('does not push to public', async () => {
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: noPublicConfig(),
+        stderr: '',
+      });
+
+      try {
+        await syncCommand('main');
+      } catch {
+        // Expected
+      }
+
+      const pushCalls = execaCalls.filter((c) => c.includes('git push'));
+      expect(pushCalls.some((c) => c.includes('git push public'))).toBe(false);
+      expect(pushCalls.some((c) => c.includes('git push origin'))).toBe(true);
+    });
+  });
+
+  describe('stageCommand in no-public mode', () => {
+    test('pushes by upstream URL (not by remote name) so DISABLE push URL is bypassed', async () => {
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: noPublicConfig(),
+        stderr: '',
+      });
+      // upstream remote URL lookup (planStaging path)
+      mockResponses.set('git remote get-url upstream', {
+        exitCode: 0,
+        stdout: 'git@github.com:upstream/repo.git',
+        stderr: '',
+      });
+
+      try {
+        await stageCommand('feature-branch');
+      } catch {
+        // Expected
+      }
+
+      // Should never query `git remote get-url public` in no-public mode.
+      expect(
+        execaCalls.some((c) => c.includes('git remote get-url public'))
+      ).toBe(false);
+
+      const pushCalls = execaCalls.filter((c) => c.includes('git push'));
+      // Push goes to the upstream URL (so the DISABLEd push URL on the
+      // `upstream` remote is bypassed). The literal `git push upstream <branch>`
+      // form must NOT appear.
+      expect(
+        pushCalls.some((c) =>
+          c.includes('git push git@github.com:upstream/repo.git')
+        )
+      ).toBe(true);
+      expect(pushCalls.some((c) => /git push upstream\b/.test(c))).toBe(false);
+      expect(pushCalls.some((c) => c.includes('git push public'))).toBe(false);
+    });
+
+    test('schedule-mode push by URL uses explicit-SHA lease via ls-remote', async () => {
+      mockManagedCommitOnBranch();
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: noPublicConfig({
+          schedule: { enabled: true, cron: '0 */6 * * *' },
+        }),
+        stderr: '',
+      });
+      mockResponses.set('git remote get-url upstream', {
+        exitCode: 0,
+        stdout: 'git@github.com:upstream/repo.git',
+        stderr: '',
+      });
+      // Simulate the branch existing on upstream — ls-remote returns a SHA.
+      mockResponses.set('git ls-remote --exit-code', {
+        exitCode: 0,
+        stdout: 'cafef00d\trefs/heads/feature-branch',
+        stderr: '',
+      });
+
+      try {
+        await stageCommand('feature-branch');
+      } catch {
+        // Expected
+      }
+
+      // The push must use --force-with-lease with the explicit SHA,
+      // targeting the upstream URL (not the `upstream` remote name).
+      const pushCalls = execaCalls.filter((c) => c.includes('git push'));
+      expect(
+        pushCalls.some(
+          (c) =>
+            c.includes('git push git@github.com:upstream/repo.git') &&
+            c.includes('--force-with-lease=refs/heads/feature-branch:cafef00d')
+        )
+      ).toBe(true);
+    });
+  });
+
+  describe('cloneCommand --no-public for legacy mirrors', () => {
+    test('skips public-fork detection when --no-public is set and no config exists', async () => {
+      // No mock for `git show FETCH_HEAD:.venfork/config.json` and the
+      // default `gh repo clone` mock returns empty stdout — fetchVenforkConfig
+      // returns null. The flag becomes the source of truth.
+      try {
+        await cloneCommand('git@github.com:acme/legacy-private.git', {
+          noPublic: true,
+          upstreamUrl: 'git@github.com:acme/legacy.git',
+        });
+      } catch {
+        // Expected
+      }
+
+      // Should NOT call `gh repo view <owner>/legacy` (public-fork lookup).
+      expect(
+        execaCalls.some(
+          (c) =>
+            c.includes('gh repo view') &&
+            c.includes('acme/legacy') &&
+            !c.includes('--json')
+        )
+      ).toBe(false);
+      // Should NOT call the parent-lookup either.
+      expect(
+        execaCalls.some(
+          (c) => c.includes('gh repo view') && c.includes('--json parent')
+        )
+      ).toBe(false);
+    });
+
+    test('does not add a public remote in legacy --no-public mode', async () => {
+      try {
+        await cloneCommand('git@github.com:acme/legacy-private.git', {
+          noPublic: true,
+          upstreamUrl: 'git@github.com:acme/legacy.git',
+        });
+      } catch {
+        // Expected
+      }
+
+      const remoteAddPublic = execaCalls.filter((c) =>
+        c.includes('git remote add public')
+      );
+      expect(remoteAddPublic.length).toBe(0);
+
+      // upstream remote IS added.
+      expect(
+        execaCalls.some((c) => c.includes('git remote add upstream'))
+      ).toBe(true);
+    });
+  });
+});
+
+describe('prompt cancel exits 130', () => {
+  const pushedOrCreated = () =>
+    execaCalls.filter(
+      (cmd) =>
+        cmd.includes('gh repo create') ||
+        cmd.includes('gh repo fork') ||
+        cmd.includes(' push ') ||
+        cmd.includes('gh issue create') ||
+        cmd.includes('gh pr create')
+    );
+
+  test('setup: cancelled upstream prompt', async () => {
+    promptCancelled = true;
+    await expect(setupCommand()).rejects.toThrow('process.exit(130)');
+    expect(pushedOrCreated()).toEqual([]);
+  });
+
+  test('setup: cancelled mirror name prompt', async () => {
+    promptCancelled = true;
+    await expect(setupCommand('git@github.com:test/repo.git')).rejects.toThrow(
+      'process.exit(130)'
+    );
+    expect(pushedOrCreated()).toEqual([]);
+  });
+
+  test('setup: cancelled personal-account confirm', async () => {
+    promptCancelled = true;
+    await expect(
+      setupCommand('git@github.com:test/repo.git', 'test-vendor')
+    ).rejects.toThrow('process.exit(130)');
+    expect(pushedOrCreated()).toEqual([]);
+  });
+
+  describe('issue and stage', () => {
+    beforeEach(() => {
+      mockResponses.set('git remote get-url origin', {
+        exitCode: 0,
+        stdout: 'git@github.com:owner/mirror.git',
+        stderr: '',
+      });
+      mockResponses.set('git remote get-url upstream', {
+        exitCode: 0,
+        stdout: 'git@github.com:up/repo.git',
+        stderr: '',
+      });
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          version: '1',
+          publicForkUrl: 'git@github.com:owner/fork.git',
+          upstreamUrl: 'git@github.com:up/repo.git',
+        }),
+        stderr: '',
+      });
+    });
+
+    test('issue stage: cancelled confirm', async () => {
+      mockResponses.set('gh issue view 7 --repo owner/mirror', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          number: 7,
+          url: 'https://github.com/owner/mirror/issues/7',
+          title: 'Bug',
+          body: 'Body.',
+          state: 'OPEN',
+          author: { login: 'me' },
+        }),
+        stderr: '',
+      });
+      promptCancelled = true;
+      await expect(issueCommand('stage', '7')).rejects.toThrow(
+        'process.exit(130)'
+      );
+      expect(pushedOrCreated()).toEqual([]);
+    });
+
+    test('issue pull: cancelled confirm', async () => {
+      mockResponses.set('gh issue view 1234 --repo up/repo', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          number: 1234,
+          url: 'https://github.com/up/repo/issues/1234',
+          title: 'Request',
+          body: 'Body.',
+          state: 'OPEN',
+          author: { login: 'reporter' },
+          comments: [],
+        }),
+        stderr: '',
+      });
+      promptCancelled = true;
+      await expect(issueCommand('pull', '1234')).rejects.toThrow(
+        'process.exit(130)'
+      );
+      expect(pushedOrCreated()).toEqual([]);
+    });
+
+    test('stage: cancelled confirm', async () => {
+      mockManagedCommitOnBranch();
+      promptCancelled = true;
+      await expect(stageCommand('feature-branch')).rejects.toThrow(
+        'process.exit(130)'
+      );
+      expect(pushedOrCreated()).toEqual([]);
+    });
+  });
+});

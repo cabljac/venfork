@@ -17,27 +17,39 @@ import {
   getPushToken,
   getRepoDefaultBranch,
   listCommitMessages,
+  listOpenIssuesWithLabel,
   localMirrorPath,
   names,
   openUpstreamPr,
+  packCodeUnderTest,
   pokeUpstream,
+  publishTarballOnUpstream,
   pushToUpstreamPrBranch,
   REPO_ROOT,
   RUN_ID,
   readWorkflowFromOrigin,
   runVenfork,
   setRepoSecret,
+  setRepoVariable,
   tmpRoot,
   UPSTREAM_OWNER,
   waitForDispatchedRun,
+  waitForOpenIssuesWithLabel,
   waitForRunCompletion,
 } from './helpers.js';
 
 const E2E_ENABLED = process.env.VENFORK_E2E === '1';
 const REAL_DISPATCH = process.env.VENFORK_E2E_REAL_DISPATCH === '1';
-const REAL_CRON = process.env.VENFORK_E2E_REAL_CRON === '1';
 
 const e2eDescribe = E2E_ENABLED ? describe : describe.skip;
+
+let installUrlPromise: Promise<string> | undefined;
+
+/** Publishes the code under test once per run and returns its install URL. */
+function codeUnderTestUrl(): Promise<string> {
+  installUrlPromise ??= packCodeUnderTest().then(publishTarballOnUpstream);
+  return installUrlPromise;
+}
 
 e2eDescribe('venfork e2e — scheduled sync flow', () => {
   beforeAll(async () => {
@@ -129,7 +141,10 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     const wf = await readWorkflowFromOrigin(localMirrorPath, defaultBranch);
     expect(wf).toContain(`cron: '${cron}'`);
     expect(wf).toContain('workflow_dispatch:');
-    expect(wf).toContain('npm install -g venfork');
+    expect(wf).toContain('SPEC="${VENFORK_INSTALL_SPEC:-venfork@');
+    expect(wf).toContain('npm install -g --ignore-scripts "$SPEC"');
+    expect(wf).toContain('- name: Check VENFORK_PUSH_TOKEN');
+    expect(wf).not.toContain('|| github.token');
     expect(wf).toContain('venfork sync');
 
     const scheduledConfig = await readVenforkConfigFromRepo(localMirrorPath);
@@ -149,8 +164,8 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
       defaultBranch,
       2
     );
-    expect(mirrorMessagesAfterSchedule[0]).toMatch(
-      /scheduled sync workflow \(venfork\)/
+    expect(mirrorMessagesAfterSchedule[0]).toBe(
+      'chore: venfork-managed mirror commit'
     );
 
     // 4. Push a new commit to upstream.
@@ -189,9 +204,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
       defaultBranch,
       2
     );
-    expect(mirrorMessagesFinal[0]).toMatch(
-      /scheduled sync workflow \(venfork\)/
-    );
+    expect(mirrorMessagesFinal[0]).toBe('chore: venfork-managed mirror commit');
     // Second commit is the upstream poke commit.
     expect(mirrorMessagesFinal[1]).toContain('e2e poke poke.txt');
 
@@ -209,9 +222,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     'tier 2: workflow_dispatch run on GHA syncs upstream change end-to-end',
     async () => {
       // Tier 1 left both repos in sync, with venfork's own workflow on
-      // origin/main wired to use `secrets.VENFORK_PUSH_TOKEN || github.token`.
-      // We just need to set the secret, push another upstream change, and
-      // dispatch.
+      // origin/main, which fails its preflight unless VENFORK_PUSH_TOKEN is set.
       const defaultBranch = await getRepoDefaultBranch(
         UPSTREAM_OWNER,
         names.upstream
@@ -225,6 +236,16 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
         names.mirrorBare,
         'VENFORK_PUSH_TOKEN',
         token
+      );
+
+      // The published venfork lags this checkout, so install the build
+      // from beforeAll through the workflow's VENFORK_INSTALL_SPEC override.
+      const installUrl = await codeUnderTestUrl();
+      await setRepoVariable(
+        GITHUB_ORG,
+        names.mirrorBare,
+        'VENFORK_INSTALL_SPEC',
+        installUrl
       );
 
       // 2. Push another change to upstream so we can prove propagation
@@ -288,25 +309,18 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
         defaultBranch,
         2
       );
-      expect(mirrorMessages[0]).toMatch(/scheduled sync workflow \(venfork\)/);
+      expect(mirrorMessages[0]).toBe('chore: venfork-managed mirror commit');
       expect(mirrorMessages[1]).toContain('e2e poke dispatch.txt');
+
+      expect(
+        await listOpenIssuesWithLabel(
+          GITHUB_ORG,
+          names.mirrorBare,
+          'venfork-sync-blocked'
+        )
+      ).toEqual([]);
     },
     600_000
-  );
-
-  test.skipIf(!REAL_CRON)(
-    'tier 2 slow: real cron firing succeeds (requires VENFORK_E2E_PAT, ≤20min)',
-    async () => {
-      // Implementation deferred. Same PAT setup as the dispatch test.
-      // Then poll `gh run list` every 60s for up to 20 minutes for a NEW
-      // scheduled (not workflow_dispatch) run with conclusion=success.
-      // GHA cron is best-effort and may not fire within the cap; this test
-      // is opt-in and inherently flaky.
-      throw new Error(
-        'tier 2 cron test not yet implemented; remove VENFORK_E2E_REAL_CRON=1 to skip'
-      );
-    },
-    1_500_000
   );
 
   test('tier 3: stage --pr opens upstream PR with internal body redacted', async () => {
@@ -378,7 +392,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     expect(upstreamPr.isDraft).toBe(true);
   }, 300_000);
 
-  test('tier 4: pull-request imports an upstream PR; sync refreshes it', async () => {
+  test('tier 4: pull pr imports an upstream PR; sync refreshes it', async () => {
     const defaultBranch = await getRepoDefaultBranch(
       UPSTREAM_OWNER,
       names.upstream
@@ -396,7 +410,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     });
 
     // Pull it into the mirror.
-    await runVenfork(['pull-request', String(opened.number)], {
+    await runVenfork(['pull', 'pr', String(opened.number)], {
       cwd: localMirrorPath,
     });
 
@@ -438,7 +452,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     expect(refreshedMirrorHead).toBe(refreshedLocalHead);
   }, 300_000);
 
-  test('tier 5: issue stage + issue pull round-trip through gh', async () => {
+  test('tier 5: stage issue + pull issue round-trip through gh', async () => {
     // Create an internal issue on the mirror with a redaction block.
     const internalBody = [
       'Public bug summary: feature.txt does not load in Safari.',
@@ -455,7 +469,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     });
 
     // Stage the internal issue upstream.
-    await runVenfork(['issue', 'stage', String(internal.number)], {
+    await runVenfork(['stage', 'issue', String(internal.number)], {
       cwd: localMirrorPath,
       env: { VENFORK_NONINTERACTIVE: '1' },
     });
@@ -492,7 +506,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     const upstreamComment = `Follow-up detail ${RUN_ID}`;
     await $`gh issue comment ${upstreamReport.number} --repo ${UPSTREAM_OWNER}/${names.upstream} --body ${upstreamComment}`;
 
-    await runVenfork(['issue', 'pull', String(upstreamReport.number)], {
+    await runVenfork(['pull', 'issue', String(upstreamReport.number)], {
       cwd: localMirrorPath,
       env: { VENFORK_NONINTERACTIVE: '1' },
     });
@@ -524,4 +538,92 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     void getIssueMeta;
     void getPrMeta;
   }, 300_000);
+
+  test.skipIf(!REAL_DISPATCH)(
+    'tier 6: no-public sync without VENFORK_PUSH_TOKEN fails at the preflight and files an issue naming the cause',
+    async () => {
+      const defaultBranch = await getRepoDefaultBranch(
+        UPSTREAM_OWNER,
+        names.upstream
+      );
+      const mirrorPath = `${tmpRoot}/${names.noPublicMirror}`;
+      await runVenfork(
+        [
+          'setup',
+          `${UPSTREAM_OWNER}/${names.upstream}`,
+          names.noPublicMirror,
+          '--org',
+          GITHUB_ORG,
+          '--no-public',
+        ],
+        { cwd: tmpRoot, env: { VENFORK_ORG: GITHUB_ORG }, input: 'y\n' }
+      );
+      await runVenfork(['schedule', 'set', '*/5 * * * *'], {
+        cwd: mirrorPath,
+      });
+      await pokeUpstream('no-public.txt', `no-public ${RUN_ID} ${Date.now()}`);
+      const mirrorShaBefore = await getDefaultBranchSha(
+        GITHUB_ORG,
+        names.noPublicMirror,
+        defaultBranch
+      );
+
+      const dispatchedAt = new Date();
+      await $`gh workflow run venfork-sync.yml --repo ${GITHUB_ORG}/${names.noPublicMirror} --ref ${defaultBranch}`;
+      const runId = await waitForDispatchedRun(
+        GITHUB_ORG,
+        names.noPublicMirror,
+        'venfork-sync.yml',
+        dispatchedAt,
+        90_000
+      );
+      const { conclusion, url } = await waitForRunCompletion(
+        GITHUB_ORG,
+        names.noPublicMirror,
+        runId,
+        300_000
+      );
+      const logs = await $({
+        reject: false,
+      })`gh run view ${runId} --repo ${GITHUB_ORG}/${names.noPublicMirror} --log-failed`;
+      console.log(
+        `[venfork-e2e] tier 6 conclusion=${conclusion} url=${url}\n--- gh run view --log-failed ---\n${logs.stdout}${logs.stderr}`
+      );
+
+      expect(conclusion).toBe('failure');
+      expect(logs.stdout).toContain(
+        '##[error]VENFORK_PUSH_TOKEN is not set on this repository'
+      );
+      const steps =
+        await $`gh run view ${runId} --repo ${GITHUB_ORG}/${names.noPublicMirror} --json jobs --jq ${'.jobs[0].steps[] | "\\(.name)=\\(.conclusion)"'}`;
+      expect(steps.stdout).toContain('Check VENFORK_PUSH_TOKEN=failure');
+      expect(steps.stdout).toContain('Install venfork=skipped');
+      expect(steps.stdout).toContain('Sync from upstream=skipped');
+      expect(steps.stdout).toContain('Report failed sync=success');
+
+      expect(
+        await getDefaultBranchSha(
+          GITHUB_ORG,
+          names.noPublicMirror,
+          defaultBranch
+        )
+      ).toBe(mirrorShaBefore);
+      const blocked = await waitForOpenIssuesWithLabel(
+        GITHUB_ORG,
+        names.noPublicMirror,
+        'venfork-sync-blocked',
+        1
+      );
+      expect(blocked).toHaveLength(1);
+      const issue = await getIssueMeta({
+        owner: GITHUB_ORG,
+        repo: names.noPublicMirror,
+        number: blocked[0] ?? 0,
+      });
+      expect(issue.body).toContain(
+        'Cause: the VENFORK_PUSH_TOKEN secret is not set'
+      );
+    },
+    600_000
+  );
 });
