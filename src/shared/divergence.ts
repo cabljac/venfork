@@ -2,7 +2,7 @@ import { $ } from 'execa';
 import { normalizePreservePath } from '../config.js';
 import type { SyncDivergenceError } from '../errors.js';
 import {
-  classifyManagedCommit,
+  inspectManagedCommit,
   isWeakManagedKind,
   type ManagedCommitKind,
   type WorkflowPolicy,
@@ -56,6 +56,8 @@ export function isPreservedCommit(
 export interface DroppedManagedCommit {
   commit: string;
   kind: ManagedCommitKind;
+  /** Paths a `stale-trailer` commit changes that replacing it discards. */
+  staleFiles: string[];
 }
 
 /** Commits on a mirror tip that upstream does not have. */
@@ -119,14 +121,20 @@ export async function checkDivergence(args: {
   const weakManaged: DroppedManagedCommit[] = [];
   const upstreamOwned = new Map<string, boolean>();
   for (const commit of divergentCommits) {
-    const kind = await classifyManagedCommit(
+    const managed = await inspectManagedCommit(
       commit,
       cwd,
       preserveAllowed,
       workflowPolicy
     );
-    if (kind !== null) {
-      if (isWeakManagedKind(kind)) weakManaged.push({ commit, kind });
+    if (managed !== null) {
+      if (isWeakManagedKind(managed.kind)) {
+        weakManaged.push({
+          commit,
+          kind: managed.kind,
+          staleFiles: managed.staleFiles,
+        });
+      }
       continue;
     }
     // Compute the changed files once - both the preserve check and the

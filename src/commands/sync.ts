@@ -122,15 +122,28 @@ async function syncPulledPr(
 
 /**
  * Warns, before anything is pushed, about commits that sync will replace
- * because they look venfork-managed without carrying the trailer.
+ * on a weaker signal than a current managed commit.
  */
 function warnWeakManaged(commits: DroppedManagedCommit[]): void {
-  if (commits.length === 0) return;
-  p.log.warn(
-    `Treating ${commits.length} commit(s) as venfork-managed without the Venfork-Managed trailer; sync replaces them:\n${commits
-      .map(({ commit, kind }) => `  - ${commit.slice(0, 12)} (${kind})`)
-      .join('\n')}`
-  );
+  const stale = commits.filter(({ kind }) => kind === 'stale-trailer');
+  const untrailed = commits.filter(({ kind }) => kind !== 'stale-trailer');
+  if (stale.length > 0) {
+    p.log.warn(
+      `Replacing ${stale.length} venfork-managed commit(s) that no longer match the preserve list or workflow policy; this discards their changes:\n${stale
+        .map(
+          ({ commit, kind, staleFiles }) =>
+            `  - ${commit.slice(0, 12)} (${kind}): ${staleFiles.join(', ')}`
+        )
+        .join('\n')}`
+    );
+  }
+  if (untrailed.length > 0) {
+    p.log.warn(
+      `Treating ${untrailed.length} commit(s) as venfork-managed without the Venfork-Managed trailer; sync replaces them:\n${untrailed
+        .map(({ commit, kind }) => `  - ${commit.slice(0, 12)} (${kind})`)
+        .join('\n')}`
+    );
+  }
 }
 
 /**

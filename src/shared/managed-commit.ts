@@ -224,10 +224,31 @@ export async function classifyManagedCommit(
   preserve: Iterable<string> = [],
   policy?: WorkflowPolicy
 ): Promise<ManagedCommitKind | null> {
+  return (await inspectManagedCommit(ref, cwd, preserve, policy))?.kind ?? null;
+}
+
+/** A managed classification and the paths replacing the commit would discard. */
+export interface ManagedCommitInspection {
+  kind: ManagedCommitKind;
+  /** Sorted paths a `stale-trailer` commit changes beyond the managed content; empty for every other kind. */
+  staleFiles: string[];
+}
+
+/** Same signals as {@link classifyManagedCommit}, plus the stale paths of a `stale-trailer` commit. */
+export async function inspectManagedCommit(
+  ref: string,
+  cwd?: string,
+  preserve: Iterable<string> = [],
+  policy?: WorkflowPolicy
+): Promise<ManagedCommitInspection | null> {
   const extra = await unmanagedChanges(ref, cwd, new Set(preserve), policy);
   if (extra === null) return null;
+  const found = (kind: ManagedCommitKind): ManagedCommitInspection => ({
+    kind,
+    staleFiles: [],
+  });
   if (await hasManagedTrailer(ref, cwd)) {
-    if (extra.length === 0) return 'trailer';
+    if (extra.length === 0) return found('trailer');
     const emails = await identityEmails(ref, cwd);
     const botMade =
       emails?.author === VENFORK_BOT_EMAIL &&
@@ -238,20 +259,23 @@ export async function classifyManagedCommit(
           change.status === 'A' ||
           (change.status === 'D' && change.file.startsWith(`${WORKFLOWS_DIR}/`))
       )
-      ? 'stale-trailer'
+      ? {
+          kind: 'stale-trailer',
+          staleFiles: extra.map((change) => change.file).sort(),
+        }
       : null;
   }
   if (extra.length > 0) return null;
   const subject = await commitSubject(ref, cwd);
-  if (subject === MANAGED_COMMIT_MESSAGE) return 'subject';
+  if (subject === MANAGED_COMMIT_MESSAGE) return found('subject');
   if (subject !== null && LEGACY_MANAGED_COMMIT_MESSAGES.includes(subject)) {
-    return 'legacy-subject';
+    return found('legacy-subject');
   }
   if (
     (await identityEmails(ref, cwd))?.author === VENFORK_BOT_EMAIL &&
     (await commitTouchesWorkflowPath(ref, cwd))
   ) {
-    return 'path-heuristic';
+    return found('path-heuristic');
   }
   return null;
 }

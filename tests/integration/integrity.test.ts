@@ -173,7 +173,10 @@ describe('managed commit left behind by a preserve removal', () => {
     await sync();
 
     expect(prompts.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining('(stale-trailer)')
+      expect.stringMatching(/\(stale-trailer\)[\s\S]*tools\/n\.txt/)
+    );
+    expect(prompts.log.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('without the Venfork-Managed trailer')
     );
     expect(await fx.fileAt(fx.origin, 'main', 'tools/m.txt')).toBe('m\n');
     expect(await fx.fileAt(fx.origin, 'main', 'tools/n.txt')).toBeNull();
