@@ -137,16 +137,17 @@ const HOST_PREFIX =
 const NAME_END = '(?![a-z0-9_-])(?!\\.[a-z0-9_])';
 
 /**
- * Matches `name` as a repo name. `word` matches it anywhere it is not part of
- * a longer name (`widget-private#12`, `from widget-private.`), optionally with
- * `.git`. `owner` needs an `owner/` or a host before it, and not a further
- * `/` unless a host came first, so `src/backend/` and `src/backend.ts` do not
- * match. `host` needs a host before it.
+ * Matches `name` as a repo name. `word` matches it anywhere it is not inside
+ * a longer word, so a `-`, `_` or `.` suffix still matches
+ * (`widget-private#12`, `fix/widget-private-sync`, `widget-private_notes`).
+ * `owner` needs an `owner/` or a host before it, and not a further `/` unless
+ * a host came first, so `src/backend/`, `src/backend.ts` and
+ * `src/backend-ui/` do not match. `host` needs a host before it.
  */
 function repoNamePattern(name: string, match: NameMatch): RegExp {
   const escaped = escapeRegExp(name);
   if (match === 'word') {
-    return new RegExp(`(?<![a-z0-9_-])${escaped}(?:\\.git)?${NAME_END}`);
+    return new RegExp(`(?<![a-z0-9_-])${escaped}(?![a-z0-9])`);
   }
   const repo = `[a-z0-9_.-]+[/:]${escaped}(?:\\.git)?`;
   const hosted = `${HOST_PREFIX}${repo}${NAME_END}`;

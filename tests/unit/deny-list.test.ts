@@ -65,14 +65,15 @@ describe('findDeniedText with a bare repo name term', () => {
     ['a directory of that name', 'Move the client to src/backend/'],
     ['the name with an issue number', 'see backend#12'],
     ['the name ending a sentence', 'Ported from backend.'],
+    ['the name with a hyphen suffix', 'the backend-api service'],
+    ['a file with that stem', 'see src/backend.ts'],
   ])('finds %s in a message, title or body', (_label, text) => {
     expect(findDeniedText(text, NAME_TERMS)).toBe('backend');
   });
 
   test.each([
-    ['a longer name', 'the backend-api service'],
+    ['a longer word', 'the backends service'],
     ['a prefixed name', 'the my-backend service'],
-    ['a file with that stem', 'see src/backend.ts'],
   ])('passes %s in a message, title or body', (_label, text) => {
     expect(findDeniedText(text, NAME_TERMS)).toBeNull();
   });
@@ -116,8 +117,34 @@ describe('findDeniedText repo boundaries', () => {
     'git@github.com:acme/widget-private-public.git',
     'src/widget-private.ts',
     'other/widget-private-v2',
-  ])('passes %p', (text) => {
-    expect(findDeniedText(text, NAME_TERMS)).toBeNull();
+  ])('the URL and owner/name terms pass %p', (text) => {
+    const urlTerms = NAME_TERMS.filter((term) => term !== 'widget-private');
+    expect(findDeniedText(text, urlTerms)).toBeNull();
+  });
+
+  test.each([
+    'fix/widget-private-sync',
+    'deploy to widget-private-staging first',
+    'see widget-private_notes',
+    'other/widget-private-v2',
+    'src/widget-private.ts',
+  ])('the bare name with a suffix matches in word mode: %p', (text) => {
+    expect(findDeniedText(text, NAME_TERMS)).toBe('widget-private');
+  });
+
+  test.each(['widget-privateer', 'widget-private2', 'my-widget-private'])(
+    'a longer word passes in word mode: %p',
+    (text) => {
+      expect(findDeniedText(text, NAME_TERMS)).toBeNull();
+    }
+  );
+
+  test.each([
+    'src/widget-private-ui/x.ts',
+    'src/widget-private_notes/x.ts',
+    'src/widget-private.ts',
+  ])('a file name with a suffixed name passes in owner mode: %p', (text) => {
+    expect(findDeniedText(text, NAME_TERMS, { nameMatch: 'owner' })).toBeNull();
   });
 
   test('a directory of that name passes in a file name only', () => {

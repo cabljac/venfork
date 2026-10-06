@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import * as prompts from '@clack/prompts';
 import { $ } from 'execa';
 import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
-import { syncCommand } from '../../src/commands.js';
+import { stageCommand, syncCommand } from '../../src/commands.js';
 import {
   assertNoMirrorReference,
   mirrorDenyList,
@@ -346,5 +347,31 @@ describe('deny-list gaps that published end to end', () => {
     expect(() =>
       assertNoMirrorReference('100%zz and %E0%A4%A', 'the PR body', denyList)
     ).not.toThrow();
+  });
+});
+
+describe('a branch name that runs on from the mirror name', () => {
+  test.each([
+    'fix/widget-private-sync',
+    'widget-private-staging',
+    'widget-private_notes',
+  ])('%p is refused before any push', async (branch) => {
+    await git(
+      'remote',
+      'set-url',
+      'origin',
+      'git@git.example.invalid:acme/widget-private.git'
+    );
+    await featureFromUpstream();
+    await git('branch', '--quiet', '-m', branch);
+
+    await expect(stageCommand(branch)).rejects.toThrow('process.exit(1)');
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining("the branch name contains 'widget-private'")
+    );
+    expect(
+      await fx.git(fx.publicFork ?? '', 'for-each-ref', 'refs/heads')
+    ).not.toContain(branch);
   });
 });
