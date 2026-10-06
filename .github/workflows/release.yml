@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish to npm again (for example v0.11.0)
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -10,6 +16,7 @@ permissions:
 
 jobs:
   release-please:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -23,19 +30,29 @@ jobs:
 
   release-npm:
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.release-please.outputs.release_created == 'true') }}
     runs-on: ubuntu-latest
+    # Trusted publishing: npm trusts this workflow's OIDC token, so no npm
+    # token is stored. The package's trusted publisher on npmjs.com names
+    # this repository and this file.
     permissions:
       id-token: write
+      contents: read
+    env:
+      RELEASE_TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
+
+      - name: Use an npm that publishes with OIDC
+        run: |
+          npm install -g npm@latest
+          npm --version
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -70,10 +87,16 @@ jobs:
       - name: Smoke test the built CLI under Node.js
         run: bun run smoke:node
 
+      - name: Check the tag matches package.json
+        run: |
+          VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$VERSION" != "$RELEASE_TAG" ]; then
+            echo "::error::package.json is $VERSION but the tag is $RELEASE_TAG"
+            exit 1
+          fi
+
       - name: Publish to npm
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   release-cli:
     needs: release-please
