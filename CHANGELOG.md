@@ -1,5 +1,22 @@
 # venfork
 
+## [0.11.0](https://github.com/cabljac/venfork/compare/v0.10.0...v0.11.0) (2026-10-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* sync and schedule now abort while the preserve list holds an entry that is not a single literal file path. Remove it with venfork preserve remove <entry>.
+
+### Features
+
+* **issue:** carry upstream comments into the mirror on issue pull ([#50](https://github.com/cabljac/venfork/issues/50)) ([8453867](https://github.com/cabljac/venfork/commit/84538672eb144a35cd53c0ddd1353c6774142936))
+* make scheduled sync idempotent and the private mirror invisible to upstream ([#83](https://github.com/cabljac/venfork/issues/83)) ([5ea0eb3](https://github.com/cabljac/venfork/commit/5ea0eb3ed66e22d78443a6d360a548805fa238bf))
+
+
+### Bug Fixes
+
+* **stage:** stop leaking the private mirror into upstream PRs ([#48](https://github.com/cabljac/venfork/issues/48)) ([40d00c5](https://github.com/cabljac/venfork/commit/40d00c5c8799131b0cde1b94f1b09be893fce330))
+
 ## [0.10.0](https://github.com/cabljac/venfork/compare/v0.9.0...v0.10.0) (2026-05-18)
 
 
