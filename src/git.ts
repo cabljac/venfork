@@ -1,6 +1,6 @@
 import { $ } from 'execa';
-import { AuthenticationError } from './errors.js';
-import { netExec } from './shared/net.js';
+import { AuthenticationError, GitError } from './errors.js';
+import { netExec, netFailureReason } from './shared/net.js';
 
 /**
  * Checks if GitHub CLI is authenticated
@@ -151,7 +151,12 @@ export async function ghRepoIsForkOf(
  *
  * @param remote - Remote name (default: 'upstream')
  * @param cwd - Optional working directory (must be a git repo with that remote)
+ * `git remote set-head -a` needs the branch already fetched, so callers
+ * fetch `remote` first.
+ *
  * @returns Default branch name (e.g., 'main', 'master', 'develop')
+ * @throws GitError naming the remote when neither `set-head -a` nor an
+ *   existing `refs/remotes/<remote>/HEAD` yields a branch.
  *
  * @example
  * await getDefaultBranch('upstream') // "main"
@@ -161,30 +166,26 @@ export async function getDefaultBranch(
   remote = 'upstream',
   cwd?: string
 ): Promise<string> {
-  const cwdOpt = cwd ? { cwd } : {};
-  try {
-    // First, try to update the remote HEAD to detect the default branch
-    await netExec(cwd, {
-      bufferOutput: true,
-    })`git remote set-head ${remote} -a`;
+  const setHead = await netExec(cwd, {
+    bufferOutput: true,
+  })`git remote set-head ${remote} -a`;
 
-    // Get the symbolic ref for the remote HEAD
-    const result = await $({
-      ...cwdOpt,
-      reject: false,
-    })`git symbolic-ref refs/remotes/${remote}/HEAD`;
+  const result = await $({
+    ...(cwd ? { cwd } : {}),
+    reject: false,
+  })`git symbolic-ref refs/remotes/${remote}/HEAD`;
+  const match =
+    result.exitCode === 0
+      ? result.stdout.trim().match(/^refs\/remotes\/[^/]+\/(.+)$/)
+      : null;
+  if (match?.[1]) return match[1];
 
-    if (result.exitCode === 0) {
-      // Output is like "refs/remotes/upstream/main"
-      const match = result.stdout.trim().match(/refs\/remotes\/[^/]+\/(.+)$/);
-      if (match?.[1]) {
-        return match[1];
-      }
-    }
-  } catch {
-    // Fall through to default
-  }
-
-  // Fallback to 'main' if detection fails
-  return 'main';
+  const reason =
+    setHead.exitCode !== 0
+      ? netFailureReason(setHead)
+      : result.stderr?.trim() || result.stdout.trim() || 'no remote HEAD';
+  throw new GitError(
+    `cannot tell the default branch of remote '${remote}' (${reason}). Run \`git fetch ${remote}\` and retry.`,
+    `git remote set-head ${remote} -a`
+  );
 }

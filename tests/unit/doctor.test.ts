@@ -358,6 +358,23 @@ describe('doctor scheduled-run checks', () => {
   });
 });
 
+describe('doctor git-state checks', () => {
+  test('fail with the reason when the upstream default branch is unknown', async () => {
+    responses.unshift(
+      ['git remote set-head', fail('error: Not a valid ref')],
+      ['git symbolic-ref', fail('fatal: not a symbolic ref')]
+    );
+
+    const checks = await runDoctorChecks({ cwd: '/mirror' });
+
+    const invariant = checks.find((check) => check.id === 'invariant');
+    expect(invariant?.ok).toBe(false);
+    expect(invariant?.detail).toContain(
+      "cannot tell the default branch of remote 'upstream'"
+    );
+  });
+});
+
 describe('doctorSummary', () => {
   const check = (ok: DoctorCheck['ok']): DoctorCheck => ({
     id: 'x',

@@ -269,10 +269,17 @@ async function collectChecks(
     )`git rev-parse --verify ${`${ref}^{commit}`}`;
     return result.exitCode === 0 ? result.stdout.trim() : '';
   };
-  const defaultBranch =
-    haveBothRemotes && !fetchFailed
-      ? await getDefaultBranch('upstream', cwd)
-      : '';
+  let defaultBranch = '';
+  let defaultBranchError = '';
+  if (haveBothRemotes && !fetchFailed) {
+    try {
+      defaultBranch = await getDefaultBranch('upstream', cwd);
+    } catch (err) {
+      defaultBranchError = oneLine(
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
   const originTip = defaultBranch
     ? await revParse(`refs/remotes/origin/${defaultBranch}`)
     : '';
@@ -289,6 +296,10 @@ async function collectChecks(
     }
   } else if (fetchFailed) {
     for (const id of gitStateIds) skip(id, 'needs a successful git fetch');
+  } else if (defaultBranchError) {
+    for (const id of gitStateIds) {
+      checks.push({ id, ok: false, detail: defaultBranchError });
+    }
   } else if (!originTip || !upstreamTip) {
     const detail = `origin/${defaultBranch} or upstream/${defaultBranch} not found`;
     for (const id of gitStateIds) {

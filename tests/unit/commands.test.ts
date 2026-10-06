@@ -2637,6 +2637,35 @@ describe('scheduleCommand', () => {
       )
     ).toBe(true);
   });
+
+  test.each([
+    ['status', undefined],
+    ['set', '0 */6 * * *'],
+    ['disable', undefined],
+  ])(
+    '%s fetches upstream before it asks for the default branch',
+    async (action, value) => {
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          version: '1',
+          publicForkUrl: 'git@github.com:test/repo.git',
+          upstreamUrl: 'git@github.com:upstream/repo.git',
+          schedule: { enabled: true, cron: '0 */6 * * *' },
+        }),
+        stderr: '',
+      });
+
+      await scheduleCommand(action, value);
+
+      const fetch = execaCalls.indexOf('git fetch upstream');
+      const setHead = execaCalls.findIndex((cmd) =>
+        cmd.startsWith('git remote set-head upstream')
+      );
+      expect(fetch).toBeGreaterThan(-1);
+      expect(setHead).toBeGreaterThan(fetch);
+    }
+  );
 });
 
 describe('showHelp', () => {

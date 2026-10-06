@@ -5,6 +5,7 @@ import { getDefaultBranch } from '../git.js';
 import { applyConfigChange } from '../shared/config-change.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
 import { isValidCronExpression } from '../shared/cron.js';
+import { netFetch } from '../shared/net.js';
 import {
   OPEN_WORKFLOWS_WARNING,
   pushTokenAdvice,
@@ -23,8 +24,6 @@ export async function scheduleCommand(
   const s = p.spinner();
 
   try {
-    const defaultBranch = await getDefaultBranch('upstream');
-
     if (action === 'set') {
       const cron = value?.trim();
       if (!cron) {
@@ -45,6 +44,7 @@ export async function scheduleCommand(
         { allowInvalidCron: true }
       );
       s.stop('Schedule and workflow updated');
+      const defaultBranch = await getDefaultBranch('upstream', repoDir);
 
       let mirrorPath = '<owner>/<mirror>';
       try {
@@ -97,6 +97,7 @@ export async function scheduleCommand(
         { allowInvalidCron: true }
       );
       s.stop('Schedule disabled and workflow removed');
+      const defaultBranch = await getDefaultBranch('upstream', repoDir);
 
       p.outro(
         `✨ Scheduled sync disabled\n\nBranch: ${defaultBranch}\nWorkflow removed: ${SYNC_WORKFLOW_PATH}`
@@ -106,6 +107,8 @@ export async function scheduleCommand(
 
     if (action === 'status' || !action) {
       s.start('Reading schedule configuration');
+      await netFetch('upstream', repoDir);
+      const defaultBranch = await getDefaultBranch('upstream', repoDir);
       const config = await readVenforkConfigFromRepo(repoDir);
       s.stop('Configuration loaded');
       if (!config) {

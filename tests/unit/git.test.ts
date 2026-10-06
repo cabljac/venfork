@@ -98,7 +98,7 @@ function getMockResponse(command: string, _options: ExecaOptions = {}) {
 }
 
 // Import git.ts AFTER mocking execa
-import { AuthenticationError } from '../../src/errors';
+import { AuthenticationError, GitError } from '../../src/errors';
 import {
   checkGhAuth,
   ensureGhAuth,
@@ -451,26 +451,43 @@ describe('getDefaultBranch', () => {
     expect(execaCalls[0].command).toContain('upstream');
   });
 
-  test('returns main as fallback when symbolic-ref fails', async () => {
-    mockResponses.set('git symbolic-ref', {
+  test('throws a GitError naming the remote instead of guessing main', async () => {
+    mockResponses.set('git remote set-head', {
       exitCode: 1,
       stdout: '',
-      stderr: 'error',
+      stderr: 'error: Not a valid ref: refs/remotes/upstream/master',
+    });
+    mockResponses.set('git symbolic-ref', {
+      exitCode: 128,
+      stdout: '',
+      stderr: 'fatal: ref refs/remotes/upstream/HEAD is not a symbolic ref',
     });
 
-    const result = await getDefaultBranch('origin');
+    const error = await getDefaultBranch('upstream').catch((e: unknown) => e);
 
-    expect(result).toBe('main');
+    expect(error).toBeInstanceOf(GitError);
+    expect((error as GitError).message).toContain(
+      "cannot tell the default branch of remote 'upstream'"
+    );
+    expect((error as GitError).message).toContain(
+      'Not a valid ref: refs/remotes/upstream/master'
+    );
+    expect((error as GitError).message).toContain('git fetch upstream');
   });
 
-  test('returns main as fallback on command error', async () => {
-    mockResponses.set('git', (_command: string) =>
-      Promise.reject(new Error('command failed'))
-    );
+  test('reads master from an existing remote HEAD when set-head fails', async () => {
+    mockResponses.set('git remote set-head', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'fatal: unable to access remote',
+    });
+    mockResponses.set('git symbolic-ref', {
+      exitCode: 0,
+      stdout: 'refs/remotes/upstream/master',
+      stderr: '',
+    });
 
-    const result = await getDefaultBranch();
-
-    expect(result).toBe('main');
+    expect(await getDefaultBranch('upstream')).toBe('master');
   });
 
   test('handles master branch', async () => {
@@ -497,16 +514,14 @@ describe('getDefaultBranch', () => {
     expect(result).toBe('main');
   });
 
-  test('returns main when regex does not match', async () => {
+  test('throws when symbolic-ref prints something that is not a remote ref', async () => {
     mockResponses.set('git symbolic-ref', {
       exitCode: 0,
       stdout: 'invalid-format',
       stderr: '',
     });
 
-    const result = await getDefaultBranch();
-
-    expect(result).toBe('main');
+    await expect(getDefaultBranch()).rejects.toBeInstanceOf(GitError);
   });
 
   test('passes cwd to git when provided', async () => {
