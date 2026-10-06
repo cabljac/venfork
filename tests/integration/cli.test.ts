@@ -89,6 +89,21 @@ describe('per-command help', () => {
     }
   }
 
+  for (const [args, usage] of [
+    [['help', 'doctor'], 'venfork doctor [--json]'],
+    [['--help', 'sync'], 'venfork sync [branch] [--report-issues]'],
+    [['-h', 'stage'], 'venfork stage <branch>'],
+    [['help', 'pull', 'pr'], 'venfork pull pr <pr-number-or-url>'],
+  ] as const) {
+    test(`${args.join(' ')} prints only that command's help`, async () => {
+      const result = await runCli(...args);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(usage);
+      expect(result.stdout).not.toContain('venfork setup <upstream>');
+    });
+  }
+
   test('venfork help and --help still print the full help', async () => {
     for (const args of [['help'], ['--help'], ['-h']]) {
       const result = await runCli(...args);
@@ -171,6 +186,9 @@ describe('per-command help', () => {
 describe('usage errors', () => {
   for (const [args, usage] of [
     [['stage'], 'venfork stage <branch>'],
+    [['pull', 'pr'], 'venfork pull pr <pr-number-or-url>'],
+    [['pull', 'issue'], 'venfork pull issue <number-or-url>'],
+    [['pull'], 'venfork pull <pr|issue> <number-or-url>'],
     [
       ['schedule', 'frobnicate'],
       'venfork schedule <status|set <cron>|disable>',

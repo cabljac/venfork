@@ -48,7 +48,13 @@ async function main(): Promise<void> {
     command === '--help' ||
     command === '-h'
   ) {
-    showHelp();
+    const [target, ...targetRest] = args.slice(1);
+    const usage = target ? commandHelp(target, targetRest) : null;
+    if (usage) {
+      console.log(usage);
+    } else {
+      showHelp();
+    }
     return;
   }
 
