@@ -248,6 +248,10 @@ export async function syncCommand(
       tip: previousMirrorTip,
       allowPreserved: true,
       preserveAllowed,
+      workflowPolicy: {
+        enabledWorkflows: config?.enabledWorkflows ?? [],
+        disabledWorkflows: config?.disabledWorkflows ?? [],
+      },
       cwd: options?.cwd,
     });
     const publicDivergence = noPublic

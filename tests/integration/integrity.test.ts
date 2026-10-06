@@ -474,3 +474,51 @@ describe('network timeout', () => {
     }
   });
 });
+
+describe('workflow deletions in the managed commit', () => {
+  const CI = '.github/workflows/ci.yml';
+  const DEPLOY = '.github/workflows/deploy.yml';
+
+  async function scheduledWithBlockedDeploy(): Promise<void> {
+    await fx.commitOnUpstream({ [CI]: 'ci\n', [DEPLOY]: 'deploy\n' });
+    await updateVenforkConfig(fx.work, {
+      schedule: { enabled: true, cron: '0 * * * *' },
+      disabledWorkflows: ['deploy.yml'],
+    });
+    await sync();
+  }
+
+  test('a deletion the policy does not make is divergence', async () => {
+    await scheduledWithBlockedDeploy();
+    const dev = await originDev();
+    await fx.git(dev, 'rm', '--quiet', CI);
+    await fx.git(dev, 'commit', '--quiet', '--amend', '--no-edit');
+    await fx.git(dev, 'push', '--quiet', '--force', 'origin', 'main');
+
+    await expect(sync()).rejects.toBeInstanceOf(SyncDivergenceError);
+
+    expect(await fx.fileAt(fx.origin, 'main', CI)).toBeNull();
+  });
+
+  test('a deletion the policy makes is still managed', async () => {
+    await scheduledWithBlockedDeploy();
+    const before = await fx.sha(fx.origin, 'main');
+
+    await sync();
+
+    expect(await fx.fileAt(fx.origin, 'main', DEPLOY)).toBeNull();
+    expect(await fx.sha(fx.origin, 'main')).toBe(before);
+  });
+
+  test('unblocking a workflow restores it over the stale managed commit', async () => {
+    await scheduledWithBlockedDeploy();
+    await updateVenforkConfig(fx.work, { disabledWorkflows: [] });
+
+    await sync();
+
+    expect(prompts.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('(stale-trailer)')
+    );
+    expect(await fx.fileAt(fx.origin, 'main', DEPLOY)).toBe('deploy\n');
+  });
+});

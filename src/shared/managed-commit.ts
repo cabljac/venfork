@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { $ } from 'execa';
 import {
   SYNC_WORKFLOW_PATH,
@@ -26,6 +27,53 @@ export const LEGACY_MANAGED_COMMIT_MESSAGES: readonly string[] = [
 export const MANAGED_COMMIT_TRAILER_KEY = 'Venfork-Managed';
 /** Full trailer line written on every venfork-managed commit. */
 export const MANAGED_COMMIT_TRAILER = `${MANAGED_COMMIT_TRAILER_KEY}: 1`;
+
+/** True for a `*.yml` / `*.yaml` file directly in `.github/workflows/`. */
+export function isTopLevelWorkflow(file: string): boolean {
+  return path.posix.dirname(file) === WORKFLOWS_DIR && /\.ya?ml$/.test(file);
+}
+
+/** Basenames of `entries`, trimmed, de-duplicated and sorted. */
+export function normalizeWorkflowList(entries: string[]): string[] {
+  return Array.from(
+    new Set(
+      entries
+        .map((entry) => path.basename(entry.trim()))
+        .filter((entry) => entry.length > 0)
+        .sort()
+    )
+  );
+}
+
+/** The workflow allow/block lists that decide which upstream workflows the managed commit removes. */
+export interface WorkflowPolicy {
+  enabledWorkflows: string[];
+  disabledWorkflows: string[];
+}
+
+/** True when `policy` names at least one workflow in either list. */
+export function hasWorkflowPolicy(policy: WorkflowPolicy): boolean {
+  return (
+    normalizeWorkflowList(policy.enabledWorkflows).length > 0 ||
+    normalizeWorkflowList(policy.disabledWorkflows).length > 0
+  );
+}
+
+/**
+ * True when the managed commit keeps the workflow `file` under `policy`.
+ * Precedence: a non-empty allowlist wins over the blocklist. Only top-level
+ * workflows other than the sync workflow are ever removed.
+ */
+export function policyKeepsWorkflow(
+  file: string,
+  policy: WorkflowPolicy
+): boolean {
+  if (file === SYNC_WORKFLOW_PATH || !isTopLevelWorkflow(file)) return true;
+  const base = path.posix.basename(file);
+  const allowlist = normalizeWorkflowList(policy.enabledWorkflows);
+  if (allowlist.length > 0) return allowlist.includes(base);
+  return !normalizeWorkflowList(policy.disabledWorkflows).includes(base);
+}
 
 /**
  * True when `ref` carries the `Venfork-Managed: 1` trailer, whatever it
@@ -97,13 +145,15 @@ interface PathChange {
 /**
  * The changes `ref` makes against its first parent that the managed commit
  * may not carry: anything except the sync workflow, a `preserve` entry, or
- * a deletion under `.github/workflows/` (workflow filtering). Null when git
- * cannot list the changes.
+ * a deletion under `.github/workflows/`. With a `policy`, only deletions it
+ * would make count; without one, every workflow deletion is accepted. Null
+ * when git cannot list the changes.
  */
 async function unmanagedChanges(
   ref: string,
   cwd: string | undefined,
-  preserve: ReadonlySet<string>
+  preserve: ReadonlySet<string>,
+  policy: WorkflowPolicy | undefined
 ): Promise<PathChange[] | null> {
   const result = await $({
     ...(cwd ? { cwd } : {}),
@@ -117,7 +167,13 @@ async function unmanagedChanges(
     const file = fields[i + 1] ?? '';
     if (!status) continue;
     if (file === SYNC_WORKFLOW_PATH || preserve.has(file)) continue;
-    if (status === 'D' && file.startsWith(`${WORKFLOWS_DIR}/`)) continue;
+    if (
+      status === 'D' &&
+      file.startsWith(`${WORKFLOWS_DIR}/`) &&
+      (!policy || !policyKeepsWorkflow(file, policy))
+    ) {
+      continue;
+    }
     extra.push({ status, file });
   }
   return extra;
@@ -149,13 +205,14 @@ async function identityEmails(
  * stage's cherry-pick filter can skip it without losing user work. Every
  * kind except `stale-trailer` requires that the commit changes only the
  * sync workflow, `preserve` entries, and deletions under
- * `.github/workflows/`; a commit that changes anything else is null.
+ * `.github/workflows/` (only those `policy` makes, when given); a commit that changes anything else is null.
  * Returns the first matching signal, or null for a user commit:
  *  - `trailer`: a `Venfork-Managed: 1` trailer.
  *  - `stale-trailer`: a trailer commit authored and committed by the
  *    venfork bot whose only other changes add files that are no longer in
- *    `preserve` (a removal whose re-stamp never reached origin). Replacing
- *    it drops those files from origin; nothing is published.
+ *    `preserve`, or delete workflows `policy` no longer removes (a config
+ *    change whose re-stamp never reached origin). Replacing it drops those
+ *    files from origin and restores those workflows; nothing is published.
  *  - `subject`: subject equals `MANAGED_COMMIT_MESSAGE`.
  *  - `legacy-subject`: subject is in `LEGACY_MANAGED_COMMIT_MESSAGES`.
  *  - `path-heuristic`: authored by the venfork bot, touches the managed
@@ -164,9 +221,10 @@ async function identityEmails(
 export async function classifyManagedCommit(
   ref: string,
   cwd?: string,
-  preserve: Iterable<string> = []
+  preserve: Iterable<string> = [],
+  policy?: WorkflowPolicy
 ): Promise<ManagedCommitKind | null> {
-  const extra = await unmanagedChanges(ref, cwd, new Set(preserve));
+  const extra = await unmanagedChanges(ref, cwd, new Set(preserve), policy);
   if (extra === null) return null;
   if (await hasManagedTrailer(ref, cwd)) {
     if (extra.length === 0) return 'trailer';
@@ -174,7 +232,12 @@ export async function classifyManagedCommit(
     const botMade =
       emails?.author === VENFORK_BOT_EMAIL &&
       emails.committer === VENFORK_BOT_EMAIL;
-    return botMade && extra.every((change) => change.status === 'A')
+    return botMade &&
+      extra.every(
+        (change) =>
+          change.status === 'A' ||
+          (change.status === 'D' && change.file.startsWith(`${WORKFLOWS_DIR}/`))
+      )
       ? 'stale-trailer'
       : null;
   }

@@ -5,6 +5,7 @@ import {
   classifyManagedCommit,
   isWeakManagedKind,
   type ManagedCommitKind,
+  type WorkflowPolicy,
 } from './managed-commit.js';
 
 /**
@@ -95,9 +96,12 @@ export async function checkDivergence(args: {
   tip: string;
   allowPreserved: boolean;
   preserveAllowed: Set<string>;
+  /** Workflow lists the managed commit must match; omitted accepts any workflow deletion. */
+  workflowPolicy?: WorkflowPolicy;
   cwd?: string;
 }): Promise<DivergenceResult> {
-  const { base, tip, allowPreserved, preserveAllowed, cwd } = args;
+  const { base, tip, allowPreserved, preserveAllowed, workflowPolicy, cwd } =
+    args;
   if (!tip) {
     return { count: 0, files: [], weakManaged: [] };
   }
@@ -115,7 +119,12 @@ export async function checkDivergence(args: {
   const weakManaged: DroppedManagedCommit[] = [];
   const upstreamOwned = new Map<string, boolean>();
   for (const commit of divergentCommits) {
-    const kind = await classifyManagedCommit(commit, cwd, preserveAllowed);
+    const kind = await classifyManagedCommit(
+      commit,
+      cwd,
+      preserveAllowed,
+      workflowPolicy
+    );
     if (kind !== null) {
       if (isWeakManagedKind(kind)) weakManaged.push({ commit, kind });
       continue;

@@ -18,29 +18,19 @@ import {
   WORKFLOWS_DIR,
 } from './constants.js';
 import {
+  hasWorkflowPolicy,
+  isTopLevelWorkflow,
   MANAGED_COMMIT_MESSAGE,
   MANAGED_COMMIT_TRAILER,
+  normalizeWorkflowList,
+  policyKeepsWorkflow,
 } from './managed-commit.js';
+
+export { normalizeWorkflowList };
+
 import { netExec, netFailureReason } from './net.js';
 import { compareSemver, pinnedVenforkVersion } from './semver.js';
 import { assertPreserveEntriesAreNotDirectories } from './stage-gate.js';
-
-/** True for a `*.yml` / `*.yaml` file directly in `.github/workflows/`. */
-function isTopLevelWorkflow(file: string): boolean {
-  return path.posix.dirname(file) === WORKFLOWS_DIR && /\.ya?ml$/.test(file);
-}
-
-/** Basenames of `entries`, trimmed, de-duplicated and sorted. */
-export function normalizeWorkflowList(entries: string[]): string[] {
-  return Array.from(
-    new Set(
-      entries
-        .map((entry) => path.basename(entry.trim()))
-        .filter((entry) => entry.length > 0)
-        .sort()
-    )
-  );
-}
 
 /** One entry of `git ls-tree -z` output. */
 interface TreeEntry {
@@ -180,8 +170,7 @@ export async function buildMirrorTip(args: {
     cwd,
   } = args;
   const repoDir = cwd ?? process.cwd();
-  const allowlist = normalizeWorkflowList(enabledWorkflows);
-  const blocklist = normalizeWorkflowList(disabledWorkflows);
+  const policy = { enabledWorkflows, disabledWorkflows };
 
   return withTempIndex(repoDir, async (git) => {
     await mustGit(git, ['read-tree', upstreamTip]);
@@ -201,7 +190,7 @@ export async function buildMirrorTip(args: {
     }
 
     // Precedence: enabledWorkflows allowlist > disabledWorkflows blocklist.
-    if (allowlist.length > 0 || blocklist.length > 0) {
+    if (hasWorkflowPolicy(policy)) {
       const listed = await mustGit(git, [
         'ls-tree',
         '-r',
@@ -214,12 +203,7 @@ export async function buildMirrorTip(args: {
       for (const workflowFile of listed.split('\0').filter(Boolean)) {
         if (workflowFile === SYNC_WORKFLOW_PATH) continue;
         if (!isTopLevelWorkflow(workflowFile)) continue;
-        const base = path.posix.basename(workflowFile);
-        const keep =
-          allowlist.length > 0
-            ? allowlist.includes(base)
-            : !blocklist.includes(base);
-        if (!keep) {
+        if (!policyKeepsWorkflow(workflowFile, policy)) {
           await mustGit(git, [
             'update-index',
             '--force-remove',
@@ -457,10 +441,11 @@ export async function buildOriginTip(args: {
   const preserve = config?.preserve ?? [];
   const enabledWorkflows = config?.enabledWorkflows ?? [];
   const disabledWorkflows = config?.disabledWorkflows ?? [];
-  const filtersWorkflows =
-    normalizeWorkflowList(enabledWorkflows).length > 0 ||
-    normalizeWorkflowList(disabledWorkflows).length > 0;
-  if (!scheduleActive && preserve.length === 0 && !filtersWorkflows) {
+  if (
+    !scheduleActive &&
+    preserve.length === 0 &&
+    !hasWorkflowPolicy({ enabledWorkflows, disabledWorkflows })
+  ) {
     return upstreamTip;
   }
   return buildMirrorTip({
