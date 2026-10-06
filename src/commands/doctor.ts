@@ -619,7 +619,7 @@ async function collectChecks(
 
   const workflowView = await netExec(cwd, {
     bufferOutput: true,
-  })`gh workflow view ${SYNC_WORKFLOW_FILE} --repo ${mirrorRepo} --json state`;
+  })`gh api ${`repos/${mirrorRepo}/actions/workflows/${SYNC_WORKFLOW_FILE}`} --jq .state`;
   if (workflowView.exitCode !== 0) {
     skip(
       'cron-age',
@@ -627,19 +627,13 @@ async function collectChecks(
     );
     return checks;
   }
-  let workflowState = '';
-  try {
-    workflowState =
-      (JSON.parse(workflowView.stdout ?? '') as { state?: string }).state ?? '';
-  } catch {
-    workflowState = '';
-  }
+  const workflowState = (workflowView.stdout ?? '').trim();
   if (workflowState !== 'active') {
     checks.push({
       id: 'cron-age',
       ok: false,
       detail: `${SYNC_WORKFLOW_FILE} is ${workflowState ? `disabled (${workflowState})` : 'in an unknown state'}`,
-      fix: `gh workflow enable ${SYNC_WORKFLOW_FILE} --repo ${mirrorRepo}`,
+      fix: `Enable ${SYNC_WORKFLOW_FILE} in the mirror's Actions tab, or run \`gh workflow enable ${SYNC_WORKFLOW_FILE} --repo ${mirrorRepo}\`.`,
     });
     return checks;
   }

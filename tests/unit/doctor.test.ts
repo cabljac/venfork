@@ -90,7 +90,10 @@ function useMirror(
       'git show origintip:.github/workflows/venfork-sync.yml',
       ok(generateSyncWorkflow(CRON, mode)),
     ],
-    ['gh workflow view', ok('{"state":"active"}')]
+    [
+      'gh api repos/acme/widget-private/actions/workflows/venfork-sync.yml',
+      ok('active'),
+    ]
   );
 }
 
@@ -299,29 +302,39 @@ describe('doctor scheduled-run checks', () => {
     ).toBe(true);
   });
 
-  test('cron-age fails with gh workflow enable when the workflow is disabled', async () => {
-    responses.unshift([
-      'gh workflow view',
-      ok('{"state":"disabled_inactivity"}'),
-    ]);
+  test('reads the workflow state through the REST API', async () => {
     lastRun('success');
 
     const checks = await ghChecks(new Date('2026-03-01T01:00:00Z'));
 
-    expect(checks['cron-age']).toEqual({
-      id: 'cron-age',
-      ok: false,
-      detail: 'venfork-sync.yml is disabled (disabled_inactivity)',
-      fix: 'gh workflow enable venfork-sync.yml --repo acme/widget-private',
-    });
-    expect(
-      ghCalls.some((cmd) =>
-        cmd.includes(
-          'gh workflow view venfork-sync.yml --repo acme/widget-private --json state'
-        )
-      )
-    ).toBe(true);
+    expect(checks['cron-age'].ok).toBe(true);
+    expect(ghCalls).toContain(
+      'gh api repos/acme/widget-private/actions/workflows/venfork-sync.yml --jq .state'
+    );
+    expect(ghCalls.some((cmd) => cmd.startsWith('gh workflow view'))).toBe(
+      false
+    );
   });
+
+  test.each(['disabled_inactivity', 'disabled_manually'])(
+    'cron-age fails with a fix naming the Actions tab when the workflow is %s',
+    async (state) => {
+      responses.unshift([
+        'gh api repos/acme/widget-private/actions/workflows/venfork-sync.yml',
+        ok(state),
+      ]);
+      lastRun('success');
+
+      const checks = await ghChecks(new Date('2026-03-01T01:00:00Z'));
+
+      expect(checks['cron-age']).toEqual({
+        id: 'cron-age',
+        ok: false,
+        detail: `venfork-sync.yml is disabled (${state})`,
+        fix: "Enable venfork-sync.yml in the mirror's Actions tab, or run `gh workflow enable venfork-sync.yml --repo acme/widget-private`.",
+      });
+    }
+  );
 
   test('a stale cron-age fix does not recommend a manual dispatch', async () => {
     lastRun('success');
