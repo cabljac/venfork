@@ -5,7 +5,14 @@
 
 ### ⚠ BREAKING CHANGES
 
-* sync and schedule now abort while the preserve list holds an entry that is not a single literal file path. Remove it with venfork preserve remove <entry>.
+* `venfork status` is removed; use `venfork doctor`. `pull-request <n>` is now `pull pr <n>`, `issue pull <n>` is `pull issue <n>`, `issue stage <n>` is `stage issue <n>`; the old names print the replacement. `stage issue` and `stage branch` are subcommands, so a branch named `issue` or `branch` needs `stage branch <name>`.
+* Unknown options and extra arguments are rejected by every command; an entry starting with `-` needs `--` before it. `workflows allow` and `workflows block` now add to their lists instead of replacing them; use `workflows unallow` and `workflows unblock` to remove entries. A prompt that hits end of input exits 130.
+* Preserve entries must be single files already committed on origin's default branch; globs, directories and the sync workflow are rejected, and old entries block sync and schedule until removed with `venfork preserve remove <entry>`.
+* Stage always rewrites the branch history (SHAs change) and refuses commits, file contents, PR titles and bodies that reference the private mirror.
+* `VENFORK_PUSH_TOKEN` is required in both modes and the generated workflow no longer falls back to the job token; use a fine-grained token scoped to the mirror and the public fork, not `gh auth token`. `VENFORK_INSTALL_SPEC` must be `venfork@<semver>` or an https `.tgz` URL.
+* Scheduled mirrors created by 0.10 or earlier must run `venfork sync` locally once after upgrading; until then every scheduled run fails with the migration message. See the README section on upgrading.
+* `clone` and `setup` record every remote over the transport `gh config get git_protocol` reports.
+* The `bun-windows-arm64` binary is no longer published.
 
 ### Features
 
