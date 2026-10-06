@@ -56,7 +56,24 @@ describe('findDeniedText with a bare repo name term', () => {
     ['a directory of that name', 'Move the client to src/backend/'],
     ['the plain word', 'Move the backend client'],
     ['a file under a directory of that name', 'see src/backend.ts'],
-  ])('passes %s', (_label, text) => {
+  ])('passes %s in a file name', (_label, text) => {
+    expect(findDeniedText(text, NAME_TERMS, { nameMatch: 'owner' })).toBeNull();
+  });
+
+  test.each([
+    ['the plain word', 'Move the backend client'],
+    ['a directory of that name', 'Move the client to src/backend/'],
+    ['the name with an issue number', 'see backend#12'],
+    ['the name ending a sentence', 'Ported from backend.'],
+  ])('finds %s in a message, title or body', (_label, text) => {
+    expect(findDeniedText(text, NAME_TERMS)).toBe('backend');
+  });
+
+  test.each([
+    ['a longer name', 'the backend-api service'],
+    ['a prefixed name', 'the my-backend service'],
+    ['a file with that stem', 'see src/backend.ts'],
+  ])('passes %s in a message, title or body', (_label, text) => {
     expect(findDeniedText(text, NAME_TERMS)).toBeNull();
   });
 
@@ -97,14 +114,56 @@ describe('findDeniedText repo boundaries', () => {
     'acme/widget-private-public',
     'acme/widget-private-oss',
     'git@github.com:acme/widget-private-public.git',
-    'src/widget-private/',
     'src/widget-private.ts',
     'other/widget-private-v2',
   ])('passes %p', (text) => {
     expect(findDeniedText(text, NAME_TERMS)).toBeNull();
   });
 
-  describe('with hostOnlyNames for file content', () => {
+  test('a directory of that name passes in a file name only', () => {
+    expect(
+      findDeniedText('src/widget-private/a.ts', NAME_TERMS, {
+        nameMatch: 'owner',
+      })
+    ).toBeNull();
+    expect(findDeniedText('src/widget-private/a.ts', NAME_TERMS)).toBe(
+      'widget-private'
+    );
+  });
+
+  test.each([
+    [
+      'a percent-encoded owner/name',
+      'acme%2Fwidget-private',
+      'acme/widget-private',
+    ],
+    [
+      'a double-encoded owner/name',
+      'acme%252Fwidget-private',
+      'acme/widget-private',
+    ],
+    [
+      'a percent-encoded URL',
+      'return_to=%2Facme%2Fwidget-private%2Fpull%2F5',
+      'acme/widget-private',
+    ],
+  ])('finds %s', (_label, text, term) => {
+    expect(findDeniedText(text, NAME_TERMS)).toBe(term);
+  });
+
+  test('tolerates a malformed percent sequence', () => {
+    expect(findDeniedText('100%zz %E0%A4%A ok', NAME_TERMS)).toBeNull();
+  });
+
+  test('finds a GitHub Pages address from the term', () => {
+    expect(
+      findDeniedText('https://acme.github.io/widget-private/', [
+        'acme.github.io/widget-private',
+      ])
+    ).toBe('acme.github.io/widget-private');
+  });
+
+  describe('with nameMatch host for file content', () => {
     test.each([
       'import x from "acme-ui/widget-private"',
       'see someone/widget-private',
@@ -112,7 +171,7 @@ describe('findDeniedText repo boundaries', () => {
       'other/widget-private.git',
     ])('a bare name without a host passes %p', (text) => {
       expect(
-        findDeniedText(text, NAME_TERMS, { hostOnlyNames: true })
+        findDeniedText(text, NAME_TERMS, { nameMatch: 'host' })
       ).toBeNull();
     });
 
@@ -124,7 +183,7 @@ describe('findDeniedText repo boundaries', () => {
       'https://example.com/other/widget-private/pull/3',
       'clone https://github.com/other/widget-private.',
     ])('a bare name after a host is found in %p', (text) => {
-      expect(findDeniedText(text, NAME_TERMS, { hostOnlyNames: true })).toBe(
+      expect(findDeniedText(text, NAME_TERMS, { nameMatch: 'host' })).toBe(
         'widget-private'
       );
     });
@@ -132,7 +191,7 @@ describe('findDeniedText repo boundaries', () => {
     test('the mirror owner/name still matches without a host', () => {
       expect(
         findDeniedText('see acme/widget-private', NAME_TERMS, {
-          hostOnlyNames: true,
+          nameMatch: 'host',
         })
       ).toBe('acme/widget-private');
     });

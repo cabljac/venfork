@@ -36,7 +36,36 @@ describe('mirrorDenyList', () => {
       'git@github.com:acme/widget-private.git',
       'git@github.com:acme/widget-private',
       'acme/widget-private',
+      'acme.github.io/widget-private',
       'widget-private',
+      'venfork',
+    ]);
+  });
+
+  test('reads owner/name from a non-github.com origin', async () => {
+    const dir = await repoWith(
+      'git@github.acme.com:team/widget-private.git',
+      'git@github.com:other/widget.git'
+    );
+
+    expect(await mirrorDenyList(dir)).toEqual([
+      'git@github.acme.com:team/widget-private.git',
+      'git@github.acme.com:team/widget-private',
+      'team/widget-private',
+      'widget-private',
+      'venfork',
+    ]);
+  });
+
+  test('derives no owner/name from a local path origin', async () => {
+    const dir = await repoWith(
+      '/srv/git/widget-private.git',
+      'git@github.com:other/widget.git'
+    );
+
+    expect(await mirrorDenyList(dir)).toEqual([
+      '/srv/git/widget-private.git',
+      '/srv/git/widget-private',
       'venfork',
     ]);
   });

@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { $ } from 'execa';
 import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
 import { syncCommand } from '../../src/commands.js';
+import {
+  assertNoMirrorReference,
+  mirrorDenyList,
+} from '../../src/shared/deny-list.js';
 import {
   assertPublishableCommits,
   collectMirrorBlobs,
@@ -221,5 +226,125 @@ describe('preserved text is refused when a copy only differs in form', () => {
         options
       )
     ).toEqual(['docs/other.md']);
+  });
+});
+
+/** The deny list `mirrorDenyList` builds for a checkout with these remotes. */
+async function denyListFor(
+  origin: string,
+  upstream: string
+): Promise<string[]> {
+  const dir = `${fx.root}/deny-${Math.random().toString(36).slice(2)}`;
+  await $`git init --quiet ${dir}`;
+  await $({ cwd: dir })`git remote add origin ${origin}`;
+  await $({ cwd: dir })`git remote add upstream ${upstream}`;
+  return mirrorDenyList(dir);
+}
+
+describe.each([
+  [
+    'github.com',
+    'git@github.com:acme/widget-private.git',
+    'acme/widget-private',
+  ],
+  [
+    'a GitHub Enterprise host',
+    'git@github.acme.com:team/widget-private.git',
+    'team/widget-private',
+  ],
+])(
+  'the mirror name is refused in text bound for upstream (%s)',
+  (_label, origin, ownerName) => {
+    let denyList: string[];
+
+    beforeEach(async () => {
+      denyList = await denyListFor(origin, 'git@github.com:other/widget.git');
+    });
+
+    test.each([
+      ['a bare name', 'Ported from widget-private after review.'],
+      ['a name with an issue number', 'see widget-private#12'],
+      ['owner/name with an issue number', `see ${ownerName}#3`],
+    ])('a PR body with %s', (_what, body) => {
+      expect(() =>
+        assertNoMirrorReference(body, 'the upstream PR body', denyList)
+      ).toThrow('widget-private');
+    });
+
+    test('a commit message with a bare name', async () => {
+      await expect(
+        gate('src/a.txt', 'a\n', 'fix: port from widget-private', { denyList })
+      ).rejects.toThrow(/commit \w+ message contains/);
+    });
+
+    test('file content that names a package of the same name ships', async () => {
+      expect(
+        await gate(
+          'src/a.ts',
+          'import x from "acme-ui/widget-private";\n',
+          'x',
+          {
+            denyList,
+          }
+        )
+      ).toEqual(['src/a.ts']);
+    });
+  }
+);
+
+describe('deny-list gaps that published end to end', () => {
+  let denyList: string[];
+
+  beforeEach(async () => {
+    denyList = await denyListFor(
+      'git@github.com:acme/widget-private.git',
+      'git@github.com:other/widget.git'
+    );
+  });
+
+  test.each([
+    [
+      'a percent-encoded login redirect',
+      'https://github.com/login?return_to=%2Facme%2Fwidget-private%2Fpull%2F5',
+    ],
+    ['a percent-encoded owner/name', 'acme%2Fwidget-private'],
+    ['a double-encoded owner/name', 'acme%252Fwidget-private'],
+    ['a GitHub Pages URL', 'https://acme.github.io/widget-private/'],
+  ])('a PR body with %s', (_what, body) => {
+    expect(() =>
+      assertNoMirrorReference(body, 'the upstream PR body', denyList)
+    ).toThrow('contains');
+  });
+
+  test('a commit message with a GitHub Pages URL', async () => {
+    await expect(
+      gate(
+        'src/a.txt',
+        'a\n',
+        'docs: see https://acme.github.io/widget-private/',
+        {
+          denyList,
+        }
+      )
+    ).rejects.toThrow(/commit \w+ message contains/);
+  });
+
+  test('a file with a GitHub Pages URL', async () => {
+    await expect(
+      gate(
+        'docs/a.md',
+        'docs at https://acme.github.io/widget-private/\n',
+        'x',
+        {
+          denyList,
+        }
+      )
+    ).rejects.toThrow(/file docs\/a\.md contains/);
+  });
+
+  test('malformed percent sequences do not throw', () => {
+    expect(() =>
+      assertNoMirrorReference('100%zz and %E0%A4%A', 'the PR body', denyList)
+    ).not.toThrow();
   });
 });

@@ -799,7 +799,9 @@ export async function assertPublishableCommits(
     }
 
     for (const change of published) {
-      const nameHit = findDeniedText(change.path, locationTerms);
+      const nameHit = findDeniedText(change.path, locationTerms, {
+        nameMatch: 'owner',
+      });
       if (nameHit !== null) {
         throw new MirrorReferenceError(
           `commit ${label} file name ${change.path}`,
@@ -822,7 +824,7 @@ export async function assertPublishableCommits(
             : looksLikeVenforkConfig(text, input.recordedUrls)
               ? CONFIG_SIGNATURE
               : (findMarkerText(text) ??
-                findDeniedText(text, locationTerms, { hostOnlyNames: true }));
+                findDeniedText(text, locationTerms, { nameMatch: 'host' }));
         hit = textHit ?? findTermInBytes(bytes, locationTerms);
         scanned.set(change.newOid, hit);
         shapes.set(change.newOid, text === null ? null : shapeOf(text));

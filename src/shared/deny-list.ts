@@ -31,10 +31,28 @@ export function canonicalText(text: string): string {
 }
 
 /**
+ * `owner/name` from any `host[:/]owner/name(.git)` URL, such as a GitHub
+ * Enterprise remote that {@link parseRepoPath} does not read; '' otherwise.
+ */
+function hostedRepoPath(url: string): string {
+  const match = url
+    .trim()
+    .match(
+      /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/\s]+@)?(?=[^:/\s]*\.)[^:/\s]+(?::\d+)?[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i
+    );
+  return match ? `${match[1]}/${match[2]}` : '';
+}
+
+function repoPathOf(url: string): string {
+  return parseRepoPath(url) || hostedRepoPath(url);
+}
+
+/**
  * Text that must never reach the public fork or upstream because it points
  * back at the private mirror: origin's URL (as configured and without
- * `.git`), origin's GitHub `owner/name`, origin's repo name when it is at
- * least six characters and differs from upstream's, and the word `venfork`
+ * `.git`), origin's `owner/name`, its GitHub Pages address, origin's repo
+ * name when it is at least six characters and differs from upstream's, and
+ * the word `venfork`
  * (unless {@link selfReferenceAllowed}). Most specific first.
  *
  * @param cwd Mirror checkout whose `origin` remote is the private mirror.
@@ -47,17 +65,18 @@ export async function mirrorDenyList(cwd: string): Promise<string[]> {
     terms.push(raw);
     const bare = raw.replace(/\.git\/?$/, '');
     if (bare && bare !== raw) terms.push(bare);
-    const repoPath = parseRepoPath(raw);
+    const repoPath = repoPathOf(raw);
     if (repoPath) {
       terms.push(repoPath);
-      const name = repoPath.split('/')[1] ?? '';
+      const [owner = '', name = ''] = repoPath.split('/');
+      if (parseRepoPath(raw)) terms.push(`${owner}.github.io/${name}`);
       const upstream = await $({
         cwd,
         reject: false,
       })`git remote get-url upstream`;
       const upstreamName =
         upstream.exitCode === 0
-          ? (parseRepoPath(upstream.stdout.trim()).split('/')[1] ?? '')
+          ? (repoPathOf(upstream.stdout.trim()).split('/')[1] ?? '')
           : '';
       if (
         name.length >= MIN_NAME_TERM_LENGTH &&
@@ -82,6 +101,30 @@ export function mirrorLocationTerms(terms: readonly string[]): string[] {
   return terms.filter((term) => term !== SELF_REFERENCE_TERM);
 }
 
+/** Decodes `%XX` runs, up to three layers deep; a malformed run keeps its non-ASCII bytes encoded. */
+function percentDecoded(text: string): string {
+  let current = text;
+  for (let layer = 0; layer < 3; layer++) {
+    const next = current.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+      try {
+        return decodeURIComponent(run);
+      } catch {
+        return run.replace(/%[0-9a-f]{2}/gi, (byte) => {
+          const code = Number.parseInt(byte.slice(1), 16);
+          return code < 0x80 ? String.fromCharCode(code) : byte;
+        });
+      }
+    });
+    if (next === current) break;
+    current = next;
+  }
+  return current;
+}
+
+function foldForMatch(text: string): string {
+  return canonicalText(percentDecoded(text)).toLowerCase();
+}
+
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -94,31 +137,45 @@ const HOST_PREFIX =
 const NAME_END = '(?![a-z0-9_-])(?!\\.[a-z0-9_])';
 
 /**
- * Matches `name` as the repo segment of an `owner/name` or URL, optionally
- * with `.git`. After a host any path may follow (`/pull/3`); without one a
- * further `/` means a directory, so `src/backend/` and `src/backend.ts` do
- * not match. With `hostOnly`, only the hosted form matches.
+ * Matches `name` as a repo name. `word` matches it anywhere it is not part of
+ * a longer name (`widget-private#12`, `from widget-private.`), optionally with
+ * `.git`. `owner` needs an `owner/` or a host before it, and not a further
+ * `/` unless a host came first, so `src/backend/` and `src/backend.ts` do not
+ * match. `host` needs a host before it.
  */
-function repoNamePattern(name: string, hostOnly: boolean): RegExp {
-  const repo = `[a-z0-9_.-]+[/:]${escapeRegExp(name)}(?:\\.git)?`;
+function repoNamePattern(name: string, match: NameMatch): RegExp {
+  const escaped = escapeRegExp(name);
+  if (match === 'word') {
+    return new RegExp(`(?<![a-z0-9_-])${escaped}(?:\\.git)?${NAME_END}`);
+  }
+  const repo = `[a-z0-9_.-]+[/:]${escaped}(?:\\.git)?`;
   const hosted = `${HOST_PREFIX}${repo}${NAME_END}`;
-  return new RegExp(hostOnly ? hosted : `${hosted}|${repo}(?!/)${NAME_END}`);
+  return new RegExp(
+    match === 'host' ? hosted : `${hosted}|${repo}(?!/)${NAME_END}`
+  );
 }
+
+/** How a bare repo name term matches; see {@link FindDeniedTextOptions.nameMatch}. */
+export type NameMatch = 'word' | 'owner' | 'host';
 
 /** Options for {@link findDeniedText}. */
 export interface FindDeniedTextOptions {
   /**
-   * Match a bare repo name term only after a host. For file content, where
-   * a package or directory of the same name is common.
+   * How a bare repo name term matches. `word` (the default) is for messages,
+   * titles, bodies and branch names: the name anywhere it is a whole word.
+   * `owner` is for file names, where a directory of that name is common: only
+   * as the repo of an `owner/name` or URL. `host` is for file content, where
+   * a package of that name is common: only after a host.
    */
-  hostOnlyNames?: boolean;
+  nameMatch?: NameMatch;
 }
 
 /**
  * Returns the first deny-list term found in `text` (case-insensitive, with
- * text and terms both passed through {@link canonicalText}), or null when
- * the text is clean. A term with no `/`, `:` or `@` other than `venfork` is
- * a bare repo name and matches only as the repo of an `owner/name` or URL.
+ * text and terms both passed through {@link canonicalText} after `%XX`
+ * escapes are decoded), or null when the text is clean. A term with no `/`,
+ * `:` or `@` other than `venfork` is a bare repo name, matched as
+ * {@link FindDeniedTextOptions.nameMatch} says.
  * Every other term but `venfork` must not run on into more of a repo name:
  * `acme/widget-public` does not match the term `acme/widget`.
  *
@@ -131,17 +188,15 @@ export function findDeniedText(
   terms: readonly string[],
   options: FindDeniedTextOptions = {}
 ): string | null {
-  const folded = canonicalText(text).toLowerCase();
+  const folded = foldForMatch(text);
   for (const term of terms) {
-    const needle = canonicalText(term).toLowerCase();
+    const needle = foldForMatch(term);
     if (!needle) continue;
     let found: boolean;
     if (term === SELF_REFERENCE_TERM) {
       found = folded.includes(needle);
     } else if (!/[/:@]/.test(term)) {
-      found = repoNamePattern(needle, options.hostOnlyNames === true).test(
-        folded
-      );
+      found = repoNamePattern(needle, options.nameMatch ?? 'word').test(folded);
     } else {
       found = new RegExp(`${escapeRegExp(needle)}(?![a-z0-9_-])`).test(folded);
     }
