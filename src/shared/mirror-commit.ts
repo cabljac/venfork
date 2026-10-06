@@ -8,7 +8,11 @@ import {
   preserveRemoveHint,
   type VenforkConfig,
 } from '../config.js';
-import { GitError, PinDowngradeError } from '../errors.js';
+import {
+  GitError,
+  PinDowngradeError,
+  UnmigratedMirrorError,
+} from '../errors.js';
 import { VENFORK_VERSION } from '../version.js';
 import { generateSyncWorkflow } from '../workflow.js';
 import {
@@ -29,7 +33,11 @@ import {
 export { normalizeWorkflowList };
 
 import { netExec, netFailureReason } from './net.js';
-import { compareSemver, pinnedVenforkVersion } from './semver.js';
+import {
+  compareSemver,
+  isUnpinnedWorkflow,
+  pinnedVenforkVersion,
+} from './semver.js';
 import { assertPreserveEntriesAreNotDirectories } from './stage-gate.js';
 
 /** One entry of `git ls-tree -z` output. */
@@ -502,6 +510,12 @@ export async function assertNoPinDowngrade(
     reject: false,
   })`git show ${`${mirrorTip}:${SYNC_WORKFLOW_PATH}`}`;
   if (shown.exitCode !== 0) return;
+  if (
+    process.env.GITHUB_ACTIONS === 'true' &&
+    isUnpinnedWorkflow(shown.stdout)
+  ) {
+    throw new UnmigratedMirrorError();
+  }
   const pinned = pinnedVenforkVersion(shown.stdout);
   if (pinned && (compareSemver(pinned, VENFORK_VERSION) ?? 0) > 0) {
     throw new PinDowngradeError(pinned, VENFORK_VERSION);

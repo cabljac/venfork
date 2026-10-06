@@ -189,3 +189,16 @@ export class PinDowngradeError extends VenforkError {
     this.name = 'PinDowngradeError';
   }
 }
+
+/**
+ * Thrown by a scheduled run when origin's sync workflow predates the pinned
+ * install: the mirror has not been migrated to venfork 0.11 by a local sync.
+ */
+export class UnmigratedMirrorError extends VenforkError {
+  constructor() {
+    super(
+      "This mirror's sync workflow is not pinned to a venfork version, so it predates venfork 0.11. Set VENFORK_PUSH_TOKEN, then run `venfork sync` locally once with venfork 0.11 or later; see the README section on upgrading from 0.10."
+    );
+    this.name = 'UnmigratedMirrorError';
+  }
+}

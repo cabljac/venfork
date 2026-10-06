@@ -402,6 +402,46 @@ describe('divergence check errors', () => {
   });
 });
 
+describe('unmigrated mirror on the runner', () => {
+  const LEGACY_WORKFLOW =
+    'name: Venfork Sync\non:\n  schedule:\n    - cron: "0 * * * *"\njobs:\n  sync:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm install -g venfork\n      - run: venfork sync\n';
+
+  async function legacyManagedCommit(): Promise<void> {
+    await enableSchedule();
+    await fx.commitOnOrigin(
+      { [WORKFLOW]: LEGACY_WORKFLOW },
+      `${MANAGED_SUBJECT}\n\nVenfork-Managed: 1`
+    );
+    await fx.commitOnUpstream({ 'src/new.txt': 'new\n' });
+  }
+
+  test('a scheduled run refuses to rewrite an unpinned workflow and says how to migrate', async () => {
+    await legacyManagedCommit();
+    const originBefore = await fx.sha(fx.origin, 'main');
+    process.env.GITHUB_ACTIONS = 'true';
+    try {
+      await expect(sync()).rejects.toThrow('process.exit(1)');
+    } finally {
+      delete process.env.GITHUB_ACTIONS;
+    }
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining('run `venfork sync` locally once')
+    );
+    expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
+  });
+
+  test('a local sync migrates the unpinned workflow', async () => {
+    await legacyManagedCommit();
+
+    await sync();
+
+    expect(await fx.fileAt(fx.origin, 'main', WORKFLOW)).toContain(
+      `venfork@${VENFORK_VERSION}`
+    );
+  });
+});
+
 describe('pinned version downgrade guard', () => {
   test('sync refuses to rewrite a workflow pinned to a newer venfork', async () => {
     await enableSchedule();
