@@ -158,6 +158,7 @@ export async function issueCommand(
 
   const s = p.spinner();
   const repoDir = process.cwd();
+  let abortCode: number | undefined;
 
   try {
     s.start('Resolving remotes');
@@ -224,7 +225,8 @@ export async function issueCommand(
       });
       if (p.isCancel(ok) || !ok) {
         p.outro('Stage cancelled');
-        process.exit(0);
+        abortCode = p.isCancel(ok) ? 130 : 0;
+        return;
       }
 
       s.start('Opening upstream issue');
@@ -292,7 +294,8 @@ export async function issueCommand(
     });
     if (p.isCancel(ok) || !ok) {
       p.outro('Pull cancelled');
-      process.exit(0);
+      abortCode = p.isCancel(ok) ? 130 : 0;
+      return;
     }
 
     s.start('Opening internal issue');
@@ -327,5 +330,7 @@ export async function issueCommand(
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Issue command failed');
     process.exit(1);
+  } finally {
+    if (abortCode !== undefined) process.exit(abortCode);
   }
 }

@@ -643,6 +643,7 @@ export async function stageCommand(
 
   const s = p.spinner();
   const repoDir = process.cwd();
+  let abortCode: number | undefined;
 
   try {
     s.start('Verifying branch and fetching upstream and origin');
@@ -769,12 +770,14 @@ export async function stageCommand(
 
     if (p.isCancel(shouldStage)) {
       p.cancel('Operation cancelled');
-      process.exit(0);
+      abortCode = 130;
+      return;
     }
 
     if (!shouldStage) {
       p.outro('Stage cancelled');
-      process.exit(0);
+      abortCode = 0;
+      return;
     }
 
     await pushStagedHead(plan, prepared.head, repoDir, s);
@@ -880,5 +883,7 @@ export async function stageCommand(
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Stage failed');
     process.exit(1);
+  } finally {
+    if (abortCode !== undefined) process.exit(abortCode);
   }
 }

@@ -143,7 +143,7 @@ export async function setupCommand(
 
     if (p.isCancel(response)) {
       p.cancel('Operation cancelled');
-      process.exit(0);
+      process.exit(130);
     }
 
     finalUpstreamUrl = normalizeGitHubRepoInput(response as string);
@@ -175,7 +175,7 @@ export async function setupCommand(
 
     if (p.isCancel(response)) {
       p.cancel('Operation cancelled');
-      process.exit(0);
+      process.exit(130);
     }
 
     finalPrivateMirrorName = response as string;
@@ -218,7 +218,11 @@ export async function setupCommand(
       initialValue: false,
     });
 
-    if (p.isCancel(confirmed) || !confirmed) {
+    if (p.isCancel(confirmed)) {
+      p.outro('❌ Setup cancelled');
+      process.exit(130);
+    }
+    if (!confirmed) {
       p.outro('❌ Setup cancelled');
       process.exit(0);
     }

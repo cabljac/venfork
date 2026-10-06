@@ -33,6 +33,8 @@ const signalHandlers = new Map<string, SignalHandler>();
 let shouldHangOnFork = false;
 const mockResponses: Map<string, MockResponse> = new Map();
 let confirmResponse = true; // Default to true for most tests
+const CANCEL = Symbol('cancel');
+let promptCancelled = false;
 let tempDirCounter = 0;
 let accessExists: (filePath: string) => boolean = () => false;
 
@@ -274,9 +276,11 @@ mock.module('@clack/prompts', () => ({
     step: mock(() => {}),
   },
   group: mock(() => Promise.resolve({})),
-  text: mock(() => Promise.resolve('')),
-  confirm: mock(() => Promise.resolve(confirmResponse)), // Use dynamic confirmResponse
-  isCancel: mock(() => false),
+  text: mock(() => Promise.resolve(promptCancelled ? CANCEL : '')),
+  confirm: mock(() =>
+    Promise.resolve(promptCancelled ? CANCEL : confirmResponse)
+  ), // Use dynamic confirmResponse
+  isCancel: mock((value: unknown) => value === CANCEL),
 }));
 
 // Import commands (will use mocked execa, fs, and prompts)
@@ -365,6 +369,7 @@ beforeEach(() => {
   shouldHangOnFork = false;
   mockResponses.clear();
   confirmResponse = true; // Reset to true for each test
+  promptCancelled = false;
   tempDirCounter = 0;
   accessExists = () => false;
 
@@ -4484,6 +4489,114 @@ describe('no-public mode', () => {
       expect(
         execaCalls.some((c) => c.includes('git remote add upstream'))
       ).toBe(true);
+    });
+  });
+});
+
+describe('prompt cancel exits 130', () => {
+  const pushedOrCreated = () =>
+    execaCalls.filter(
+      (cmd) =>
+        cmd.includes('gh repo create') ||
+        cmd.includes('gh repo fork') ||
+        cmd.includes(' push ') ||
+        cmd.includes('gh issue create') ||
+        cmd.includes('gh pr create')
+    );
+
+  test('setup: cancelled upstream prompt', async () => {
+    promptCancelled = true;
+    await expect(setupCommand()).rejects.toThrow('process.exit(130)');
+    expect(pushedOrCreated()).toEqual([]);
+  });
+
+  test('setup: cancelled mirror name prompt', async () => {
+    promptCancelled = true;
+    await expect(setupCommand('git@github.com:test/repo.git')).rejects.toThrow(
+      'process.exit(130)'
+    );
+    expect(pushedOrCreated()).toEqual([]);
+  });
+
+  test('setup: cancelled personal-account confirm', async () => {
+    promptCancelled = true;
+    await expect(
+      setupCommand('git@github.com:test/repo.git', 'test-vendor')
+    ).rejects.toThrow('process.exit(130)');
+    expect(pushedOrCreated()).toEqual([]);
+  });
+
+  describe('issue and stage', () => {
+    beforeEach(() => {
+      mockResponses.set('git remote get-url origin', {
+        exitCode: 0,
+        stdout: 'git@github.com:owner/mirror.git',
+        stderr: '',
+      });
+      mockResponses.set('git remote get-url upstream', {
+        exitCode: 0,
+        stdout: 'git@github.com:up/repo.git',
+        stderr: '',
+      });
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          version: '1',
+          publicForkUrl: 'git@github.com:owner/fork.git',
+          upstreamUrl: 'git@github.com:up/repo.git',
+        }),
+        stderr: '',
+      });
+    });
+
+    test('issue stage: cancelled confirm', async () => {
+      mockResponses.set('gh issue view 7 --repo owner/mirror', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          number: 7,
+          url: 'https://github.com/owner/mirror/issues/7',
+          title: 'Bug',
+          body: 'Body.',
+          state: 'OPEN',
+          author: { login: 'me' },
+        }),
+        stderr: '',
+      });
+      promptCancelled = true;
+      await expect(issueCommand('stage', '7')).rejects.toThrow(
+        'process.exit(130)'
+      );
+      expect(pushedOrCreated()).toEqual([]);
+    });
+
+    test('issue pull: cancelled confirm', async () => {
+      mockResponses.set('gh issue view 1234 --repo up/repo', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          number: 1234,
+          url: 'https://github.com/up/repo/issues/1234',
+          title: 'Request',
+          body: 'Body.',
+          state: 'OPEN',
+          author: { login: 'reporter' },
+          comments: [],
+        }),
+        stderr: '',
+      });
+      promptCancelled = true;
+      await expect(issueCommand('pull', '1234')).rejects.toThrow(
+        'process.exit(130)'
+      );
+      expect(pushedOrCreated()).toEqual([]);
+    });
+
+    test('stage: cancelled confirm', async () => {
+      mockManagedCommitOnBranch();
+      promptCancelled = true;
+      await expect(stageCommand('feature-branch')).rejects.toThrow(
+        'process.exit(130)'
+      );
+      expect(pushedOrCreated()).toEqual([]);
     });
   });
 });
