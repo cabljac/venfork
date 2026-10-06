@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   compareSemver,
+  isUnpinnedWorkflow,
   pinnedVenforkVersion,
 } from '../../src/shared/semver.js';
 import { generateSyncWorkflow } from '../../src/workflow.js';
@@ -34,5 +35,33 @@ describe('pinnedVenforkVersion', () => {
 
   test('returns null when nothing is pinned', () => {
     expect(pinnedVenforkVersion('run: npm install -g venfork')).toBeNull();
+  });
+});
+
+describe('isUnpinnedWorkflow', () => {
+  test('is true for the legacy unpinned install', () => {
+    expect(
+      isUnpinnedWorkflow(
+        '      - run: npm install -g venfork\n      - run: venfork sync\n'
+      )
+    ).toBe(true);
+  });
+
+  test('is true for a floating tag', () => {
+    expect(isUnpinnedWorkflow('run: npm install -g venfork@latest')).toBe(true);
+  });
+
+  test.each(['standard', 'no-public'] as const)(
+    'is false for a generated %s workflow',
+    (mode) => {
+      expect(
+        isUnpinnedWorkflow(generateSyncWorkflow('0 * * * *', mode, '2.3.4'))
+      ).toBe(false);
+    }
+  );
+
+  test('is false for a workflow that does not install venfork', () => {
+    expect(isUnpinnedWorkflow('run: npm install -g left-pad')).toBe(false);
+    expect(isUnpinnedWorkflow('')).toBe(false);
   });
 });

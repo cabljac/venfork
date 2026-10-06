@@ -48,3 +48,14 @@ export function pinnedVenforkVersion(workflowYaml: string): string | null {
     null
   );
 }
+
+/**
+ * True when the workflow installs venfork with no version pin, as mirrors
+ * written by releases before 0.11 do.
+ */
+export function isUnpinnedWorkflow(workflowYaml: string): boolean {
+  return (
+    pinnedVenforkVersion(workflowYaml) === null &&
+    /\bnpm\s+(?:install|i)\b[^\n]*\bvenfork\b/.test(workflowYaml)
+  );
+}

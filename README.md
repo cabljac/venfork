@@ -477,6 +477,18 @@ Do not store `gh auth token` or any other account-wide token. A repository secre
 
 If `VENFORK_PUSH_TOKEN` is unset, the generated workflow fails its first step with an error annotation, before it installs anything. The failure opens the `venfork-sync-blocked` issue, and the issue names the missing secret. The workflow does not fall back to the default `GITHUB_TOKEN`.
 
+**Upgrading from 0.10 or earlier**
+
+Scheduled mirrors created by 0.10 or earlier run an unpinned `npm install -g venfork`. The first scheduled run after 0.11 reaches npm installs 0.11, which rewrites the managed commit with the new pinned workflow. That workflow needs `VENFORK_PUSH_TOKEN` in both modes. A no-public mirror set up without the token under the old docs then fails on every run, and the old workflow does not report the failure.
+
+Do this before the release reaches npm:
+
+1. Install the new CLI locally: `npm install -g venfork@latest`.
+2. Create `VENFORK_PUSH_TOKEN` on the mirror (see "Authenticating cross-repo pushes" above).
+3. In a clone of the mirror, run `venfork sync` once. The pinned workflow lands on the default branch, so later runs install exactly that version.
+
+If you miss the window, set the secret afterwards and run `venfork sync` locally. The next scheduled run then succeeds, and it closes the `venfork-sync-blocked` issue.
+
 ### How scheduled sync behaves
 
 - **Cron is best-effort.** GitHub runs scheduled workflows only from the default branch, at most every 5 minutes, and may delay or skip runs when Actions is busy. Do not rely on exact timing. `venfork doctor` flags a disabled workflow, and a last scheduled run older than twice the cron interval (at least 1 hour).
