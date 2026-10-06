@@ -16,6 +16,17 @@ const MARKER_RE = /^\s*(\/)?\s*venfork\s*:\s*internal\b/i;
 /** Text shaped like a marker, whatever wraps it. */
 const MARKER_TEXT_RE = /venfork\s*:\s*internal/i;
 
+/**
+ * The marker-shaped text (`venfork:internal`, folded to its canonical form)
+ * in `text`, or null. Unlike the bare word `venfork`, this is refused in
+ * published content even when self-reference is allowed.
+ *
+ * @param text Text bound for the public side.
+ */
+export function findMarkerText(text: string): string | null {
+  return canonicalText(text).match(MARKER_TEXT_RE)?.[0] ?? null;
+}
+
 /** A comment body that reads like a broken marker (`venfork:intenral`, `venfork internal`). */
 const MARKER_SHAPED_COMMENT_RE = /venfork\s*:|venfork\W*internal/i;
 

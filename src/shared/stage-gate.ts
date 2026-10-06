@@ -14,6 +14,7 @@ import {
   mirrorLocationTerms,
   selfReferenceAllowed,
 } from './deny-list.js';
+import { findMarkerText } from './redaction.js';
 
 /** Git's object id for the empty blob; an empty file is not mirror content. */
 const EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391';
@@ -570,7 +571,9 @@ function findTermInBytes(
  *  - {@link MirrorReferenceError} when an added or modified text file, or
  *    any file name, contains a mirror deny-list term (never the bare word
  *    `venfork`; in file content the bare repo name only after a host) or
- *    looks like a venfork `config.json`; or when the venfork
+ *    looks like a venfork `config.json` or holds `venfork:internal`
+ *    marker text (also in author, committer and message, even with
+ *    self-reference allowed); or when the venfork
  *    bot authored or committed the commit, or its author, committer or
  *    message contains a deny-list term. Text is read as UTF-8, or UTF-16
  *    when it starts with a byte order mark. Every file, text or binary, is
@@ -650,7 +653,8 @@ export async function assertPublishableCommits(
             ? null
             : looksLikeVenforkConfig(text, input.recordedUrls)
               ? CONFIG_SIGNATURE
-              : findDeniedText(text, locationTerms, { hostOnlyNames: true });
+              : (findMarkerText(text) ??
+                findDeniedText(text, locationTerms, { hostOnlyNames: true }));
         hit = textHit ?? findTermInBytes(bytes, locationTerms);
         scanned.set(change.newOid, hit);
       }
@@ -687,6 +691,14 @@ export async function assertPublishableCommits(
       ['message', rest.join('\0')],
     ];
     for (const [field, value] of fields) {
+      const marker = findMarkerText(value);
+      if (marker !== null) {
+        throw new MirrorReferenceError(
+          `commit ${label} ${field}`,
+          marker,
+          'Rewrite the branch so no commit contains internal markers and retry.'
+        );
+      }
       const matched = findDeniedText(value, denyList);
       if (matched !== null) {
         throw new MirrorReferenceError(
