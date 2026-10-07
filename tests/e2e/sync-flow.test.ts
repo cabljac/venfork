@@ -3,9 +3,11 @@ import * as fs from 'node:fs/promises';
 import { $ } from 'execa';
 import { readVenforkConfigFromRepo } from '../../src/config.js';
 import {
+  appCredentials,
   cleanupAll,
   createIssueOnRepo,
   createUpstreamRepo,
+  deleteRepoSecret,
   dirExists,
   ensureDeleteRepoScope,
   ensureDistinctOwners,
@@ -218,110 +220,150 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     expect(parentSha).toBe(pokedUpstreamSha);
   }, 180_000);
 
-  test.skipIf(!REAL_DISPATCH)(
-    'tier 2: workflow_dispatch run on GHA syncs upstream change end-to-end',
-    async () => {
-      // Tier 1 left both repos in sync, with venfork's own workflow on
-      // origin/main, which fails its preflight unless VENFORK_PUSH_TOKEN is set.
-      const defaultBranch = await getRepoDefaultBranch(
-        UPSTREAM_OWNER,
-        names.upstream
-      );
+  // Token first, then App auth on the same repos, so the App run also covers
+  // switching a live mirror's managed commit from one mode to the other.
+  for (const auth of ['token', 'app'] as const) {
+    test.skipIf(!REAL_DISPATCH || (auth === 'app' && !appCredentials()))(
+      `tier 2 (${auth}): workflow_dispatch run on GHA syncs upstream change end-to-end`,
+      async () => {
+        // Tier 1 left both repos in sync, with venfork's own workflow on
+        // origin/main, whose preflight fails until its secrets are set.
+        const defaultBranch = await getRepoDefaultBranch(
+          UPSTREAM_OWNER,
+          names.upstream
+        );
 
-      // 1. Stash a push token as a repo secret on the mirror. The secret dies
-      //    with the repo when afterAll runs `gh repo delete`.
-      const token = await getPushToken();
-      await setRepoSecret(
-        GITHUB_ORG,
-        names.mirrorBare,
-        'VENFORK_PUSH_TOKEN',
-        token
-      );
+        if (auth === 'token') {
+          // 1. Stash a push token as a repo secret on the mirror. The secret
+          //    dies with the repo when afterAll runs `gh repo delete`.
+          const token = await getPushToken();
+          await setRepoSecret(
+            GITHUB_ORG,
+            names.mirrorBare,
+            'VENFORK_PUSH_TOKEN',
+            token
+          );
+        } else {
+          // 1. Switch to App auth: secrets before the switch, so a scheduled
+          //    run in between passes its preflight; push token deleted after.
+          const credentials = appCredentials();
+          if (!credentials) throw new Error('App credentials are not set');
+          await setRepoSecret(
+            GITHUB_ORG,
+            names.mirrorBare,
+            'VENFORK_APP_CLIENT_ID',
+            credentials.clientId
+          );
+          await setRepoSecret(
+            GITHUB_ORG,
+            names.mirrorBare,
+            'VENFORK_APP_PRIVATE_KEY',
+            credentials.privateKey
+          );
+          await runVenfork(['schedule', 'set', '*/5 * * * *', '--app'], {
+            cwd: localMirrorPath,
+          });
+          const wf = await readWorkflowFromOrigin(
+            localMirrorPath,
+            defaultBranch
+          );
+          expect(wf).toContain('- name: Mint GitHub App token');
+          expect(wf).not.toContain('VENFORK_PUSH_TOKEN');
+          expect(
+            (await readVenforkConfigFromRepo(localMirrorPath))?.scheduleAuth
+          ).toBe('app');
+          await deleteRepoSecret(
+            GITHUB_ORG,
+            names.mirrorBare,
+            'VENFORK_PUSH_TOKEN'
+          );
+        }
 
-      // The published venfork lags this checkout, so install the build
-      // from beforeAll through the workflow's VENFORK_INSTALL_SPEC override.
-      const installUrl = await codeUnderTestUrl();
-      await setRepoVariable(
-        GITHUB_ORG,
-        names.mirrorBare,
-        'VENFORK_INSTALL_SPEC',
-        installUrl
-      );
-
-      // 2. Push another change to upstream so we can prove propagation
-      //    (different filename from tier 1 to keep commits distinguishable).
-      const dispatchPokeContent = `dispatch ${RUN_ID} ${Date.now()}`;
-      await pokeUpstream('dispatch.txt', dispatchPokeContent);
-      const upstreamShaBeforeDispatch = await getDefaultBranchSha(
-        UPSTREAM_OWNER,
-        names.upstream,
-        defaultBranch
-      );
-
-      // 3. Trigger the workflow_dispatch run.
-      const dispatchedAt = new Date();
-      await $`gh workflow run venfork-sync.yml --repo ${GITHUB_ORG}/${names.mirrorBare} --ref ${defaultBranch}`;
-
-      const runId = await waitForDispatchedRun(
-        GITHUB_ORG,
-        names.mirrorBare,
-        'venfork-sync.yml',
-        dispatchedAt,
-        90_000
-      );
-      console.log(
-        `[venfork-e2e] dispatched run id=${runId}; polling for completion`
-      );
-      const { conclusion, url } = await waitForRunCompletion(
-        GITHUB_ORG,
-        names.mirrorBare,
-        runId,
-        300_000
-      );
-      if (conclusion !== 'success') {
-        console.error(`[venfork-e2e] run failed; logs URL: ${url}`);
-        const logs = await $({
-          reject: false,
-        })`gh run view ${runId} --repo ${GITHUB_ORG}/${names.mirrorBare} --log-failed`;
-        console.error(`--- gh run view --log-failed ---\n${logs.stdout}`);
-        if (logs.stderr) console.error(`--- stderr ---\n${logs.stderr}`);
-      }
-      expect(conclusion).toBe('success');
-
-      // 4. Same git-state assertions as tier 1, against state produced by GHA.
-      const publicSha = await getDefaultBranchSha(
-        GITHUB_ORG,
-        names.fork,
-        defaultBranch
-      );
-      expect(publicSha).toBe(upstreamShaBeforeDispatch);
-
-      const mirrorSha = await getDefaultBranchSha(
-        GITHUB_ORG,
-        names.mirrorBare,
-        defaultBranch
-      );
-      expect(mirrorSha).not.toBe(upstreamShaBeforeDispatch);
-
-      const mirrorMessages = await listCommitMessages(
-        GITHUB_ORG,
-        names.mirrorBare,
-        defaultBranch,
-        2
-      );
-      expect(mirrorMessages[0]).toBe('chore: venfork-managed mirror commit');
-      expect(mirrorMessages[1]).toContain('e2e poke dispatch.txt');
-
-      expect(
-        await listOpenIssuesWithLabel(
+        // The published venfork lags this checkout, so install the build
+        // from beforeAll through the workflow's VENFORK_INSTALL_SPEC override.
+        const installUrl = await codeUnderTestUrl();
+        await setRepoVariable(
           GITHUB_ORG,
           names.mirrorBare,
-          'venfork-sync-blocked'
-        )
-      ).toEqual([]);
-    },
-    600_000
-  );
+          'VENFORK_INSTALL_SPEC',
+          installUrl
+        );
+
+        // 2. Push another change to upstream so we can prove propagation
+        //    (different filename from tier 1 to keep commits distinguishable).
+        const dispatchPokeContent = `dispatch ${auth} ${RUN_ID} ${Date.now()}`;
+        await pokeUpstream(`dispatch-${auth}.txt`, dispatchPokeContent);
+        const upstreamShaBeforeDispatch = await getDefaultBranchSha(
+          UPSTREAM_OWNER,
+          names.upstream,
+          defaultBranch
+        );
+
+        // 3. Trigger the workflow_dispatch run.
+        const dispatchedAt = new Date();
+        await $`gh workflow run venfork-sync.yml --repo ${GITHUB_ORG}/${names.mirrorBare} --ref ${defaultBranch}`;
+
+        const runId = await waitForDispatchedRun(
+          GITHUB_ORG,
+          names.mirrorBare,
+          'venfork-sync.yml',
+          dispatchedAt,
+          90_000
+        );
+        console.log(
+          `[venfork-e2e] dispatched run id=${runId}; polling for completion`
+        );
+        const { conclusion, url } = await waitForRunCompletion(
+          GITHUB_ORG,
+          names.mirrorBare,
+          runId,
+          300_000
+        );
+        if (conclusion !== 'success') {
+          console.error(`[venfork-e2e] run failed; logs URL: ${url}`);
+          const logs = await $({
+            reject: false,
+          })`gh run view ${runId} --repo ${GITHUB_ORG}/${names.mirrorBare} --log-failed`;
+          console.error(`--- gh run view --log-failed ---\n${logs.stdout}`);
+          if (logs.stderr) console.error(`--- stderr ---\n${logs.stderr}`);
+        }
+        expect(conclusion).toBe('success');
+
+        // 4. Same git-state assertions as tier 1, against state produced by GHA.
+        const publicSha = await getDefaultBranchSha(
+          GITHUB_ORG,
+          names.fork,
+          defaultBranch
+        );
+        expect(publicSha).toBe(upstreamShaBeforeDispatch);
+
+        const mirrorSha = await getDefaultBranchSha(
+          GITHUB_ORG,
+          names.mirrorBare,
+          defaultBranch
+        );
+        expect(mirrorSha).not.toBe(upstreamShaBeforeDispatch);
+
+        const mirrorMessages = await listCommitMessages(
+          GITHUB_ORG,
+          names.mirrorBare,
+          defaultBranch,
+          2
+        );
+        expect(mirrorMessages[0]).toBe('chore: venfork-managed mirror commit');
+        expect(mirrorMessages[1]).toContain(`e2e poke dispatch-${auth}.txt`);
+
+        expect(
+          await listOpenIssuesWithLabel(
+            GITHUB_ORG,
+            names.mirrorBare,
+            'venfork-sync-blocked'
+          )
+        ).toEqual([]);
+      },
+      600_000
+    );
+  }
 
   test('tier 3: stage --pr opens upstream PR with internal body redacted', async () => {
     const defaultBranch = await getRepoDefaultBranch(
