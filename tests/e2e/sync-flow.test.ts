@@ -244,23 +244,10 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
             token
           );
         } else {
-          // 1. Switch the mirror the token run left behind to App auth: the
-          //    managed commit is rebuilt with the mint step, and the push token
-          //    goes so the run can only succeed with the App.
+          // 1. Switch to App auth: secrets before the switch, so a scheduled
+          //    run in between passes its preflight; push token deleted after.
           const credentials = appCredentials();
           if (!credentials) throw new Error('App credentials are not set');
-          await runVenfork(['schedule', 'set', '*/5 * * * *', '--app'], {
-            cwd: localMirrorPath,
-          });
-          const wf = await readWorkflowFromOrigin(
-            localMirrorPath,
-            defaultBranch
-          );
-          expect(wf).toContain('- name: Mint GitHub App token');
-          expect(wf).not.toContain('VENFORK_PUSH_TOKEN');
-          expect(
-            (await readVenforkConfigFromRepo(localMirrorPath))?.scheduleAuth
-          ).toBe('app');
           await setRepoSecret(
             GITHUB_ORG,
             names.mirrorBare,
@@ -273,6 +260,18 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
             'VENFORK_APP_PRIVATE_KEY',
             credentials.privateKey
           );
+          await runVenfork(['schedule', 'set', '*/5 * * * *', '--app'], {
+            cwd: localMirrorPath,
+          });
+          const wf = await readWorkflowFromOrigin(
+            localMirrorPath,
+            defaultBranch
+          );
+          expect(wf).toContain('- name: Mint GitHub App token');
+          expect(wf).not.toContain('VENFORK_PUSH_TOKEN');
+          expect(
+            (await readVenforkConfigFromRepo(localMirrorPath))?.scheduleAuth
+          ).toBe('app');
           await deleteRepoSecret(
             GITHUB_ORG,
             names.mirrorBare,
