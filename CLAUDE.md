@@ -26,7 +26,8 @@ bun test ./tests/unit/utils.test.ts      # single file
 bun test -t "parses owner" ./tests/unit  # single test by name
 bun run test:watch                    # watch
 bun run test:coverage                 # coverage
-bun run check            # biome check + autofix (lint + format) — run before commit
+bun run verify           # the only command that means "done": format:check, lint, typecheck, tests, node smoke (non-mutating)
+bun run check            # biome check + autofix (lint + format); mutates files, so it is not a gate
 bun run lint             # biome lint only
 bun run build            # bundle to dist/ (node target)
 bun run compile          # standalone binary -> dist/venfork
