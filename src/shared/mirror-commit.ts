@@ -17,7 +17,11 @@ import {
 } from '../errors.js';
 import { parseRepoPath } from '../utils.js';
 import { VENFORK_VERSION } from '../version.js';
-import { generateSyncWorkflow, type SyncAuth } from '../workflow.js';
+import {
+  generateSyncWorkflow,
+  isSafeRepoSegment,
+  type SyncAuth,
+} from '../workflow.js';
 import {
   SYNC_WORKFLOW_PATH,
   VENFORK_BOT_EMAIL,
@@ -501,7 +505,12 @@ export function syncWorkflowAuth(
   if (!config || scheduleAuthOf(config) !== 'app') return { kind: 'token' };
   if (config.mode === 'no-public') return { kind: 'app' };
   const [owner, name] = parseRepoPath(config.publicForkUrl ?? '').split('/');
-  if (!owner || !name) {
+  if (
+    !owner ||
+    !name ||
+    !isSafeRepoSegment(owner) ||
+    !isSafeRepoSegment(name)
+  ) {
     throw new ConfigError(
       `GitHub App auth needs the public fork on GitHub, but publicForkUrl is ${config.publicForkUrl ?? '(none)'}. Switch back with: venfork schedule set "<cron>" --token`
     );
