@@ -42,6 +42,8 @@ bun run test:e2e             # VENFORK_E2E=1
 bun run test:e2e:dispatch    # + real workflow_dispatch
 ```
 
+Never run the real-GitHub e2e unless the user asks. It needs the test org (`memcard-dev`, or `VENFORK_E2E_ORG`) and a token with repo create and delete rights (`delete_repo` scope). Run it with `env -u GITHUB_TOKEN -u GH_TOKEN` so gh uses the keyring token (gh prefers `GH_TOKEN`, then `GITHUB_TOKEN`, then the keyring). To push with a specific token instead, set `VENFORK_E2E_PAT`; it overrides `gh auth token` as the e2e push token. Each run must leave no `venfork-e2e-*` repos behind: check with `gh repo list "${VENFORK_E2E_ORG:-memcard-dev}" --limit 1000 | grep venfork-e2e-` (and the same for `${VENFORK_E2E_UPSTREAM_OWNER:-cabljac}`). The default proof for a change is `bun run verify` plus a harness drive (`.agents/skills/verify-venfork/`). A PR that did not rerun e2e must state "Not verified: e2e tiers".
+
 ## Architecture
 
 CLI entry `src/index.ts` parses `argv[0]` as the command and dispatches via a switch. Each command has a dedicated arg parser (`src/<command>-args.ts`) returning a typed options object, then calls the matching `*Command` function in `src/commands/<command>.ts` (re-exported through the `src/commands.ts` barrel). To add/modify a command: touch the arg parser, the command impl, the `index.ts` switch, and `showHelp()`.
@@ -87,4 +89,5 @@ Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/n
 
 - TypeScript strict mode; Biome for lint+format (`bun run check`). Releases via release-please (Conventional Commits drive version bumps + CHANGELOG).
 - Tests use Bun's runner with `test()` (not `it()`).
+- Known traps live in `docs/agents/gotchas.md`; append there after a correction.
 - `gh repo clone` is used for fetching, so SSH-vs-HTTPS transport follows the user's `gh config get git_protocol`.
