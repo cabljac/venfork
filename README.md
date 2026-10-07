@@ -419,7 +419,7 @@ Check that a mirror is healthy, then list the links recorded in `venfork-config`
 | `divergence` | No user commits on `origin`/`public` that would make sync abort |
 | `preserve` | Every preserve entry is a valid single-file path and exists on `origin/<default>` |
 | `workflow` | The sync workflow on `origin/<default>` matches what this venfork version would write |
-| `token` | When a schedule is enabled, in both modes: `VENFORK_PUSH_TOKEN` is set on the mirror, or with `schedule set --app` both `VENFORK_APP_CLIENT_ID` and `VENFORK_APP_PRIVATE_KEY` are set, the public fork has the mirror's owner, and no unused `VENFORK_PUSH_TOKEN` is left. Doctor can only see that the secrets exist: the token itself needs the `workflow` scope (classic) or Workflows: write (fine-grained), and doctor cannot check the App key or installation |
+| `token` | When a schedule is enabled, in both modes: `VENFORK_PUSH_TOKEN` is set on the mirror, or with `schedule set --app` both `VENFORK_APP_CLIENT_ID` and `VENFORK_APP_PRIVATE_KEY` are set, and the public fork has the mirror's owner. In app mode a leftover `VENFORK_PUSH_TOKEN` is a note, not a failure: the check passes and its fix is the `gh secret delete` command. Doctor can only see that the secrets exist: the token itself needs the `workflow` scope (classic) or Workflows: write (fine-grained), and doctor cannot check the App key or installation |
 | `last-run` | The last `venfork-sync.yml` run, from any trigger, did not fail |
 | `cron-age` | The workflow is enabled, and the last scheduled run is not older than twice the cron interval, with a floor of 1 hour because GitHub delays scheduled runs |
 
@@ -482,10 +482,10 @@ If `VENFORK_PUSH_TOKEN` is unset, the generated workflow fails its first step wi
 
 **Authenticating with a GitHub App**
 
-Instead of a personal access token, the workflow can mint a token from a GitHub App on each run. The token expires after one hour, and you never rotate a 90-day PAT. Set it up once per owner:
+Instead of a personal access token, the workflow can mint a token from a GitHub App on each run. The token expires after one hour, and you never rotate a 90-day PAT. Create one App per mirror (per client), not one per owner:
 
 1. Create a GitHub App under the account or organization that owns the mirror (Settings, Developer settings, GitHub Apps). Turn the webhook off. Give it the repository permissions Contents: read and write and Workflows: read and write. Metadata: read is added for you. It needs no Issues permission: issue reports use the job token.
-2. Install the App on only the mirror and, in standard mode, the public fork.
+2. Install the App on only this mirror and, in standard mode, its public fork. Do not install it on other mirrors.
 3. Generate a private key for the App and note its client ID.
 4. Store both as secrets on the mirror, then switch the schedule to App auth:
 
@@ -502,8 +502,9 @@ In app mode, the first step checks that both secrets are set and fails with an e
 Caveats:
 
 - The private key is as sensitive as a token and does not expire. Every upstream workflow on the mirror can read a repository secret, so filter them with `venfork workflows block` or `venfork workflows allow`.
+- `VENFORK_APP_PRIVATE_KEY` can mint a token for every repository the App is installed on. The workflow's `repositories:` input limits only the token the workflow mints, not the key. If several mirrors share one App, one mirror's secret gives write access to every mirror. Use one App per mirror.
 - One installation token covers one owner. The mirror and the public fork must have the same owner. `schedule set --app` refuses otherwise, and so does the workflow.
-- The minted token covers only the mirror and the public fork. If the upstream repo is private, the runner cannot fetch it with that token: keep `--token` for such a mirror.
+- A private upstream needs a push credential that can also read the upstream, because the runner fetches it with the same token. The minted App token covers only the mirror and the public fork, so app mode cannot fetch a private upstream. With `--token`, a fine-grained PAT covers repositories of one owner only: it works when the upstream has the mirror's owner and the PAT includes it. For a private upstream under another owner, `VENFORK_PUSH_TOKEN` must be a classic PAT with `repo` scope.
 - `actions/create-github-app-token` v3 needs a runner on Node 24 (Actions runner 2.327.1 or later). `ubuntu-latest` qualifies; check self-hosted runners.
 - `venfork doctor` can only see that the secrets exist. It cannot check the key or the installation, so watch its `last-run` check after you switch.
 
