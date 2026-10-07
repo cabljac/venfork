@@ -93,11 +93,14 @@ function getMockExecaResponse(command: string) {
 }
 
 import {
+  applyPatchAndNormalize,
   assertNoInvalidPreserve,
   preserveRemoveHint,
   readVenforkConfigFromRepo,
+  scheduleAuthOf,
   updateVenforkConfig,
 } from '../../src/config.js';
+import { ConfigError } from '../../src/errors.js';
 
 beforeEach(() => {
   execaCalls.length = 0;
@@ -600,6 +603,107 @@ describe('preserve remove hints', () => {
       })
     ).toThrow(
       "  - *.md: venfork preserve remove '*.md'\n  - docs/: venfork preserve remove 'docs/'"
+    );
+  });
+});
+
+describe('scheduleAuth', () => {
+  const schedule = { cron: '0 */6 * * *', enabled: true };
+
+  test('reading keeps app and drops token, so token mode has one stored form', async () => {
+    mockResponses.set(
+      'git show FETCH_HEAD:.venfork/config.json',
+      mockReadResponse({ ...baseConfig, scheduleAuth: 'app' })
+    );
+    expect((await readVenforkConfigFromRepo('/tmp/repo'))?.scheduleAuth).toBe(
+      'app'
+    );
+
+    mockResponses.set(
+      'git show FETCH_HEAD:.venfork/config.json',
+      mockReadResponse({ ...baseConfig, scheduleAuth: 'token' })
+    );
+    const token = await readVenforkConfigFromRepo('/tmp/repo');
+    expect(token).not.toHaveProperty('scheduleAuth');
+  });
+
+  test('reading keeps an unknown mode from a newer venfork, and it round-trips', async () => {
+    mockResponses.set(
+      'git show FETCH_HEAD:.venfork/config.json',
+      mockReadResponse({ ...baseConfig, scheduleAuth: 'future' })
+    );
+    const read = await readVenforkConfigFromRepo('/tmp/repo');
+    expect(read?.scheduleAuth).toBe('future');
+
+    const updated = await updateVenforkConfig('/tmp/repo', {
+      preserveAdd: ['docs/MIRROR.md'],
+    });
+    expect(updated.scheduleAuth).toBe('future');
+    const written = JSON.parse(writeFileCalls.at(-1)?.content ?? '{}');
+    expect(written.scheduleAuth).toBe('future');
+  });
+
+  test('reading drops a non-string or empty value', async () => {
+    for (const scheduleAuth of [1, {}, '', null]) {
+      mockResponses.set(
+        'git show FETCH_HEAD:.venfork/config.json',
+        mockReadResponse({ ...baseConfig, scheduleAuth })
+      );
+      const read = await readVenforkConfigFromRepo('/tmp/repo');
+      expect(read).not.toHaveProperty('scheduleAuth');
+    }
+  });
+
+  test('a patch sets app, and null or token clears it', () => {
+    const app = applyPatchAndNormalize(baseConfig, { scheduleAuth: 'app' });
+    expect(app.scheduleAuth).toBe('app');
+    expect(
+      applyPatchAndNormalize(app, { scheduleAuth: null })
+    ).not.toHaveProperty('scheduleAuth');
+    expect(
+      applyPatchAndNormalize(app, { scheduleAuth: 'token' })
+    ).not.toHaveProperty('scheduleAuth');
+  });
+
+  test('an omitted field keeps app across schedule and unrelated patches', () => {
+    const app = applyPatchAndNormalize(baseConfig, {
+      schedule,
+      scheduleAuth: 'app',
+    });
+    const disabled = applyPatchAndNormalize(app, {
+      schedule: { ...schedule, enabled: false },
+    });
+    expect(disabled.scheduleAuth).toBe('app');
+    expect(disabled.schedule).toEqual({ ...schedule, enabled: false });
+    const preserved = applyPatchAndNormalize(disabled, {
+      preserveAdd: ['docs/MIRROR.md'],
+    });
+    expect(preserved.scheduleAuth).toBe('app');
+  });
+
+  test('the field sits beside schedule, which keeps exactly cron and enabled', async () => {
+    const updated = await updateVenforkConfig('/tmp/repo', {
+      schedule,
+      scheduleAuth: 'app',
+    });
+    expect(updated.scheduleAuth).toBe('app');
+    const written = JSON.parse(writeFileCalls.at(-1)?.content ?? '{}');
+    expect(written.scheduleAuth).toBe('app');
+    expect(written.schedule).toEqual(schedule);
+  });
+
+  test('scheduleAuthOf defaults to token', () => {
+    expect(scheduleAuthOf(null)).toBe('token');
+    expect(scheduleAuthOf({})).toBe('token');
+    expect(scheduleAuthOf({ scheduleAuth: 'app' })).toBe('app');
+  });
+
+  test('scheduleAuthOf names an unknown mode in a ConfigError', () => {
+    expect(() => scheduleAuthOf({ scheduleAuth: 'future' })).toThrow(
+      ConfigError
+    );
+    expect(() => scheduleAuthOf({ scheduleAuth: 'future' })).toThrow(
+      'scheduleAuth "future" is not supported by this venfork version'
     );
   });
 });
