@@ -425,7 +425,7 @@ Check that a mirror is healthy, then list the links recorded in `venfork-config`
 
 Each failing check prints a fix. GitHub checks show as skipped when `gh` is not authenticated or origin is not a GitHub repository, and the summary counts skipped checks. If `git fetch` fails, the `remotes` row shows the reason and the checks that need fresh refs are skipped. The command exits 1 when any check fails; `--json` prints only the JSON results, for CI.
 
-### `venfork schedule <status|set <cron>|disable>`
+### `venfork schedule <status|set <cron> [--app|--token]|disable>`
 
 Manage automated sync configuration stored in `venfork-config`.
 
