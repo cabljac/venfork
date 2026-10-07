@@ -26,9 +26,6 @@ jobs:
       - name: Verify
         run: bun run verify
 
-      - name: Build
-        run: bun run build
-
       - name: Verify build output
         run: |
           if [ ! -f dist/index.js ]; then
