@@ -100,7 +100,7 @@ async function main(): Promise<void> {
     }
     case 'schedule': {
       const parsed = parseScheduleCliArgs(args.slice(1));
-      await scheduleCommand(parsed.action, parsed.cron);
+      await scheduleCommand(parsed.action, parsed.cron, { auth: parsed.auth });
       break;
     }
     case 'stage': {

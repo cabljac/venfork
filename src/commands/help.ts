@@ -64,9 +64,13 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'schedule',
-    `venfork schedule <status|set <cron>|disable>
+    `venfork schedule <status|set <cron> [--app|--token]|disable>
   Manage scheduled sync config stored in venfork-config
-  Set writes/removes ${SYNC_WORKFLOW_PATH} on the private mirror default branch`,
+  Set writes/removes ${SYNC_WORKFLOW_PATH} on the private mirror default branch
+  --app mints a one-hour push token from a GitHub App on each run
+    (secrets VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY)
+  --token pushes with the VENFORK_PUSH_TOKEN secret (the default)
+  Without either flag, set keeps the auth mode already configured`,
   ],
   [
     'stage',
