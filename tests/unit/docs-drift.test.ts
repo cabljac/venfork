@@ -46,17 +46,43 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-function envVarsReadInSrc(): string[] {
+/** `VENFORK_*` identifiers in src that are code constants, not env vars. */
+const NOT_ENV_VARS = new Set([
+  'VENFORK_BOT_EMAIL',
+  'VENFORK_BOT_NAME',
+  'VENFORK_ONLY_KEYS',
+  'VENFORK_VERSION',
+]);
+
+function envVarsNamedInSrc(): string[] {
   const found = new Set<string>();
   for (const file of sourceFiles(path.join(ROOT, 'src'))) {
     const text = readFileSync(file, 'utf8');
-    for (const m of text.matchAll(
-      /(?:env\.|secrets\.|vars\.)(VENFORK_[A-Z_]+)/g
-    )) {
-      if (!m[1].startsWith('VENFORK_E2E')) found.add(m[1]);
+    for (const m of text.matchAll(/\bVENFORK_[A-Z0-9_]+\b/g)) {
+      if (!m[0].startsWith('VENFORK_E2E') && !NOT_ENV_VARS.has(m[0])) {
+        found.add(m[0]);
+      }
     }
   }
   return [...found].sort();
+}
+
+const mentions = (text: string, word: string) =>
+  new RegExp(`(?<![\\w-])${word}(?![\\w-])`).test(text);
+
+/** Usage lines of a command's help, indented or not. */
+function usageLines(command: string): string[] {
+  return (commandHelp(command) ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith(`venfork ${command}`));
+}
+
+function readmeBody(command: string): string {
+  return commandSections()
+    .filter((s) => s.commands.includes(command))
+    .map((s) => s.body)
+    .join('\n');
 }
 
 describe('README matches the CLI contract', () => {
@@ -73,33 +99,40 @@ describe('README matches the CLI contract', () => {
     expect(unknown).toEqual([]);
   });
 
-  test('every VENFORK_* variable read in src is in the README and CLAUDE.md', () => {
-    const vars = envVarsReadInSrc();
+  test('every VENFORK_* variable named in src is in the README and CLAUDE.md', () => {
+    const vars = envVarsNamedInSrc();
     expect(vars).toContain('VENFORK_PUSH_TOKEN');
     const envSection = claudeMd
       .split(/^## /m)
       .find((s) => s.startsWith('Environment variables'));
     expect(envSection).toBeDefined();
-    expect(vars.filter((v) => !readme.includes(v))).toEqual([]);
-    expect(vars.filter((v) => !envSection?.includes(v))).toEqual([]);
+    expect(vars.filter((v) => !mentions(readme, v))).toEqual([]);
+    expect(vars.filter((v) => !mentions(envSection ?? '', v))).toEqual([]);
   });
 
   test('every flag in a command help usage appears in its README section', () => {
-    const sections = commandSections();
     const missing: string[] = [];
     for (const command of dispatched) {
-      const help = commandHelp(command);
-      expect(help).not.toBeNull();
-      const usage = (help ?? '')
-        .split('\n')
-        .filter((line) => line.startsWith('venfork '))
-        .join('\n');
-      const body = sections
-        .filter((s) => s.commands.includes(command))
-        .map((s) => s.body)
-        .join('\n');
+      expect(commandHelp(command)).not.toBeNull();
+      const usage = usageLines(command).join('\n');
+      const body = readmeBody(command);
       for (const flag of new Set(usage.match(/--[a-z][a-z-]*/g) ?? [])) {
-        if (!body.includes(flag)) missing.push(`${command} ${flag}`);
+        if (!mentions(body, flag)) missing.push(`${command} ${flag}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test('every subcommand in a command help usage appears in its README section', () => {
+    const missing: string[] = [];
+    for (const command of dispatched) {
+      const body = readmeBody(command);
+      for (const line of usageLines(command)) {
+        const sub = line.split(/\s+/)[2];
+        if (!sub || !/^[a-z][a-z-]*$/.test(sub)) continue;
+        if (!mentions(body, `venfork ${command} ${sub}`)) {
+          missing.push(`${command} ${sub}`);
+        }
       }
     }
     expect(missing).toEqual([]);
