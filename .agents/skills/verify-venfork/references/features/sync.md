@@ -29,12 +29,12 @@ tests:
 ## How to drive it
 
 ```bash
-N=$(vf_pushes "$VF_ORIGIN"); venfork sync </dev/null 2>&1 | tail -3      # already current: "already up to date"
+N=$(vf_pushes "$VF_ORIGIN"); venfork sync </dev/null 2>&1 | grep "already up to date"   # 2 lines: origin and public
 echo "$N $(vf_pushes "$VF_ORIGIN")"                                        # equal
 venfork schedule set "0 * * * *" </dev/null >/dev/null 2>&1                # managed commit on
 vf_upstream_commit src/new.txt new && venfork sync </dev/null 2>&1 | grep Updated
 venfork sync </dev/null 2>&1 | grep -c "already up to date"                # 2, and no new push
-vf_origin_commit src/hotfix.txt hot; venfork sync </dev/null 2>&1 | tail -1  # exit 1, SyncDivergenceError
+vf_origin_commit src/hotfix.txt hot; venfork sync </dev/null 2>&1 | grep "Sync aborted"  # SyncDivergenceError, exit 1
 ```
 
 - Concurrent lease: build the stale copy (README), `vf_upstream_commit`, then `vf_origin_commit` a teammate commit, swap the fetch URL, `venfork sync` exits 1 with "origin/main moved since this sync fetched it". The teammate commit stays on origin.
@@ -47,7 +47,7 @@ vf_origin_commit src/hotfix.txt hot; venfork sync </dev/null 2>&1 | tail -1  # e
 - `vf_tip "$VF_ORIGIN" main^` equals `vf_tip "$VF_UPSTREAM"` with the managed commit, or `vf_tip "$VF_ORIGIN"` equals it at +0.
 - `git -C "$VF_ORIGIN" log -1 --format='%an %cd%n%B' --date=raw main`: `venfork-bot`, the upstream tip's committer date, `Venfork-Managed: 1`.
 - `vf_pushes` unchanged after a no-op sync. `vf_tip "$VF_PUBLIC"` equals `vf_tip "$VF_UPSTREAM"`.
-- After an error, `vf_tip "$VF_ORIGIN"` is unchanged. `doctor --json` shows `divergence` false.
+- After an error, `vf_tip "$VF_ORIGIN"` is unchanged. The failing `doctor --json` check depends on the error: a divergence error gives `divergence` and `invariant` false; the pin guard gives `workflow` and `invariant` false with `divergence` ok; a stale lease leaves `divergence` ok.
 
 ## What usually lies
 

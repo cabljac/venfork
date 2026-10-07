@@ -8,7 +8,7 @@ Record the evidence after each step; a journey passes only when every line match
 The fixture stands in for `setup`: it is the layout setup builds (remotes, `DISABLE` push URL, `venfork-config`). Real setup is e2e tier 1.
 
 1. `venfork doctor --json; echo $?` - exit 0, `invariant` "upstream (+0)".
-2. `venfork schedule set "0 */6 * * *" </dev/null 2>&1 | tail -1` - exit 0. `vf_tip "$VF_ORIGIN" main^` equals `vf_tip "$VF_UPSTREAM"`. `git -C "$VF_ORIGIN" log -1 --format=%an main` is `venfork-bot`.
+2. `venfork schedule set "0 */6 * * *" </dev/null 2>&1 | grep "Scheduled sync enabled"` - one line. `vf_tip "$VF_ORIGIN" main^` equals `vf_tip "$VF_UPSTREAM"`. `git -C "$VF_ORIGIN" log -1 --format=%an main` is `venfork-bot`.
 3. `A=$(vf_tip "$VF_ORIGIN"); N=$(vf_pushes "$VF_ORIGIN")`, then `venfork sync </dev/null` twice. Both runs print `origin/main already up to date` and `public/main already up to date`. `vf_tip "$VF_ORIGIN"` is `$A`; `vf_pushes "$VF_ORIGIN"` is `$N`.
 4. `vf_upstream_commit src/new.txt new`, then `venfork sync </dev/null` - prints `Updated origin/main` and `Updated public/main`. `vf_pushes "$VF_ORIGIN"` is `$N + 1`. `vf_tip "$VF_PUBLIC"` equals `vf_tip "$VF_UPSTREAM"`.
 5. `venfork sync </dev/null` once more - no push. `venfork doctor --json` - exit 0, `workflow` "up to date".
@@ -21,7 +21,7 @@ On a fixture made with the default seed, the managed SHA after step 2 is the sam
 2. `venfork stage feat </dev/null; echo $?` - 130, and `git -C "$VF_PUBLIC" rev-parse -q --verify refs/heads/feat` fails.
 3. `vf_yes stage feat; echo $?` - 0. `git -C "$VF_PUBLIC" rev-parse feat^{tree}` equals `git rev-parse feat^{tree}`.
 4. Open the "upstream PR": `git -C "$VF_PUBLIC" push -q "$VF_UPSTREAM" feat:refs/pull/1/head`.
-5. `venfork sync upstream-pr/1 </dev/null 2>&1 | tail -2` - "synced with upstream PR #1". `vf_tip "$VF_ORIGIN" upstream-pr/1` equals `vf_tip "$VF_PUBLIC" feat`.
+5. `venfork sync upstream-pr/1 </dev/null 2>&1 | grep "synced with upstream PR #1"` - one line. `vf_tip "$VF_ORIGIN" upstream-pr/1` equals `vf_tip "$VF_PUBLIC" feat`.
 6. `git -C "$VF_ORIGIN" show venfork-config:.venfork/config.json` has `pulledPrs["upstream-pr/1"].head` at that SHA. `venfork doctor --json | jq .links.pulledPrs` shows it.
 7. `venfork sync upstream-pr/1` again - `vf_pushes "$VF_ORIGIN" upstream-pr/1` does not change.
 

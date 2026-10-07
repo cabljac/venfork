@@ -50,7 +50,7 @@ await writeFile(
   [
     '#!/bin/sh',
     '[ "$1 $2" = "auth status" ] && exit 0',
-    'echo "gh stub: the verify fixture has no GitHub" >&2',
+    'echo "gh stub: the verify fixture has no GitHub (tried: gh $1 $2)" >&2',
     'exit 1',
     '',
   ].join('\n')
@@ -105,7 +105,8 @@ if (shell) {
       `vf_tip() { git -C "$1" rev-parse "\${2:-${branch}}"; }`,
       `vf_pushes() { git -C "$1" reflog show --format=%H "\${2:-${branch}}" | wc -l | tr -d ' '; }`,
       // Answers "y" to one clack confirm, which reads keys only from a TTY.
-      'vf_yes() { if script --version >/dev/null 2>&1; then (sleep 4; printf y) | script -qec "node $VF_CLI $*" /dev/null; else (sleep 4; printf y) | script -q /dev/null node "$VF_CLI" "$@"; fi; }',
+      // util-linux script takes one shell string; printf %q keeps each arg one word.
+      'vf_yes() { if script --version >/dev/null 2>&1; then (sleep 4; printf y) | script -qec "$(printf \'%q \' node "$VF_CLI" "$@")" /dev/null; else (sleep 4; printf y) | script -q /dev/null node "$VF_CLI" "$@"; fi; }',
       `vf_upstream_commit() { git -C "$VF_UPSTREAM_DEV" pull -q --ff-only && mkdir -p "$VF_UPSTREAM_DEV/$(dirname "$1")" && printf '%s\\n' "$2" > "$VF_UPSTREAM_DEV/$1" && git -C "$VF_UPSTREAM_DEV" add -- "$1" && git -C "$VF_UPSTREAM_DEV" commit -qm "\${3:-feat: upstream $1}" && git -C "$VF_UPSTREAM_DEV" push -q origin ${branch}; }`,
       `vf_origin_commit() { git -C "$VF_ORIGIN_DEV" fetch -q origin && git -C "$VF_ORIGIN_DEV" checkout -q ${branch} && git -C "$VF_ORIGIN_DEV" reset -q --hard origin/${branch} && mkdir -p "$VF_ORIGIN_DEV/$(dirname "$1")" && printf '%s\\n' "$2" > "$VF_ORIGIN_DEV/$1" && git -C "$VF_ORIGIN_DEV" add -- "$1" && git -C "$VF_ORIGIN_DEV" commit -qm "\${3:-chore: mirror $1}" && git -C "$VF_ORIGIN_DEV" push -q origin ${branch}; }`,
     ].join('\n')
@@ -118,7 +119,10 @@ if (shell) {
         defaultBranch: fx.defaultBranch,
         ...paths,
         ghStubDir,
-        env,
+        env: {
+          ...env,
+          PATH: `${ghStubDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        },
         unset: ['GITHUB_TOKEN', 'GH_TOKEN', 'XDG_CONFIG_HOME'],
       },
       null,

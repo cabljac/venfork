@@ -13,6 +13,8 @@ tests:
 
 ## What exists
 
+Pending #85 stack: the GitHub App secret check; update this file when it lands.
+
 - Ten checks, always in this order: `repo`, `remotes`, `mode`, `invariant`, `divergence`, `preserve`, `workflow`, `token`, `last-run`, `cron-age`. Each is `{ id, ok: true | false | 'skipped', detail, fix? }`.
 - `--json` prints only `{ "checks": [...], "links": {...} }`. `links` holds the four link maps, or `null` when the config is unreadable.
 - Exit 1 when any check is `false`. `skipped` does not fail.

@@ -31,8 +31,8 @@ The success and recovery paths need real GitHub (e2e tier 1, opt-in). On the fix
 
 ```bash
 cd "$VF_ROOT"
-venfork setup </dev/null 2>&1 | tail -1; echo $?                       # 130, prompt hit EOF
-venfork setup a/b --no-public --fork-name x </dev/null 2>&1 | tail -1   # exit 1, parser error
+venfork setup </dev/null 2>&1; echo $?                                 # 130, "Cancelled: input ended at a prompt"
+venfork setup a/b --no-public --fork-name x </dev/null 2>&1; echo $?   # 1, "--no-public cannot be combined with --fork-name"
 venfork setup a/b m --fork-name "bad name" --org c </dev/null 2>&1 | grep -o "Invalid --fork-name"
 venfork setup a/b m --org c </dev/null 2>&1 | grep "gh stub"           # exit 1 at the first gh call
 cp "$VF_ROOT/bin/gh" "$VF_ROOT/gh.ok"; printf '#!/bin/sh\nexit 1\n' > "$VF_ROOT/bin/gh"

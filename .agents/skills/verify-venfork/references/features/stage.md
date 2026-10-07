@@ -29,7 +29,7 @@ tests:
 
 ```bash
 git checkout -q -b feat upstream/main && echo f > src/feat.txt && git add . && git commit -qm "feat: add feat"
-venfork stage feat </dev/null 2>&1 | tail -1; echo $?          # 130, "Cancelled: input ended at a prompt"
+venfork stage feat </dev/null 2>&1; echo $?                    # 130, "Cancelled: input ended at a prompt"
 vf_yes stage feat >/dev/null 2>&1; echo $?                      # 0
 A=$(vf_tip "$VF_PUBLIC" feat); vf_yes stage feat >/dev/null 2>&1; vf_tip "$VF_PUBLIC" feat   # differs from $A
 git checkout -q -b leak upstream/main && mkdir -p .github/workflows && echo x > .github/workflows/venfork-sync.yml && git add . && git commit -qm "ci: wf"
