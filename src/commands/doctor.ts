@@ -3,6 +3,7 @@ import { $ } from 'execa';
 import {
   preserveRemoveHint,
   readVenforkConfigFromRepo,
+  scheduleAuthOf,
   type VenforkConfig,
 } from '../config.js';
 import {
@@ -21,8 +22,10 @@ import { isManagedCommit } from '../shared/managed-commit.js';
 import { buildOriginTip, syncWorkflowAuth } from '../shared/mirror-commit.js';
 import { netExec, netFailureReason } from '../shared/net.js';
 import {
+  appSecretCommands,
   openWorkflowsWarning,
   pushTokenCommand,
+  secretDeleteCommands,
 } from '../shared/push-token.js';
 import {
   compareSemver,
@@ -69,6 +72,72 @@ function sameRepo(a: string, b: string): boolean {
 }
 
 /** First git error line of a multi-line stderr, so table rows stay one line. */
+function pushTokenCheck(
+  names: string[],
+  mirrorRepo: string,
+  noPublic: boolean,
+  openWorkflows: boolean
+): DoctorCheck {
+  if (names.includes('VENFORK_PUSH_TOKEN')) {
+    return {
+      id: 'token',
+      ok: true,
+      detail: openWorkflows
+        ? 'VENFORK_PUSH_TOKEN is set; every upstream workflow on the mirror can read it'
+        : 'VENFORK_PUSH_TOKEN is set',
+      ...(openWorkflows ? { fix: openWorkflowsWarning('token') } : {}),
+    };
+  }
+  const consequence = noPublic
+    ? 'pushes of upstream commits that change .github/workflows will fail'
+    : 'scheduled pushes to the public fork, and of upstream commits that change .github/workflows, will fail';
+  return {
+    id: 'token',
+    ok: false,
+    detail: `VENFORK_PUSH_TOKEN is not set on ${mirrorRepo}; ${consequence} (a fine-grained token limited to the mirror${noPublic ? '' : ' and the public fork'} with Contents and Workflows write; never \`gh auth token\`, or switch to a GitHub App with \`venfork schedule set "<cron>" --app\`)`,
+    fix: pushTokenCommand(mirrorRepo),
+  };
+}
+
+const APP_SECRETS = ['VENFORK_APP_CLIENT_ID', 'VENFORK_APP_PRIVATE_KEY'];
+
+function appSecretsCheck(
+  names: string[],
+  mirrorRepo: string,
+  openWorkflows: boolean
+): DoctorCheck {
+  const missing = APP_SECRETS.filter((name) => !names.includes(name));
+  if (missing.length > 0) {
+    const commands = appSecretCommands(mirrorRepo);
+    return {
+      id: 'token',
+      ok: false,
+      detail: `${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not set on ${mirrorRepo}; scheduled sync uses GitHub App auth and fails before it pushes`,
+      fix: missing
+        .map((name) => commands[APP_SECRETS.indexOf(name)])
+        .join('; '),
+    };
+  }
+  const leftover = names.includes('VENFORK_PUSH_TOKEN');
+  const notes = [
+    'VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY are set; doctor cannot verify the key or the App installation, see last-run',
+    ...(openWorkflows
+      ? ['every upstream workflow on the mirror can read the private key']
+      : []),
+    ...(leftover ? ['VENFORK_PUSH_TOKEN is still set but unused'] : []),
+  ];
+  const fixes = [
+    ...(leftover ? secretDeleteCommands(mirrorRepo, 'token') : []),
+    ...(openWorkflows ? [openWorkflowsWarning('app')] : []),
+  ];
+  return {
+    id: 'token',
+    ok: true,
+    detail: notes.join('; '),
+    ...(fixes.length > 0 ? { fix: fixes.join(' ') } : {}),
+  };
+}
+
 function oneLine(text: string): string {
   const lines = text
     .split('\n')
@@ -572,7 +641,21 @@ async function collectChecks(
   const secrets = await netExec(cwd, {
     bufferOutput: true,
   })`gh secret list --repo ${mirrorRepo} --json name`;
-  if (secrets.exitCode !== 0) {
+  const auth = scheduleAuthOf(config);
+  const publicPath = noPublic ? '' : parseRepoPath(config.publicForkUrl ?? '');
+  const ownerOf = (repoPath: string) => repoPath.split('/')[0].toLowerCase();
+  if (
+    auth === 'app' &&
+    publicPath &&
+    ownerOf(publicPath) !== ownerOf(mirrorRepo)
+  ) {
+    checks.push({
+      id: 'token',
+      ok: false,
+      detail: `GitHub App auth needs the mirror and the public fork under one owner, but the mirror is ${mirrorRepo} and the public fork is ${publicPath}; one installation token covers one owner, so scheduled sync fails before it pushes`,
+      fix: `Run \`venfork schedule set "${config.schedule?.cron ?? '<cron>'}" --token\` and set VENFORK_PUSH_TOKEN.`,
+    });
+  } else if (secrets.exitCode !== 0) {
     skip(
       'token',
       `cannot list secrets on ${mirrorRepo}: ${oneLine(netFailureReason(secrets))}`
@@ -586,28 +669,13 @@ async function collectChecks(
     } catch {
       names = [];
     }
-    const consequence = noPublic
-      ? 'pushes of upstream commits that change .github/workflows will fail'
-      : 'scheduled pushes to the public fork, and of upstream commits that change .github/workflows, will fail';
     const openWorkflows =
       (config.enabledWorkflows ?? []).length === 0 &&
       (config.disabledWorkflows ?? []).length === 0;
     checks.push(
-      names.includes('VENFORK_PUSH_TOKEN')
-        ? {
-            id: 'token',
-            ok: true,
-            detail: openWorkflows
-              ? 'VENFORK_PUSH_TOKEN is set; every upstream workflow on the mirror can read it'
-              : 'VENFORK_PUSH_TOKEN is set',
-            ...(openWorkflows ? { fix: openWorkflowsWarning('token') } : {}),
-          }
-        : {
-            id: 'token',
-            ok: false,
-            detail: `VENFORK_PUSH_TOKEN is not set on ${mirrorRepo}; ${consequence} (a fine-grained token limited to the mirror${noPublic ? '' : ' and the public fork'} with Contents and Workflows write; never \`gh auth token\`)`,
-            fix: pushTokenCommand(mirrorRepo),
-          }
+      auth === 'app'
+        ? appSecretsCheck(names, mirrorRepo, openWorkflows)
+        : pushTokenCheck(names, mirrorRepo, noPublic, openWorkflows)
     );
   }
 
