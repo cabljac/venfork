@@ -466,13 +466,13 @@ describe('doctor token check under GitHub App auth', () => {
 
     expect(checks.token.ok).toBe(true);
     expect(checks.token.detail).toContain(
-      'every upstream workflow on the mirror can read the private key'
-    );
-    expect(checks.token.detail).toContain(
       'VENFORK_PUSH_TOKEN is still set but unused'
     );
-    expect(checks.token.fix).toStartWith(
-      'gh secret delete VENFORK_PUSH_TOKEN --repo acme/widget-private Every upstream workflow runs on the mirror and can read VENFORK_APP_PRIVATE_KEY.'
+    expect(checks.token.detail).toContain(
+      'Every upstream workflow runs on the mirror and can read VENFORK_APP_PRIVATE_KEY.'
+    );
+    expect(checks.token.fix).toBe(
+      'gh secret delete VENFORK_PUSH_TOKEN --repo acme/widget-private'
     );
   });
 

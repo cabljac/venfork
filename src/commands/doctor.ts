@@ -20,6 +20,7 @@ import {
 import { checkDivergence } from '../shared/divergence.js';
 import { isManagedCommit } from '../shared/managed-commit.js';
 import { buildOriginTip, syncWorkflowAuth } from '../shared/mirror-commit.js';
+import { mirrorOriginPath } from '../shared/mirror-origin.js';
 import { netExec, netFailureReason } from '../shared/net.js';
 import {
   appSecretCommands,
@@ -71,7 +72,15 @@ function sameRepo(a: string, b: string): boolean {
   return pa && pb ? pa === pb : a.trim() === b.trim();
 }
 
-/** First git error line of a multi-line stderr, so table rows stay one line. */
+/**
+ * The `token` check in token mode: `VENFORK_PUSH_TOKEN` must be set on the
+ * mirror.
+ *
+ * @param names Secret names set on the mirror.
+ * @param mirrorRepo `owner/name` of the mirror.
+ * @param noPublic True when there is no public fork to push to.
+ * @param openWorkflows True when no allow or block list filters upstream workflows.
+ */
 function pushTokenCheck(
   names: string[],
   mirrorRepo: string,
@@ -101,6 +110,14 @@ function pushTokenCheck(
 
 const APP_SECRETS = ['VENFORK_APP_CLIENT_ID', 'VENFORK_APP_PRIVATE_KEY'];
 
+/**
+ * The `token` check in GitHub App mode: both App secrets must be set. A
+ * leftover `VENFORK_PUSH_TOKEN` is a note, not a failure.
+ *
+ * @param names Secret names set on the mirror.
+ * @param mirrorRepo `owner/name` of the mirror.
+ * @param openWorkflows True when no allow or block list filters upstream workflows.
+ */
 function appSecretsCheck(
   names: string[],
   mirrorRepo: string,
@@ -121,23 +138,29 @@ function appSecretsCheck(
   const leftover = names.includes('VENFORK_PUSH_TOKEN');
   const notes = [
     'VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY are set; doctor cannot verify the key or the App installation, see last-run',
-    ...(openWorkflows
-      ? ['every upstream workflow on the mirror can read the private key']
-      : []),
     ...(leftover ? ['VENFORK_PUSH_TOKEN is still set but unused'] : []),
+    ...(openWorkflows
+      ? [
+          leftover
+            ? openWorkflowsWarning('app')
+            : 'every upstream workflow on the mirror can read the private key',
+        ]
+      : []),
   ];
-  const fixes = [
-    ...(leftover ? secretDeleteCommands(mirrorRepo, 'token') : []),
-    ...(openWorkflows ? [openWorkflowsWarning('app')] : []),
-  ];
+  const fix = leftover
+    ? secretDeleteCommands(mirrorRepo, 'token').join('; ')
+    : openWorkflows
+      ? openWorkflowsWarning('app')
+      : undefined;
   return {
     id: 'token',
     ok: true,
     detail: notes.join('; '),
-    ...(fixes.length > 0 ? { fix: fixes.join(' ') } : {}),
+    ...(fix ? { fix } : {}),
   };
 }
 
+/** First git error line of a multi-line stderr, so table rows stay one line. */
 function oneLine(text: string): string {
   const lines = text
     .split('\n')
@@ -615,7 +638,7 @@ async function collectChecks(
 
   const schedule = config.schedule;
   const scheduleActive = Boolean(schedule?.enabled && schedule.cron);
-  const mirrorRepo = remotes.origin ? parseRepoPath(remotes.origin.fetch) : '';
+  const mirrorRepo = (await mirrorOriginPath(cwd)) ?? '';
   const ghIds = ['token', 'last-run', 'cron-age'];
   if (!scheduleActive || !schedule) {
     for (const id of ghIds) {
