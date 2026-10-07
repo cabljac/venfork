@@ -26,9 +26,10 @@ bun test ./tests/unit/utils.test.ts      # single file
 bun test -t "parses owner" ./tests/unit  # single test by name
 bun run test:watch                    # watch
 bun run test:coverage                 # coverage
-bun run verify           # the only command that means "done": format:check, lint, typecheck, tests, node smoke (non-mutating)
+bun run verify           # the only command that means "done": format:check, lint, lint:invariants, typecheck, tests, node smoke (non-mutating)
 bun run check            # biome check + autofix (lint + format); mutates files, so it is not a gate
 bun run lint             # biome lint only
+bun run lint:invariants  # scripts/lint-invariants.ts repo invariant checks
 bun run build            # bundle to dist/ (node target)
 bun run compile          # standalone binary -> dist/venfork
 bun link                 # symlink global `venfork` for manual testing
@@ -89,3 +90,4 @@ Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/n
 - TypeScript strict mode; Biome for lint+format (`bun run check`). Releases via release-please (Conventional Commits drive version bumps + CHANGELOG).
 - Tests use Bun's runner with `test()` (not `it()`).
 - `gh repo clone` is used for fetching, so SSH-vs-HTTPS transport follows the user's `gh config get git_protocol`.
+- Invariants (remote refs, pushes via net.ts, import boundary, `gh pr|issue create|edit` only in `src/shared/upstream-publish.ts`, process.exit) are enforced by scripts/lint-invariants.ts.
