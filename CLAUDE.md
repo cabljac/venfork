@@ -82,9 +82,11 @@ Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/n
 - `VENFORK_PUSH_TOKEN` — token used by the generated sync workflow for pushes.
 - `VENFORK_SEED_CHUNK` / `VENFORK_SEED_RETRY_MS` — commit batch size and retry delay for the initial mirror seed push.
 - `VENFORK_INSTALL_SPEC` — repository variable read by the generated workflow to override the pinned `npm install -g` spec.
+- `VENFORK_ALLOW_SELF_REFERENCE=1` — stops `stage` refusing the bare word `venfork` in commit messages, PR titles and bodies (mirror URL, owner and repo terms stay refused).
 
 ## Conventions
 
 - TypeScript strict mode; Biome for lint+format (`bun run check`). Releases via release-please (Conventional Commits drive version bumps + CHANGELOG).
 - Tests use Bun's runner with `test()` (not `it()`).
+- Review and PR shape: use `.agents/skills/review-venfork/` for adversarial review and `.github/pull_request_template.md` for PR bodies.
 - `gh repo clone` is used for fetching, so SSH-vs-HTTPS transport follows the user's `gh config get git_protocol`.
