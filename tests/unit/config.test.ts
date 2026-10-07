@@ -100,6 +100,7 @@ import {
   scheduleAuthOf,
   updateVenforkConfig,
 } from '../../src/config.js';
+import { ConfigError } from '../../src/errors.js';
 
 beforeEach(() => {
   execaCalls.length = 0;
@@ -626,14 +627,31 @@ describe('scheduleAuth', () => {
     expect(token).not.toHaveProperty('scheduleAuth');
   });
 
-  test('reading rejects an unknown value', async () => {
+  test('reading keeps an unknown mode from a newer venfork, and it round-trips', async () => {
     mockResponses.set(
       'git show FETCH_HEAD:.venfork/config.json',
-      mockReadResponse({ ...baseConfig, scheduleAuth: 'oidc' })
+      mockReadResponse({ ...baseConfig, scheduleAuth: 'future' })
     );
-    await expect(readVenforkConfigFromRepo('/tmp/repo')).rejects.toThrow(
-      'scheduleAuth must be "app" or "token", got "oidc"'
-    );
+    const read = await readVenforkConfigFromRepo('/tmp/repo');
+    expect(read?.scheduleAuth).toBe('future');
+
+    const updated = await updateVenforkConfig('/tmp/repo', {
+      preserveAdd: ['docs/MIRROR.md'],
+    });
+    expect(updated.scheduleAuth).toBe('future');
+    const written = JSON.parse(writeFileCalls.at(-1)?.content ?? '{}');
+    expect(written.scheduleAuth).toBe('future');
+  });
+
+  test('reading drops a non-string or empty value', async () => {
+    for (const scheduleAuth of [1, {}, '', null]) {
+      mockResponses.set(
+        'git show FETCH_HEAD:.venfork/config.json',
+        mockReadResponse({ ...baseConfig, scheduleAuth })
+      );
+      const read = await readVenforkConfigFromRepo('/tmp/repo');
+      expect(read).not.toHaveProperty('scheduleAuth');
+    }
   });
 
   test('a patch sets app, and null or token clears it', () => {
@@ -678,5 +696,14 @@ describe('scheduleAuth', () => {
     expect(scheduleAuthOf(null)).toBe('token');
     expect(scheduleAuthOf({})).toBe('token');
     expect(scheduleAuthOf({ scheduleAuth: 'app' })).toBe('app');
+  });
+
+  test('scheduleAuthOf names an unknown mode in a ConfigError', () => {
+    expect(() => scheduleAuthOf({ scheduleAuth: 'future' })).toThrow(
+      ConfigError
+    );
+    expect(() => scheduleAuthOf({ scheduleAuth: 'future' })).toThrow(
+      'scheduleAuth "future" is not supported by this venfork version'
+    );
   });
 });

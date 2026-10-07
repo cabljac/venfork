@@ -85,9 +85,10 @@ export interface VenforkConfig {
    * How the scheduled sync workflow authenticates its pushes. `'app'` mints
    * a GitHub App installation token at run time; absent means the
    * `VENFORK_PUSH_TOKEN` secret. Kept top level because older CLIs rebuild
-   * `schedule` field by field and would drop a nested key.
+   * `schedule` field by field and would drop a nested key. Any other string
+   * is a mode from a newer venfork, kept as-is so a read does not fail.
    */
-  scheduleAuth?: ScheduleAuth;
+  scheduleAuth?: string;
   enabledWorkflows?: string[];
   disabledWorkflows?: string[];
   /**
@@ -142,11 +143,17 @@ export type ScheduleAuth = 'app' | 'token';
  * The scheduled sync auth mode of `config`; `'token'` when it is unset.
  *
  * @param config Venfork config, or `null` when the mirror has none.
+ * @throws ConfigError when the mode is one this version does not know.
  */
 export function scheduleAuthOf(
   config: Pick<VenforkConfig, 'scheduleAuth'> | null | undefined
 ): ScheduleAuth {
-  return config?.scheduleAuth === 'app' ? 'app' : 'token';
+  const auth = config?.scheduleAuth;
+  if (auth === undefined || auth === 'token') return 'token';
+  if (auth === 'app') return 'app';
+  throw new ConfigError(
+    `scheduleAuth ${JSON.stringify(auth)} is not supported by this venfork version. Upgrade venfork, or run: venfork schedule set <cron> --token`
+  );
 }
 
 const CONFIG_BRANCH = 'venfork-config';
@@ -555,16 +562,12 @@ function normalizeConfig(
 
   const scheduleAuth: unknown = normalized.scheduleAuth;
   if (
-    scheduleAuth !== undefined &&
-    scheduleAuth !== null &&
-    scheduleAuth !== 'app' &&
-    scheduleAuth !== 'token'
+    typeof scheduleAuth !== 'string' ||
+    scheduleAuth === '' ||
+    scheduleAuth === 'token'
   ) {
-    throw configProblem(
-      `scheduleAuth must be "app" or "token", got ${JSON.stringify(scheduleAuth)}`
-    );
+    delete normalized.scheduleAuth;
   }
-  if (scheduleAuth !== 'app') delete normalized.scheduleAuth;
 
   if (normalized.schedule) {
     const cron =
