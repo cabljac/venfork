@@ -22,7 +22,17 @@ export type SyncAuth =
   | { kind: 'token' }
   | { kind: 'app'; publicRepo?: { owner: string; name: string } };
 
-const SAFE_REPO_SEGMENT = /^[A-Za-z0-9._-]+$/;
+const SAFE_REPO_SEGMENT = /^(?!\.{1,2}$)[A-Za-z0-9._-]+$/;
+
+/**
+ * Whether `segment` is a GitHub owner or repo name that is safe to put into
+ * the workflow YAML and shell: only `[A-Za-z0-9._-]`, and never `.` or `..`.
+ *
+ * @param segment One path segment, the owner or the repo name.
+ */
+export function isSafeRepoSegment(segment: string): boolean {
+  return SAFE_REPO_SEGMENT.test(segment);
+}
 
 function escapeCronForYaml(cron: string): string {
   // Double single quotes for YAML single-quoted scalars and normalize lines.
@@ -68,7 +78,7 @@ function appAuthSteps(
     throw new Error('GitHub App auth in standard mode needs the public fork');
   }
   for (const segment of publicRepo ? [publicRepo.owner, publicRepo.name] : []) {
-    if (!SAFE_REPO_SEGMENT.test(segment)) {
+    if (!isSafeRepoSegment(segment)) {
       throw new Error(`Unsafe public fork name for the workflow: ${segment}`);
     }
   }

@@ -3,6 +3,11 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pkg from '../../package.json' with { type: 'json' };
+import { ConfigError } from '../../src/errors.js';
+import {
+  buildOriginTip,
+  syncWorkflowAuth,
+} from '../../src/shared/mirror-commit.js';
 import {
   isUnpinnedWorkflow,
   pinnedVenforkVersion,
@@ -442,6 +447,9 @@ describe('GitHub App auth', () => {
     { owner: 'acme', name: 'pro ject' },
     { owner: 'ac"me', name: 'project' },
     { owner: 'acme', name: 'x$(id)' },
+    { owner: 'acme', name: '.' },
+    { owner: 'acme', name: '..' },
+    { owner: '..', name: 'project' },
   ])('refuses an unsafe public fork name %p', (repo) => {
     expect(() =>
       generateSyncWorkflow('0 */6 * * *', 'standard', '1.2.3', {
@@ -541,5 +549,39 @@ describe('GitHub App auth', () => {
       );
       expect(other.output).toBe('');
     });
+  });
+});
+
+describe('syncWorkflowAuth', () => {
+  const appConfig = {
+    version: '1' as const,
+    upstreamUrl: 'git@github.com:upstream/project.git',
+    publicForkUrl: 'git@github.com:acme/project.git',
+    schedule: { cron: '0 */6 * * *', enabled: true },
+    scheduleAuth: 'app',
+  };
+
+  test('reads the public fork from publicForkUrl', () => {
+    expect(syncWorkflowAuth(appConfig)).toEqual({
+      kind: 'app',
+      publicRepo: { owner: 'acme', name: 'project' },
+    });
+  });
+
+  test('a relative publicForkUrl is a ConfigError', () => {
+    expect(() =>
+      syncWorkflowAuth({ ...appConfig, publicForkUrl: '../public.git' })
+    ).toThrow(ConfigError);
+  });
+
+  test('buildOriginTip names an unknown scheduleAuth mode in a ConfigError', async () => {
+    const build = buildOriginTip({
+      config: { ...appConfig, scheduleAuth: 'future' },
+      defaultBranch: 'main',
+      upstreamTip: '0'.repeat(40),
+      previousMirrorTip: '',
+    });
+    await expect(build).rejects.toBeInstanceOf(ConfigError);
+    await expect(build).rejects.toThrow('scheduleAuth "future"');
   });
 });
