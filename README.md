@@ -611,7 +611,7 @@ Set `VENFORK_ALLOW_SELF_REFERENCE=1` for projects whose upstream legitimately me
 
 GitHub Actions sets this. With `venfork sync --report-issues`, sync files the `venfork-sync-blocked` issue on that repository without a privacy lookup when it names `origin`. Otherwise sync asks gh whether origin is private first.
 
-The generated workflow also reads the `VENFORK_PUSH_TOKEN` secret and the `VENFORK_INSTALL_SPEC` repository variable; see `venfork schedule` above.
+The generated workflow also reads the `VENFORK_PUSH_TOKEN` secret (or, with `schedule set --app`, the `VENFORK_APP_CLIENT_ID` and `VENFORK_APP_PRIVATE_KEY` secrets) and the `VENFORK_INSTALL_SPEC` repository variable; see `venfork schedule` above.
 
 ### Concurrency
 
