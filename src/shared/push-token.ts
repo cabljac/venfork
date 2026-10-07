@@ -59,7 +59,8 @@ export function pushTokenAdvice(mirrorPath: string, noPublic: boolean): string {
 
 /**
  * How to set up the GitHub App the sync workflow mints a one-hour push
- * token from on each run.
+ * token from on each run. The App must be dedicated to this mirror: its key
+ * reaches every repository the App is installed on.
  *
  * @param mirrorPath `owner/name` of the private mirror.
  * @param noPublic True when there is no public fork to push to.
@@ -69,8 +70,9 @@ export function appAuthAdvice(mirrorPath: string, noPublic: boolean): string {
     ? `only ${mirrorPath}`
     : `only ${mirrorPath} and the public fork`;
   return [
-    `Create a GitHub App with no webhook and the repository permissions Contents: read and write and Workflows: read and write. Install it on ${repos}, generate a private key, then:`,
+    `Create one App per mirror (per client): a GitHub App with no webhook and the repository permissions Contents: read and write and Workflows: read and write. Install it on ${repos}, generate a private key, then:`,
     ...appSecretCommands(mirrorPath).map((command) => `  ${command}`),
+    "Do not share the App between mirrors. VENFORK_APP_PRIVATE_KEY can mint a token for every repository the App is installed on; the workflow limits only the token it mints. A shared App turns one mirror's secret into write access on every mirror.",
     'Each run mints a token that expires after one hour. The private key does not expire: any workflow upstream ships can read a secret on the mirror.',
   ].join('\n');
 }
