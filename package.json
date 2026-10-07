@@ -24,9 +24,10 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint .",
+    "lint:invariants": "bun scripts/lint-invariants.ts",
     "check": "biome check --write .",
     "typecheck": "tsc --noEmit",
-    "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build && bun run smoke:node"
+    "verify": "bun run format:check && bun run lint && bun run lint:invariants && bun run typecheck && bun run test && bun run build && bun run smoke:node"
   },
   "files": [
     "dist",
