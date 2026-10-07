@@ -16,7 +16,8 @@ T=$(mktemp -d); bun scripts/verify-fixture.ts --shell > "$T/vf.env"
 . "$T/vf.env"; cd "$VF_WORK"
 ```
 
-- Without `--shell` the script prints JSON: `root`, `work`, `upstream`, `origin`, `publicFork`, `upstreamDev`, `originDev`, `cli`, `ghStubDir`, `env`.
+- Without `--shell` the script prints JSON: `root`, `work`, `upstream`, `origin`, `publicFork`, `upstreamDev`, `originDev`, `cli`, `ghStubDir`, `env`, `unset`.
+  Apply the whole `env` (it includes `PATH` with the `gh` stub first) and remove every name in `unset`. With only part of `env`, the real `gh` can run.
 - `--no-public` builds the two-remote layout. `--commits <n>` seeds more upstream commits.
 - The sourced file sets `HOME`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`, `VF_*` paths, and a `gh` stub on `PATH`.
   The stub passes `gh auth status` and fails all else. No drive can reach GitHub.
@@ -41,7 +42,7 @@ Open only the feature file for the command you changed: `references/features/<co
 The file names match `src/commands/<name>.ts`. `references/features/README.md` is the index.
 For changes that cross commands, use `leak-invariants.md` and `multi-command-journeys.md`.
 
-- Pipe output through `2>&1 | tail -3`. Spinners print control codes.
+- Read the full output, or `grep` for the one line that is the evidence (`2>&1 | grep 'already up to date'`). Do not use `tail`: the last line is the outro or a blank line, and it hides the message that proves the result.
 - Commands without a prompt: use `</dev/null`.
 - A prompt with stdin at EOF exits 130 with `Cancelled: input ended at a prompt`.
 - A piped `y` does not answer a clack confirm. Use `vf_yes`.

@@ -35,7 +35,7 @@ venfork pull pr </dev/null 2>&1 | head -1                                       
 venfork pull-request 1 </dev/null 2>&1                                             # rename hint, exit 1
 git checkout -q -b pr-head upstream/main && echo p > src/p.txt && git add . && git commit -qm "feat: p"
 git push -q "$VF_UPSTREAM" pr-head:refs/pull/7/head                                # fake upstream PR #7
-venfork sync upstream-pr/7 </dev/null 2>&1 | tail -2                               # exit 0
+venfork sync upstream-pr/7 </dev/null 2>&1 | grep "synced with upstream PR #7"
 N=$(vf_pushes "$VF_ORIGIN" upstream-pr/7); venfork sync upstream-pr/7 </dev/null >/dev/null 2>&1; echo "$N $(vf_pushes "$VF_ORIGIN" upstream-pr/7)"   # equal
 echo q > src/q.txt && git add . && git commit -qm "feat: q" && git push -q -f "$VF_UPSTREAM" pr-head:refs/pull/7/head
 venfork sync upstream-pr/7 </dev/null >/dev/null 2>&1; [ "$(vf_tip "$VF_ORIGIN" upstream-pr/7)" = "$(git rev-parse pr-head)" ] && echo refreshed

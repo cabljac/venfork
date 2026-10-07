@@ -37,7 +37,7 @@ venfork stage issue 1 --pr </dev/null 2>&1                                      
 venfork issue stage 1 </dev/null 2>&1                                                  # rename hint, exit 1
 ```
 
-- Redaction without GitHub: `bun -e "import { stripInternalBlocks } from './src/shared/redaction.ts'; console.log(stripInternalBlocks('pub <!-- venfork:internal -->secret<!-- /venfork:internal --> end'))"` prints `pub  end`. A body with `<!-- venfork:intenral -->` throws `RedactionError`.
+- Redaction without GitHub: `(cd "$(dirname "$VF_CLI")/.." && bun -e "import { stripInternalBlocks } from './src/shared/redaction.ts'; console.log(stripInternalBlocks('pub <!-- venfork:internal -->secret<!-- /venfork:internal --> end'))")` prints `pub  end`. A body with `<!-- venfork:intenral -->` throws `RedactionError`.
 - Already current, cancel at the confirm and the config lease are not reachable on the fixture; the remote check fails first.
 
 ## What proves it

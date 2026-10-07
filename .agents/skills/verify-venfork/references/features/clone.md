@@ -31,7 +31,7 @@ The success path needs real GitHub; no e2e tier covers clone today. On the fixtu
 
 ```bash
 cd "$VF_ROOT"
-venfork clone </dev/null 2>&1 | tail -1; echo $?                        # 1, "Clone failed"
+venfork clone </dev/null 2>&1; echo $?                                  # 1, "Vendor repository URL is required"
 venfork clone bad </dev/null 2>&1 | grep -o "Invalid vendor repository"
 mkdir b-private; venfork clone a/b-private </dev/null 2>&1 | grep -o "Directory.*"; rmdir b-private
 venfork clone a/b-private </dev/null 2>&1 | grep "gh stub"               # exit 1 at gh repo clone

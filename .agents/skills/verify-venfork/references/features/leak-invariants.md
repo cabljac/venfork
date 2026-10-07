@@ -37,7 +37,7 @@ git remote get-url --push upstream                                          # DI
 ```
 
 Internal blocks cannot be driven end to end on the fixture (they need gh). Prove the function and read the e2e result:
-`bun -e "import { stripInternalBlocks } from './src/shared/redaction.ts'; console.log(stripInternalBlocks('a <!-- venfork:internal -->x<!-- /venfork:internal --> b'))"` prints `a  b`.
+`(cd "$(dirname "$VF_CLI")/.." && bun -e "import { stripInternalBlocks } from './src/shared/redaction.ts'; console.log(stripInternalBlocks('a <!-- venfork:internal -->x<!-- /venfork:internal --> b'))")` prints `a  b`.
 
 ## What usually lies
 
