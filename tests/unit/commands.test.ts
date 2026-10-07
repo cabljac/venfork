@@ -2672,6 +2672,195 @@ describe('scheduleCommand', () => {
   );
 });
 
+describe('scheduleCommand with GitHub App auth', () => {
+  const outroText = () =>
+    String((clack.outro as ReturnType<typeof mock>).mock.calls.at(-1)?.[0]);
+
+  function useConfig(extra: Record<string, unknown>): void {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:acme/widget.git',
+        upstreamUrl: 'git@github.com:upstream/widget.git',
+        ...extra,
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git config --get remote.origin.url', {
+      exitCode: 0,
+      stdout: 'git@github.com:acme/widget-private.git',
+      stderr: '',
+    });
+  }
+
+  test('set --app stores app auth and prints the App setup instead of the token', async () => {
+    useConfig({});
+    (clack.outro as ReturnType<typeof mock>).mockClear();
+    (clack.log.warn as ReturnType<typeof mock>).mockClear();
+
+    await scheduleCommand('set', '0 */6 * * *', { auth: 'app' });
+
+    const write = writeFileCalls
+      .filter((w) => w.path.endsWith('.venfork/config.json'))
+      .at(-1);
+    expect(JSON.parse(write?.content ?? '{}').scheduleAuth).toBe('app');
+    const outro = outroText();
+    expect(outro).toContain(
+      'Auth: GitHub App (secrets VENFORK_APP_CLIENT_ID, VENFORK_APP_PRIVATE_KEY)'
+    );
+    expect(outro).toContain(
+      'Install it on only acme/widget-private and the public fork'
+    );
+    expect(outro).toContain(
+      'gh secret set VENFORK_APP_CLIENT_ID --repo acme/widget-private --body "<client ID>"'
+    );
+    expect(outro).toContain(
+      'gh secret set VENFORK_APP_PRIVATE_KEY --repo acme/widget-private < <private-key>.pem'
+    );
+    expect(outro).not.toContain('gh secret set VENFORK_PUSH_TOKEN');
+    expect(outro).toContain(
+      'gh secret delete VENFORK_PUSH_TOKEN --repo acme/widget-private'
+    );
+    expect(
+      (clack.log.warn as ReturnType<typeof mock>).mock.calls.some((call) =>
+        String(call[0]).includes('can read VENFORK_APP_PRIVATE_KEY')
+      )
+    ).toBe(true);
+  });
+
+  test('set without a flag keeps app auth and prints no delete advice', async () => {
+    useConfig({ scheduleAuth: 'app' });
+    (clack.outro as ReturnType<typeof mock>).mockClear();
+
+    await scheduleCommand('set', '0 */6 * * *');
+
+    const write = writeFileCalls
+      .filter((w) => w.path.endsWith('.venfork/config.json'))
+      .at(-1);
+    expect(JSON.parse(write?.content ?? '{}').scheduleAuth).toBe('app');
+    expect(outroText()).toContain('Auth: GitHub App');
+    expect(outroText()).not.toContain('gh secret delete');
+  });
+
+  test('set --token clears app auth and names the App secrets to delete', async () => {
+    useConfig({ scheduleAuth: 'app' });
+    (clack.outro as ReturnType<typeof mock>).mockClear();
+
+    await scheduleCommand('set', '0 */6 * * *', { auth: 'token' });
+
+    const write = writeFileCalls
+      .filter((w) => w.path.endsWith('.venfork/config.json'))
+      .at(-1);
+    expect(JSON.parse(write?.content ?? '{}')).not.toHaveProperty(
+      'scheduleAuth'
+    );
+    const outro = outroText();
+    expect(outro).toContain('Auth: token (secret VENFORK_PUSH_TOKEN)');
+    expect(outro).toContain('gh secret set VENFORK_PUSH_TOKEN');
+    expect(outro).toContain(
+      'gh secret delete VENFORK_APP_CLIENT_ID --repo acme/widget-private'
+    );
+    expect(outro).toContain(
+      'gh secret delete VENFORK_APP_PRIVATE_KEY --repo acme/widget-private'
+    );
+  });
+
+  test('the token advice points at --app', async () => {
+    useConfig({});
+    (clack.outro as ReturnType<typeof mock>).mockClear();
+
+    await scheduleCommand('set', '0 */6 * * *');
+
+    expect(outroText()).toContain('venfork schedule set "<cron>" --app');
+    expect(outroText()).not.toContain('gh secret delete');
+  });
+
+  test('set --app refuses a public fork under another owner before writing config', async () => {
+    useConfig({ publicForkUrl: 'git@github.com:someone-else/widget.git' });
+    (clack.log.error as ReturnType<typeof mock>).mockClear();
+
+    await expect(
+      scheduleCommand('set', '0 */6 * * *', { auth: 'app' })
+    ).rejects.toThrow('process.exit(1)');
+
+    expect(
+      String(
+        (clack.log.error as ReturnType<typeof mock>).mock.calls.at(-1)?.[0]
+      )
+    ).toContain(
+      'the mirror is acme/widget-private and the public fork is someone-else/widget'
+    );
+    expect(
+      writeFileCalls.some((w) => w.path.endsWith('.venfork/config.json'))
+    ).toBe(false);
+  });
+
+  test('set --app in no-public mode scopes the App to the mirror only', async () => {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        mode: 'no-public',
+        upstreamUrl: 'git@github.com:acme/widget.git',
+      }),
+      stderr: '',
+    });
+    (clack.outro as ReturnType<typeof mock>).mockClear();
+
+    await scheduleCommand('set', '0 */6 * * *', { auth: 'app' });
+
+    expect(outroText()).not.toContain('public fork');
+    expect(outroText()).toContain('VENFORK_APP_PRIVATE_KEY');
+  });
+
+  test.each([
+    ['app', 'VENFORK_APP_CLIENT_ID'],
+    ['token', 'VENFORK_PUSH_TOKEN'],
+  ] as const)(
+    'disable keeps %s auth and names its secrets to delete',
+    async (auth, secret) => {
+      useConfig({
+        schedule: { enabled: true, cron: '0 */6 * * *' },
+        ...(auth === 'app' ? { scheduleAuth: 'app' } : {}),
+      });
+      (clack.outro as ReturnType<typeof mock>).mockClear();
+
+      await scheduleCommand('disable');
+
+      const write = writeFileCalls
+        .filter((w) => w.path.endsWith('.venfork/config.json'))
+        .at(-1);
+      expect(JSON.parse(write?.content ?? '{}').scheduleAuth).toBe(
+        auth === 'app' ? 'app' : undefined
+      );
+      expect(outroText()).toContain(
+        `gh secret delete ${secret} --repo acme/widget-private`
+      );
+    }
+  );
+
+  test.each([
+    [
+      'app',
+      'Auth: GitHub App (secrets VENFORK_APP_CLIENT_ID, VENFORK_APP_PRIVATE_KEY)',
+    ],
+    ['token', 'Auth: token (secret VENFORK_PUSH_TOKEN)'],
+  ] as const)('status shows the %s auth line', async (auth, line) => {
+    useConfig({
+      schedule: { enabled: true, cron: '0 */6 * * *' },
+      ...(auth === 'app' ? { scheduleAuth: 'app' } : {}),
+    });
+    (clack.note as ReturnType<typeof mock>).mockClear();
+
+    await scheduleCommand('status');
+
+    expect(
+      String((clack.note as ReturnType<typeof mock>).mock.calls.at(-1)?.[0])
+    ).toContain(line);
+  });
+});
+
 describe('showHelp', () => {
   test('displays help information', () => {
     // showHelp is synchronous and just displays info
