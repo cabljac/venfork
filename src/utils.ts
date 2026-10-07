@@ -79,6 +79,16 @@ const GITHUB_URL_PREFIX =
   /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?(?:www\.|ssh\.)?github\.com(?::\d+)?[:/]/i;
 
 /**
+ * `owner/repo` of a github.com URL, or an empty string for anything else,
+ * including bare `owner/repo` shorthand and local paths.
+ *
+ * @param url Remote URL.
+ */
+export function githubUrlRepoPath(url: string): string {
+  return GITHUB_URL_PREFIX.test(url.trim()) ? parseRepoPath(url) : '';
+}
+
+/**
  * Rewrites a github.com repo URL to `protocol`
  * (`https://github.com/<owner>/<repo>.git` or `git@github.com:<owner>/<repo>.git`).
  * Any other URL, a bare `owner/repo` or a local path, is returned unchanged.
