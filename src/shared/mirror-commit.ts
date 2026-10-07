@@ -6,15 +6,18 @@ import { $ } from 'execa';
 import {
   assertNoInvalidPreserve,
   preserveRemoveHint,
+  scheduleAuthOf,
   type VenforkConfig,
 } from '../config.js';
 import {
+  ConfigError,
   GitError,
   PinDowngradeError,
   UnmigratedMirrorError,
 } from '../errors.js';
+import { parseRepoPath } from '../utils.js';
 import { VENFORK_VERSION } from '../version.js';
-import { generateSyncWorkflow } from '../workflow.js';
+import { generateSyncWorkflow, type SyncAuth } from '../workflow.js';
 import {
   SYNC_WORKFLOW_PATH,
   VENFORK_BOT_EMAIL,
@@ -160,7 +163,11 @@ async function treeEntriesAt(
 export async function buildMirrorTip(args: {
   defaultBranch: string;
   upstreamTip: string;
-  schedule: { cron: string; mode: 'standard' | 'no-public' } | null;
+  schedule: {
+    cron: string;
+    mode: 'standard' | 'no-public';
+    auth?: SyncAuth;
+  } | null;
   enabledWorkflows: string[];
   disabledWorkflows: string[];
   preserve: string[];
@@ -186,7 +193,12 @@ export async function buildMirrorTip(args: {
     if (schedule) {
       const blob = (
         await mustGit(git, ['hash-object', '-w', '--no-filters', '--stdin'], {
-          input: generateSyncWorkflow(schedule.cron, schedule.mode),
+          input: generateSyncWorkflow(
+            schedule.cron,
+            schedule.mode,
+            VENFORK_VERSION,
+            schedule.auth
+          ),
         })
       ).trim();
       await mustGit(git, [
@@ -464,6 +476,7 @@ export async function buildOriginTip(args: {
         ? {
             cron: schedule.cron,
             mode: config?.mode === 'no-public' ? 'no-public' : 'standard',
+            auth: syncWorkflowAuth(config),
           }
         : null,
     enabledWorkflows,
@@ -472,6 +485,28 @@ export async function buildOriginTip(args: {
     previousMirrorTip,
     cwd,
   });
+}
+
+/**
+ * The {@link SyncAuth} the sync workflow for `config` is generated with.
+ * App auth in standard mode scopes the token to the public fork too, so it
+ * needs `publicForkUrl` to name a GitHub repo; a {@link ConfigError} says
+ * so otherwise.
+ *
+ * @param config Venfork config.
+ */
+export function syncWorkflowAuth(
+  config: Pick<VenforkConfig, 'scheduleAuth' | 'mode' | 'publicForkUrl'> | null
+): SyncAuth {
+  if (!config || scheduleAuthOf(config) !== 'app') return { kind: 'token' };
+  if (config.mode === 'no-public') return { kind: 'app' };
+  const [owner, name] = parseRepoPath(config.publicForkUrl ?? '').split('/');
+  if (!owner || !name) {
+    throw new ConfigError(
+      `GitHub App auth needs the public fork on GitHub, but publicForkUrl is ${config.publicForkUrl ?? '(none)'}. Switch back with: venfork schedule set "<cron>" --token`
+    );
+  }
+  return { kind: 'app', publicRepo: { owner, name } };
 }
 
 /**
