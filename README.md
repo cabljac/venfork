@@ -419,13 +419,13 @@ Check that a mirror is healthy, then list the links recorded in `venfork-config`
 | `divergence` | No user commits on `origin`/`public` that would make sync abort |
 | `preserve` | Every preserve entry is a valid single-file path and exists on `origin/<default>` |
 | `workflow` | The sync workflow on `origin/<default>` matches what this venfork version would write |
-| `token` | `VENFORK_PUSH_TOKEN` is set on the mirror when a schedule is enabled, in both modes. Doctor can only see that the secret exists: the token itself needs the `workflow` scope (classic) or Workflows: write (fine-grained) |
+| `token` | When a schedule is enabled, in both modes: `VENFORK_PUSH_TOKEN` is set on the mirror, or with `schedule set --app` both `VENFORK_APP_CLIENT_ID` and `VENFORK_APP_PRIVATE_KEY` are set, and the public fork has the mirror's owner. In app mode a leftover `VENFORK_PUSH_TOKEN` is a note, not a failure: the check passes and its fix is the `gh secret delete` command. Doctor can only see that the secrets exist: the token itself needs the `workflow` scope (classic) or Workflows: write (fine-grained), and doctor cannot check the App key or installation |
 | `last-run` | The last `venfork-sync.yml` run, from any trigger, did not fail |
 | `cron-age` | The workflow is enabled, and the last scheduled run is not older than twice the cron interval, with a floor of 1 hour because GitHub delays scheduled runs |
 
 Each failing check prints a fix. GitHub checks show as skipped when `gh` is not authenticated or origin is not a GitHub repository, and the summary counts skipped checks. If `git fetch` fails, the `remotes` row shows the reason and the checks that need fresh refs are skipped. The command exits 1 when any check fails; `--json` prints only the JSON results, for CI.
 
-### `venfork schedule <status|set <cron>|disable>`
+### `venfork schedule <status|set <cron> [--app|--token]|disable>`
 
 Manage automated sync configuration stored in `venfork-config`.
 
@@ -433,13 +433,14 @@ Manage automated sync configuration stored in `venfork-config`.
 ```bash
 venfork schedule status
 venfork schedule set "0 */6 * * *"
+venfork schedule set "0 */6 * * *" --app   # push with a GitHub App token
 venfork schedule disable
 ```
 
 The cron is five fields. Month and weekday names (`JAN`, `MON-FRI`) are accepted in any case in lists and ranges, and are written to the workflow as you typed them. Names are not valid as a step (`*/MON`) or as the lone base of a step (`MON/2`).
 
 **What it does:**
-1. Stores schedule state (`enabled`, `cron`) in `.venfork/config.json` on `venfork-config`
+1. Stores schedule state (`enabled`, `cron`) and, with `--app`, `scheduleAuth` in `.venfork/config.json` on `venfork-config`
 2. `set` and `disable` re-stamp the private mirror default branch the same way `venfork sync` does: upstream plus at most one managed commit, with `.github/workflows/venfork-sync.yml` added (`set`) or removed (`disable`). Like sync, they refuse when origin has commits that upstream does not have.
 
 **When a scheduled sync fails**
@@ -467,7 +468,7 @@ Set a `VENFORK_PUSH_TOKEN` secret on the **private mirror** in both modes. The d
 - push to the public fork (standard mode), because it is scoped to the mirror only;
 - push upstream commits that change files under `.github/workflows/`. GitHub rejects that push with `refusing to allow a GitHub App to create or update workflow ... without workflows permission`. The e2e suite (tier 6) reproduces this on a no-public mirror.
 
-Create a **fine-grained personal access token** limited to the mirror (and the public fork in standard mode) with Contents: read and write and Workflows: read and write, or a GitHub App installation with the same access, and store it as the secret:
+Create a **fine-grained personal access token** limited to the mirror (and the public fork in standard mode) with Contents: read and write and Workflows: read and write, and store it as the secret (to avoid a long-lived token, use a GitHub App instead, as the next section shows):
 
 ```bash
 gh secret set VENFORK_PUSH_TOKEN --repo <owner>/<mirror> --body "<fine-grained token>"
@@ -478,6 +479,34 @@ Do not store `gh auth token` or any other account-wide token. A repository secre
 If you followed the 0.10 docs and stored `VENFORK_PUSH_TOKEN` from `gh auth token`, rotate it: revoke that token and store a fine-grained one as above. `venfork doctor` only checks that the secret exists, so it cannot tell you which kind it holds.
 
 If `VENFORK_PUSH_TOKEN` is unset, the generated workflow fails its first step with an error annotation, before it installs anything. The failure opens the `venfork-sync-blocked` issue, and the issue names the missing secret. The workflow does not fall back to the default `GITHUB_TOKEN`.
+
+**Authenticating with a GitHub App**
+
+Instead of a personal access token, the workflow can mint a token from a GitHub App on each run. The token expires after one hour, and you never rotate a 90-day PAT. Create one App per mirror (per client), not one per owner:
+
+1. Create a GitHub App under the account or organization that owns the mirror (Settings, Developer settings, GitHub Apps). Turn the webhook off. Give it the repository permissions Contents: read and write and Workflows: read and write. Metadata: read is added for you. It needs no Issues permission: issue reports use the job token.
+2. Install the App on only this mirror and, in standard mode, its public fork. Do not install it on other mirrors.
+3. Generate a private key for the App and note its client ID.
+4. Store both as secrets on the mirror, then switch the schedule to App auth:
+
+```bash
+gh secret set VENFORK_APP_CLIENT_ID --repo <owner>/<mirror> --body "<client ID>"
+gh secret set VENFORK_APP_PRIVATE_KEY --repo <owner>/<mirror> < <private-key>.pem
+venfork schedule set "0 */6 * * *" --app
+```
+
+`--app` is recorded as `scheduleAuth` in `venfork-config`, so a later `venfork schedule set` keeps it, and so do `disable` and every clone. `venfork schedule set "<cron>" --token` switches back to `VENFORK_PUSH_TOKEN`. Each switch rewrites the workflow in the managed commit, the same way a version upgrade does.
+
+In app mode, the first step checks that both secrets are set and fails with an error annotation otherwise. A later step runs `actions/create-github-app-token`, pinned by commit SHA, to mint a token for the mirror (and the public fork) with only Contents and Workflows write. Checkout pushes with that token. When the mint fails, the `venfork-sync-blocked` issue says to check the installation and the key.
+
+Caveats:
+
+- The private key is as sensitive as a token and does not expire. Every upstream workflow on the mirror can read a repository secret, so filter them with `venfork workflows block` or `venfork workflows allow`.
+- `VENFORK_APP_PRIVATE_KEY` can mint a token for every repository the App is installed on. The workflow's `repositories:` input limits only the token the workflow mints, not the key. If several mirrors share one App, one mirror's secret gives write access to every mirror. Use one App per mirror.
+- One installation token covers one owner. The mirror and the public fork must have the same owner. `schedule set --app` refuses otherwise, and so does the workflow.
+- A private upstream needs a push credential that can also read the upstream, because the runner fetches it with the same token. The minted App token covers only the mirror and the public fork, so app mode cannot fetch a private upstream. With `--token`, a fine-grained PAT covers repositories of one owner only: it works when the upstream has the mirror's owner and the PAT includes it. For a private upstream under another owner, `VENFORK_PUSH_TOKEN` must be a classic PAT with `repo` scope.
+- `actions/create-github-app-token` v3 needs a runner on Node 24 (Actions runner 2.327.1 or later). `ubuntu-latest` qualifies; check self-hosted runners.
+- `venfork doctor` can only see that the secrets exist. It cannot check the key or the installation, so watch its `last-run` check after you switch.
 
 **Upgrading from 0.10 or earlier**
 
@@ -494,7 +523,7 @@ The next scheduled run then succeeds and closes the `venfork-sync-blocked` issue
 - **Cron is best-effort.** GitHub runs scheduled workflows only from the default branch, at most every 5 minutes, and may delay or skip runs when Actions is busy. Do not rely on exact timing. `venfork doctor` flags a disabled workflow, and a last scheduled run older than twice the cron interval (at least 1 hour).
 - **Idle repositories.** GitHub disables scheduled workflows in a public repository after 60 days without activity. A private mirror is not affected by that rule, but if you make a mirror public, re-enable the workflow from the Actions tab when it stops.
 - **The workflow file must stay on the default branch.** It lives in the venfork-managed commit. Sync builds the new tip first and moves the default branch in a single leased push, so the file is never missing between runs.
-- **Token.** Both modes need the `VENFORK_PUSH_TOKEN` secret, a fine-grained token with Workflows: write limited to the mirror and the public fork (see above): the job token cannot push upstream workflow changes, nor push to the public fork. A run without the secret fails at its first step and opens the `venfork-sync-blocked` issue. `venfork doctor` also checks that the secret exists.
+- **Token.** Both modes need a push credential, because the job token cannot push upstream workflow changes, nor push to the public fork. By default that is the `VENFORK_PUSH_TOKEN` secret, a fine-grained token with Workflows: write limited to the mirror and the public fork. With `--app` it is a one-hour token minted from the `VENFORK_APP_CLIENT_ID` and `VENFORK_APP_PRIVATE_KEY` secrets (see above). A run without its secrets fails at its first step and opens the `venfork-sync-blocked` issue. `venfork doctor` also checks that the secrets exist.
 - **Failures open an issue.** Blocked or failed runs open or update a `venfork-sync-blocked` issue on the mirror; the next successful run closes it.
 - **Upgrades.** The workflow pins the venfork version that wrote it. Install a newer venfork locally and run `venfork sync` to move the mirror to it.
 - **Right after a release.** A release tag can exist for a few minutes before `npm publish` finishes. A local sync in that window can pin a version that npm does not have yet. The scheduled run then fails at "Install venfork" and opens the `venfork-sync-blocked` issue. The next run after the publish succeeds and closes it. To bridge the gap, set `VENFORK_INSTALL_SPEC` (see above).
@@ -611,7 +640,7 @@ Set `VENFORK_ALLOW_SELF_REFERENCE=1` for projects whose upstream legitimately me
 
 GitHub Actions sets this. With `venfork sync --report-issues`, sync files the `venfork-sync-blocked` issue on that repository without a privacy lookup when it names `origin`. Otherwise sync asks gh whether origin is private first.
 
-The generated workflow also reads the `VENFORK_PUSH_TOKEN` secret and the `VENFORK_INSTALL_SPEC` repository variable; see `venfork schedule` above.
+The generated workflow also reads the `VENFORK_PUSH_TOKEN` secret (or, with `schedule set --app`, the `VENFORK_APP_CLIENT_ID` and `VENFORK_APP_PRIVATE_KEY` secrets) and the `VENFORK_INSTALL_SPEC` repository variable; see `venfork schedule` above.
 
 ### Concurrency
 
