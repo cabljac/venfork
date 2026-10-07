@@ -322,6 +322,29 @@ export async function getPushToken(): Promise<string> {
 }
 
 /**
+ * GitHub App credentials for the App variant of Tier 2, from
+ * `VENFORK_E2E_APP_CLIENT_ID` and `VENFORK_E2E_APP_PRIVATE_KEY`, or null
+ * when either is unset.
+ */
+export function appCredentials(): {
+  clientId: string;
+  privateKey: string;
+} | null {
+  const clientId = process.env.VENFORK_E2E_APP_CLIENT_ID?.trim();
+  const privateKey = process.env.VENFORK_E2E_APP_PRIVATE_KEY?.trim();
+  return clientId && privateKey ? { clientId, privateKey } : null;
+}
+
+/** Deletes the repo secret `name` on `<owner>/<repo>`; a missing one is fine. */
+export async function deleteRepoSecret(
+  owner: string,
+  repo: string,
+  name: string
+): Promise<void> {
+  await $({ reject: false })`gh secret delete ${name} --repo ${owner}/${repo}`;
+}
+
+/**
  * Stores `value` as a repo secret named `name` on `<owner>/<repo>`.
  * The secret is removed automatically when the repo is deleted in `afterAll`.
  *
