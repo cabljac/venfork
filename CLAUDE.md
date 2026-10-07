@@ -74,6 +74,11 @@ Determinism rule: the managed commit's author and committer are the venfork bot 
 
 Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/net.ts`: no stdin (credential/host-key prompts fail fast instead of hanging), a hard timeout (`VENFORK_GIT_TIMEOUT`, default 600s), and `BatchMode=yes`. Use these helpers for new network calls rather than raw `$` — a misconfigured credential should error, not block on an invisible prompt.
 
+### Verifying behaviour
+
+`.agents/skills/verify-venfork/` is the per-command behaviour reference: one feature file per `src/commands/<name>.ts`, plus leak invariants and multi-command journeys.
+`bun scripts/verify-fixture.ts [--shell]` is the harness lever: it builds the local upstream/origin/public fixture and prints the paths and env to drive the built CLI against it.
+
 ## Environment variables
 
 - `VENFORK_ORG` — default org for created repos (`--org` flag overrides; no org → prompts before using personal account).
