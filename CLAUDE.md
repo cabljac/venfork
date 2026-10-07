@@ -42,7 +42,7 @@ bun run test:e2e             # VENFORK_E2E=1
 bun run test:e2e:dispatch    # + real workflow_dispatch
 ```
 
-Never run the real-GitHub e2e unless the user asks. It needs the test org (`memcard-dev`, or `VENFORK_E2E_ORG`) and a token with repo create and delete rights (`delete_repo` scope). Run it with `env -u GITHUB_TOKEN` so the keyring gh token is used. Each run must leave no `venfork-e2e-*` repos behind: check with `gh repo list "${VENFORK_E2E_ORG:-memcard-dev}" --limit 100 | grep venfork-e2e-` (and the same for `${VENFORK_E2E_UPSTREAM_OWNER:-cabljac}`). The default proof for a change is `bun run verify` plus a harness drive (`.agents/skills/verify-venfork/`). A PR that did not rerun e2e must state "Not verified: e2e tiers".
+Never run the real-GitHub e2e unless the user asks. It needs the test org (`memcard-dev`, or `VENFORK_E2E_ORG`) and a token with repo create and delete rights (`delete_repo` scope). Run it with `env -u GITHUB_TOKEN -u GH_TOKEN` so gh uses the keyring token (gh prefers `GH_TOKEN`, then `GITHUB_TOKEN`, then the keyring). To push with a specific token instead, set `VENFORK_E2E_PAT`; it overrides `gh auth token` as the e2e push token. Each run must leave no `venfork-e2e-*` repos behind: check with `gh repo list "${VENFORK_E2E_ORG:-memcard-dev}" --limit 1000 | grep venfork-e2e-` (and the same for `${VENFORK_E2E_UPSTREAM_OWNER:-cabljac}`). The default proof for a change is `bun run verify` plus a harness drive (`.agents/skills/verify-venfork/`). A PR that did not rerun e2e must state "Not verified: e2e tiers".
 
 ## Architecture
 
