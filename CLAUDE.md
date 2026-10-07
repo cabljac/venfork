@@ -90,4 +90,4 @@ Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/n
 - TypeScript strict mode; Biome for lint+format (`bun run check`). Releases via release-please (Conventional Commits drive version bumps + CHANGELOG).
 - Tests use Bun's runner with `test()` (not `it()`).
 - `gh repo clone` is used for fetching, so SSH-vs-HTTPS transport follows the user's `gh config get git_protocol`.
-- Invariants (remote refs, pushes via net.ts, import boundary, deny-list coverage, process.exit) are enforced by scripts/lint-invariants.ts.
+- Invariants (remote refs, pushes via net.ts, import boundary, `gh pr|issue create|edit` only in `src/shared/upstream-publish.ts`, process.exit) are enforced by scripts/lint-invariants.ts.

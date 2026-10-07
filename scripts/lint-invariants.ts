@@ -18,34 +18,75 @@ export interface Source {
 export type Rule = (src: Source) => Finding[];
 
 interface Scanned {
-  /** The text with comments blanked out; offsets and newlines kept. */
+  /** The text with comments and regex literal bodies blanked; offsets and newlines kept. */
   code: string;
+  /** `code` with string and template literal text blanked too; `${}` expressions kept. */
+  bare: string;
   /** Template literals as [start, end) offsets, backticks included. */
   templates: Array<{ start: number; end: number }>;
 }
 
-/** Blanks comments and lists every template literal, nested ones included. */
+/** A `/` after one of these starts a regex literal, not a division. */
+const REGEX_AFTER_PUNCT = /[(,=:[!&|?{};+\-*%<>~^]$/;
+const REGEX_AFTER_KEYWORD =
+  /(?:^|[^\w$])(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/;
+
+function startsRegex(code: string[], i: number): boolean {
+  let j = i - 1;
+  while (j >= 0 && /\s/.test(code[j])) j--;
+  if (j < 0) return true;
+  const before = code.slice(Math.max(0, j - 11), j + 1).join('');
+  return REGEX_AFTER_PUNCT.test(before) || REGEX_AFTER_KEYWORD.test(before);
+}
+
+/** End offset of the regex literal opening at `i`, flags included; -1 if the line ends first. */
+function regexEnd(text: string, i: number): number {
+  let inClass = false;
+  for (let k = i + 1; k < text.length && text[k] !== '\n'; k++) {
+    const ch = text[k];
+    if (ch === '\\') k++;
+    else if (ch === '[') inClass = true;
+    else if (ch === ']') inClass = false;
+    else if (ch === '/' && !inClass) {
+      let end = k + 1;
+      while (/[a-z]/i.test(text[end] ?? '')) end++;
+      return end;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Blanks comments and regex literal bodies, and lists every template literal,
+ * nested ones included. Also returns a copy with literal text blanked.
+ */
 export function scan(text: string): Scanned {
-  const out = text.split('');
+  const code = text.split('');
+  const bare = text.split('');
   const templates: Scanned['templates'] = [];
   const open: number[] = [];
   const exprDepth: number[] = [];
   let depth = 0;
   let i = 0;
-  const blank = (from: number, to: number) => {
-    for (let k = from; k < to; k++) if (out[k] !== '\n') out[k] = ' ';
+  const blank = (to: string[], from: number, end: number) => {
+    for (let k = from; k < end; k++) if (to[k] !== '\n') to[k] = ' ';
   };
   while (i < text.length) {
     const c = text[i];
     if (open.length > exprDepth.length) {
-      if (c === '\\') i += 2;
-      else if (c === '`') {
+      if (c === '\\') {
+        blank(bare, i, i + 2);
+        i += 2;
+      } else if (c === '`') {
         templates.push({ start: open.pop() as number, end: i + 1 });
         i++;
       } else if (c === '$' && text[i + 1] === '{') {
         exprDepth.push(depth++);
         i += 2;
-      } else i++;
+      } else {
+        blank(bare, i, i + 1);
+        i++;
+      }
       continue;
     }
     const two = text.slice(i, i + 2);
@@ -53,21 +94,32 @@ export function scan(text: string): Scanned {
       const close =
         two === '//' ? text.indexOf('\n', i) : text.indexOf('*/', i);
       const end = close < 0 ? text.length : close + (two === '/*' ? 2 : 0);
-      blank(i, end);
+      blank(code, i, end);
+      blank(bare, i, end);
       i = end;
       continue;
     }
+    if (c === '/' && startsRegex(code, i)) {
+      const end = regexEnd(text, i);
+      if (end > 0) {
+        blank(code, i + 1, end);
+        blank(bare, i + 1, end);
+        i = end;
+        continue;
+      }
+    }
     if (c === "'" || c === '"') {
-      i++;
+      const from = ++i;
       while (i < text.length && text[i] !== c && text[i] !== '\n') {
         i += text[i] === '\\' ? 2 : 1;
       }
+      blank(bare, from, i);
     } else if (c === '`') open.push(i);
     else if (c === '{') depth++;
     else if (c === '}' && exprDepth.at(-1) === --depth) exprDepth.pop();
     i++;
   }
-  return { code: out.join(''), templates };
+  return { code: code.join(''), bare: bare.join(''), templates };
 }
 
 const lineOf = (text: string, index: number) =>
@@ -90,8 +142,14 @@ function tagName(code: string, start: number): string {
   return /[\w$.]*$/.exec(code.slice(0, j + 1))?.[0] ?? '';
 }
 
-const PLUMBING =
-  /^git\s+(?:-c\s+\S+\s+)*(?:rev-parse|rev-list|merge-base|diff|log|cat-file|show)\b/;
+/** One option value in a template: an interpolation or a bare word. */
+const ARG = String.raw`(?:\$\{[^}]*\}|\S+)`;
+/** Git options that may come before the subcommand, in any order. */
+const GIT_GLOBALS = String.raw`(?:(?:-[cC]\s+${ARG}|--[\w-]+(?:=${ARG})?|\$\{[^}]*\})\s+)*`;
+
+const PLUMBING = new RegExp(
+  String.raw`^git\s+${GIT_GLOBALS}(?:rev-parse|rev-list|merge-base|merge-tree|diff|log|cat-file|show|ls-tree|reset)\b`
+);
 const SHORT_REF = /(?<![\w/.-])(?:upstream|origin|public)\/(?=\$\{|\w)/;
 
 /** Rule 1: plumbing and commit resolvers get `refs/remotes/<r>/<b>`, never `<r>/<b>`. */
@@ -121,14 +179,20 @@ export const remoteRefs: Rule = ({ file, text }) => {
   return found;
 };
 
+const GIT_PUSH = new RegExp(String.raw`^git\s+${GIT_GLOBALS}push\b`);
+const Q = '[\'"`]';
+/** An argv array whose first argument, after any git global options, is `push`. */
+const ARGV_PUSH = new RegExp(
+  String.raw`\[\s*(?:(?:${Q}-[cC]${Q}\s*,\s*[^,\]]+|${Q}--[\w-]+(?:=[^'"\`]*)?${Q})\s*,\s*)*${Q}push${Q}\s*[,\]]`,
+  'g'
+);
+
 /** Rule 2: every `git push` runs as a netExec template (src/shared/net.ts). */
 export const pushViaNet: Rule = ({ file, text }) => {
   const { code, templates } = scan(text);
   const found: Finding[] = [];
   for (const t of templates) {
-    if (!/^git\s+(?:(?:-c\s+\S+|\$\{[^}]*\})\s+)*push\b/.test(body(text, t))) {
-      continue;
-    }
+    if (!GIT_PUSH.test(body(text, t))) continue;
     const tag = tagName(code, t.start);
     if (tag !== '' && tag !== 'netExec') {
       found.push({
@@ -138,15 +202,13 @@ export const pushViaNet: Rule = ({ file, text }) => {
       });
     }
   }
-  if (file !== 'src/shared/net.ts') {
-    for (const m of code.matchAll(/['"]push['"]/g)) {
-      found.push({
-        file,
-        line: lineOf(text, m.index),
-        message:
-          "'push' as an argv element bypasses netExec; push with a netExec template",
-      });
-    }
+  for (const m of code.matchAll(ARGV_PUSH)) {
+    found.push({
+      file,
+      line: lineOf(text, m.index),
+      message:
+        'git push as an argv array bypasses netExec; push with a netExec template',
+    });
   }
   return found;
 };
@@ -175,27 +237,50 @@ export const importBoundary: Rule = ({ file, text }) => {
   return found;
 };
 
-/** Rule 4: a file that creates or edits a PR or issue scans the text first. */
+/** The one module that runs `gh pr|issue create|edit`; it scans every upstream title and body. */
+export const PUBLISH_HELPER = 'src/shared/upstream-publish.ts';
+
+/**
+ * Files that may run `gh pr|issue create|edit` outside {@link PUBLISH_HELPER},
+ * each with the reason. Every entry must target the private mirror, never
+ * upstream or the public fork.
+ */
+export const MIRROR_ONLY_GH: Readonly<Record<string, string>> = {
+  'src/shared/sync-report.ts':
+    'opens and edits the venfork-sync-blocked issue on the mirror itself',
+};
+
+const GH_PUBLISH =
+  /^gh\s+(?:(?:-R|--repo)\s+(?:\$\{[^}]*\}|\S+)\s+)*(?:pr|issue)\s+(?:create|edit)\b/;
+const GH_PUBLISH_ARGV =
+  /['"`](?:pr|issue)['"`]\s*,\s*['"`](?:create|edit)['"`]/g;
+
+/** Rule 4: only the publish helper creates or edits a PR or issue. */
 export const denyListCoverage: Rule = ({ file, text }) => {
+  if (file === PUBLISH_HELPER || file in MIRROR_ONLY_GH) return [];
   const { code, templates } = scan(text);
-  const covered =
-    /import\s*\{[^}]*\bassertNoMirrorReference\b[^}]*\}\s*from/.test(code) &&
-    /\bassertNoMirrorReference\s*\(/.test(code);
-  if (covered) return [];
-  return templates
-    .filter((t) => /^gh\s+(?:pr|issue)\s+(?:create|edit)\b/.test(body(text, t)))
+  const message = (what: string) =>
+    `\`${what}\` outside ${PUBLISH_HELPER}; publish through its helpers so the title and body are scanned`;
+  const found: Finding[] = templates
+    .filter(
+      (t) => tagName(code, t.start) !== '' && GH_PUBLISH.test(body(text, t))
+    )
     .map((t) => ({
       file,
       line: lineOf(text, t.start),
-      message: `\`${body(text, t).split(/\s+/).slice(0, 3).join(' ')}\` in a file that does not import and call assertNoMirrorReference`,
+      message: message(body(text, t).split(/\s+/).slice(0, 3).join(' ')),
     }));
+  for (const m of code.matchAll(GH_PUBLISH_ARGV)) {
+    found.push({ file, line: lineOf(text, m.index), message: message(m[0]) });
+  }
+  return found;
 };
 
 /** Rule 5: only src/index.ts ends the process. */
 export const noProcessExit: Rule = ({ file, text }) => {
   if (!/^src\/(?:commands|shared)\//.test(file)) return [];
-  const { code } = scan(text);
-  return [...code.matchAll(/\bprocess\.exit\s*\(/g)].map((m) => ({
+  const { bare } = scan(text);
+  return [...bare.matchAll(/\bprocess\.exit\s*\(/g)].map((m) => ({
     file,
     line: lineOf(text, m.index),
     message: 'process.exit outside src/index.ts; throw a VenforkError instead',
