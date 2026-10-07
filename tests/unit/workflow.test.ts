@@ -3,10 +3,21 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pkg from '../../package.json' with { type: 'json' };
+import { ConfigError } from '../../src/errors.js';
+import {
+  buildOriginTip,
+  syncWorkflowAuth,
+} from '../../src/shared/mirror-commit.js';
+import {
+  isUnpinnedWorkflow,
+  pinnedVenforkVersion,
+} from '../../src/shared/semver.js';
 import { VENFORK_VERSION } from '../../src/version.js';
 import {
+  CREATE_APP_TOKEN_ACTION,
   generateSyncWorkflow,
   getSyncWorkflowPath,
+  type SyncAuth,
 } from '../../src/workflow.js';
 
 describe('workflow helpers', () => {
@@ -306,5 +317,271 @@ describe('install step spec validation', () => {
     expect(result.status).not.toBe(0);
     expect(result.stdout).toContain('::error::');
     expect(result.npmArgs).toBeNull();
+  });
+});
+
+describe('GitHub App auth', () => {
+  const publicRepo = { owner: 'Acme', name: 'project' };
+  const appStandard: SyncAuth = { kind: 'app', publicRepo };
+  const app = (mode: 'standard' | 'no-public' = 'standard') =>
+    generateSyncWorkflow(
+      '0 */6 * * *',
+      mode,
+      '1.2.3',
+      mode === 'standard' ? appStandard : { kind: 'app' }
+    );
+  const stepOf = (workflow: string, name: string): string => {
+    const start = workflow.indexOf(`- name: ${name}`);
+    expect(start).toBeGreaterThan(-1);
+    const next = workflow.indexOf('      - name: ', start + 1);
+    return workflow.slice(start, next === -1 ? undefined : next);
+  };
+
+  test('an explicit token auth gives the default workflow', () => {
+    expect(
+      generateSyncWorkflow('0 */6 * * *', 'standard', '1.2.3', {
+        kind: 'token',
+      })
+    ).toBe(generateSyncWorkflow('0 */6 * * *', 'standard', '1.2.3'));
+  });
+
+  test.each(['standard', 'no-public'] as const)(
+    'app workflow snapshot (%s)',
+    (mode) => {
+      expect(app(mode)).toMatchSnapshot();
+    }
+  );
+
+  test('pins create-github-app-token by a full commit SHA', () => {
+    expect(CREATE_APP_TOKEN_ACTION).toMatch(
+      /^actions\/create-github-app-token@[0-9a-f]{40} # v\d+\.\d+\.\d+$/
+    );
+    expect(stepOf(app(), 'Mint GitHub App token')).toContain(
+      `uses: ${CREATE_APP_TOKEN_ACTION}\n`
+    );
+  });
+
+  test.each(['standard', 'no-public'] as const)(
+    'never reads VENFORK_PUSH_TOKEN (%s)',
+    (mode) => {
+      expect(app(mode)).not.toContain('VENFORK_PUSH_TOKEN');
+    }
+  );
+
+  test('checks the secrets before install and mints the token before checkout', () => {
+    const workflow = app();
+    const order = [
+      '- name: Check VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY',
+      '- name: Install venfork',
+      '- name: Mint GitHub App token',
+      '- name: Checkout mirror',
+    ].map((name) => workflow.indexOf(name));
+    expect(order.every((index) => index > -1)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  test('checkout uses the minted token with no github.token fallback', () => {
+    const checkout = stepOf(app(), 'Checkout mirror');
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expression we are asserting.
+    expect(checkout).toContain('token: ${{ steps.app-token.outputs.token }}');
+    expect(checkout).not.toContain('github.token');
+  });
+
+  test('scopes the token to the mirror and the public fork with only contents and workflows write', () => {
+    const mint = stepOf(app(), 'Mint GitHub App token');
+    expect(mint).toContain('id: app-token\n');
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expressions we are asserting.
+    expect(mint).toContain('client-id: ${{ secrets.VENFORK_APP_CLIENT_ID }}');
+    expect(mint).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expression we are asserting.
+      'private-key: ${{ secrets.VENFORK_APP_PRIVATE_KEY }}'
+    );
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expression we are asserting.
+    expect(mint).toContain('owner: ${{ github.repository_owner }}');
+    expect(mint).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expression we are asserting.
+      'repositories: ${{ steps.token-check.outputs.mirror }},project\n'
+    );
+    expect(mint).toContain('permission-contents: write\n');
+    expect(mint).toContain('permission-workflows: write\n');
+    expect(mint.match(/permission-/g)).toHaveLength(2);
+  });
+
+  test('no-public scopes the token to the mirror only', () => {
+    const mint = stepOf(app('no-public'), 'Mint GitHub App token');
+    expect(mint).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expression we are asserting.
+      'repositories: ${{ steps.token-check.outputs.mirror }}\n'
+    );
+    expect(app('no-public')).not.toContain('different owner');
+  });
+
+  test('issue reports keep the job token and name the App secrets', () => {
+    const step = stepOf(app(), 'Report failed sync');
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expressions we are asserting.
+    expect(step).toContain('GH_TOKEN: ${{ github.token }}');
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expression we are asserting.
+    expect(step).toContain('APP_TOKEN: ${{ steps.app-token.outcome }}');
+    expect(step).toContain(
+      'Set both VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY'
+    );
+    expect(step).toContain('elif [ "$APP_TOKEN" = "failure" ]; then');
+    expect(step).toContain('installed on $REPO and Acme/project');
+    expect(stepOf(app(), 'Sync from upstream')).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GHA expression we are asserting.
+      'GH_TOKEN: ${{ github.token }}'
+    );
+  });
+
+  test('keeps the pinned version readable', () => {
+    for (const mode of ['standard', 'no-public'] as const) {
+      expect(pinnedVenforkVersion(app(mode))).toBe('1.2.3');
+      expect(isUnpinnedWorkflow(app(mode))).toBe(false);
+      expect(app(mode).match(/venfork@/g)).toEqual(
+        generateSyncWorkflow('0 */6 * * *', mode, '1.2.3').match(/venfork@/g)
+      );
+    }
+  });
+
+  test.each([
+    { owner: 'acme', name: 'pro ject' },
+    { owner: 'ac"me', name: 'project' },
+    { owner: 'acme', name: 'x$(id)' },
+    { owner: 'acme', name: '.' },
+    { owner: 'acme', name: '..' },
+    { owner: '..', name: 'project' },
+  ])('refuses an unsafe public fork name %p', (repo) => {
+    expect(() =>
+      generateSyncWorkflow('0 */6 * * *', 'standard', '1.2.3', {
+        kind: 'app',
+        publicRepo: repo,
+      })
+    ).toThrow('Unsafe public fork name');
+  });
+
+  test('standard mode refuses app auth without the public fork', () => {
+    expect(() =>
+      generateSyncWorkflow('0 */6 * * *', 'standard', '1.2.3', { kind: 'app' })
+    ).toThrow('needs the public fork');
+  });
+
+  describe('secret check script', () => {
+    function runCheck(
+      mode: 'standard' | 'no-public',
+      env: Record<string, string>
+    ): { status: number; stdout: string; output: string } {
+      const step = stepOf(app(mode), 'Check VENFORK_APP_CLIENT_ID');
+      const body = step
+        .slice(step.indexOf('run: |\n') + 'run: |\n'.length)
+        .split('\n')
+        .map((line) => line.replace(/^ {10}/, ''))
+        .join('\n');
+      const dir = mkdtempSync(join(tmpdir(), 'venfork-app-check-'));
+      const script = join(dir, 'check.sh');
+      const output = join(dir, 'output');
+      writeFileSync(script, body);
+      writeFileSync(output, '');
+      const result = Bun.spawnSync(['bash', script], {
+        env: {
+          PATH: process.env.PATH ?? '',
+          GITHUB_OUTPUT: output,
+          GITHUB_REPOSITORY: 'acme/project-private',
+          GITHUB_REPOSITORY_OWNER: 'acme',
+          VENFORK_APP_CLIENT_ID: 'Iv1.abc',
+          VENFORK_APP_PRIVATE_KEY: 'key',
+          ...env,
+        },
+      });
+      return {
+        status: result.exitCode ?? -1,
+        stdout: result.stdout.toString(),
+        output: readFileSync(output, 'utf8'),
+      };
+    }
+
+    test('passes and outputs the mirror name when both secrets are set', () => {
+      for (const mode of ['standard', 'no-public'] as const) {
+        const result = runCheck(mode, {});
+        expect(result.status).toBe(0);
+        expect(result.output).toBe('mirror=project-private\n');
+      }
+    });
+
+    test('names every missing secret with a gh secret set command', () => {
+      const result = runCheck('standard', {
+        VENFORK_APP_CLIENT_ID: '',
+        VENFORK_APP_PRIVATE_KEY: '',
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(
+        '::error::VENFORK_APP_CLIENT_ID is not set on this repository.'
+      );
+      expect(result.stdout).toContain(
+        'gh secret set VENFORK_APP_CLIENT_ID --repo acme/project-private --body <client-id>'
+      );
+      expect(result.stdout).toContain(
+        '::error::VENFORK_APP_PRIVATE_KEY is not set on this repository.'
+      );
+      expect(result.stdout).toContain(
+        'gh secret set VENFORK_APP_PRIVATE_KEY --repo acme/project-private < <key.pem>'
+      );
+      expect(result.output).toBe('');
+    });
+
+    test('fails when only the private key is missing', () => {
+      const result = runCheck('no-public', { VENFORK_APP_PRIVATE_KEY: '' });
+      expect(result.status).toBe(1);
+      expect(result.stdout).not.toContain('VENFORK_APP_CLIENT_ID is not set');
+      expect(result.stdout).toContain('VENFORK_APP_PRIVATE_KEY is not set');
+    });
+
+    test('compares the owner case-insensitively and refuses a different one', () => {
+      expect(
+        runCheck('standard', { GITHUB_REPOSITORY_OWNER: 'ACME' }).status
+      ).toBe(0);
+      const other = runCheck('standard', {
+        GITHUB_REPOSITORY: 'other/project-private',
+        GITHUB_REPOSITORY_OWNER: 'other',
+      });
+      expect(other.status).toBe(1);
+      expect(other.stdout).toContain(
+        '::error::The public fork Acme/project has a different owner than other/project-private.'
+      );
+      expect(other.output).toBe('');
+    });
+  });
+});
+
+describe('syncWorkflowAuth', () => {
+  const appConfig = {
+    version: '1' as const,
+    upstreamUrl: 'git@github.com:upstream/project.git',
+    publicForkUrl: 'git@github.com:acme/project.git',
+    schedule: { cron: '0 */6 * * *', enabled: true },
+    scheduleAuth: 'app',
+  };
+
+  test('reads the public fork from publicForkUrl', () => {
+    expect(syncWorkflowAuth(appConfig)).toEqual({
+      kind: 'app',
+      publicRepo: { owner: 'acme', name: 'project' },
+    });
+  });
+
+  test('a relative publicForkUrl is a ConfigError', () => {
+    expect(() =>
+      syncWorkflowAuth({ ...appConfig, publicForkUrl: '../public.git' })
+    ).toThrow(ConfigError);
+  });
+
+  test('buildOriginTip names an unknown scheduleAuth mode in a ConfigError', async () => {
+    const build = buildOriginTip({
+      config: { ...appConfig, scheduleAuth: 'future' },
+      defaultBranch: 'main',
+      upstreamTip: '0'.repeat(40),
+      previousMirrorTip: '',
+    });
+    await expect(build).rejects.toBeInstanceOf(ConfigError);
+    await expect(build).rejects.toThrow('scheduleAuth "future"');
   });
 });
