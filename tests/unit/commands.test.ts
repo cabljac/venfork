@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import * as realFsPromises from 'node:fs/promises';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import * as clack from '@clack/prompts';
 
@@ -304,25 +305,26 @@ import {
   syncCommand,
   workflowsCommand,
 } from '../../src/commands.js';
+import { setupSyncMirror } from '../../src/dispatch.js';
 import { CommandExitError, SyncDivergenceError } from '../../src/errors.js';
 
-/** Calls setupCommand with the quiet sync that src/index.ts wires in. */
+/** Calls setupCommand with the quiet sync that src/index.ts wires in, unless a test passes its own. */
 function setupCommand(
   upstreamUrl?: string,
   privateMirrorName?: string,
   organization?: string,
   publicForkRepoName?: string,
-  options: { noPublic?: boolean } = {}
+  options: {
+    noPublic?: boolean;
+    syncMirror?: (cwd: string) => Promise<void>;
+  } = {}
 ): Promise<void> {
   return runSetupCommand(
     upstreamUrl,
     privateMirrorName,
     organization,
     publicForkRepoName,
-    {
-      ...options,
-      syncMirror: (cwd) => syncCommand(undefined, { cwd, quiet: true }),
-    }
+    { syncMirror: setupSyncMirror(), ...options }
   );
 }
 
@@ -752,6 +754,40 @@ describe('setupCommand - execution tests', () => {
 });
 
 describe('setupCommand - idempotent recovery', () => {
+  test('syncs the recovered clone once through syncMirror', async () => {
+    mockResponses.set('gh repo create', {
+      exitCode: 1,
+      stderr: 'name already exists on this account',
+      stdout: '',
+    });
+    const syncMirror = mock((_cwd: string) => Promise.resolve());
+
+    await setupCommand(
+      'git@github.com:test/repo.git',
+      'test-vendor',
+      undefined,
+      undefined,
+      { syncMirror }
+    );
+
+    expect(syncMirror).toHaveBeenCalledTimes(1);
+    expect(syncMirror).toHaveBeenCalledWith(path.resolve('test-vendor'));
+  });
+
+  test('a fresh setup never calls syncMirror', async () => {
+    const syncMirror = mock((_cwd: string) => Promise.resolve());
+
+    await setupCommand(
+      'git@github.com:test/repo.git',
+      'test-vendor',
+      undefined,
+      undefined,
+      { syncMirror }
+    );
+
+    expect(syncMirror).not.toHaveBeenCalled();
+  });
+
   test('skips upstream seed clone and runs sync when private mirror already exists on GitHub', async () => {
     mockResponses.set('gh repo create', {
       exitCode: 1,

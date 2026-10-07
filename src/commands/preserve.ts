@@ -202,6 +202,7 @@ export async function preserveCommand(
       '✨ Preserve list updated. Run `venfork sync` to apply on the private mirror default branch.'
     );
   } catch (error) {
+    if (error instanceof CommandExitError) throw error;
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Preserve command failed');
     throw new CommandExitError(1);

@@ -15,7 +15,7 @@ import {
   syncCommand,
   workflowsCommand,
 } from './commands.js';
-import { requiresGhAuth } from './dispatch.js';
+import { requiresGhAuth, setupSyncMirror } from './dispatch.js';
 import { parseDoctorCliArgs } from './doctor-args.js';
 import { CommandExitError } from './errors.js';
 import { ensureGhAuth } from './git.js';
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
         parsed.publicForkRepoName,
         {
           noPublic: parsed.noPublic,
-          syncMirror: (cwd) => syncCommand(undefined, { cwd, quiet: true }),
+          syncMirror: setupSyncMirror(),
         }
       );
       break;

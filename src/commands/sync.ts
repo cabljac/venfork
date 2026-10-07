@@ -346,6 +346,7 @@ export async function syncCommand(
       );
     }
   } catch (error) {
+    if (error instanceof CommandExitError) throw error;
     if (error instanceof SyncDivergenceError || error instanceof ConfigError) {
       if (error instanceof ConfigError) s.stop('Config error');
       throw error;

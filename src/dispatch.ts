@@ -1,3 +1,4 @@
+import { syncCommand } from './commands.js';
 import { parsePullCliArgs } from './pull-args.js';
 import { parseStageCliArgs } from './stage-args.js';
 
@@ -31,4 +32,16 @@ export function requiresGhAuth(command: string, args: string[]): boolean {
     }
   }
   return false;
+}
+
+/**
+ * The `syncMirror` callback for `setupCommand`: a quiet sync of the clone at
+ * `cwd`, so setup prints its own outro and sync prints none.
+ *
+ * @param sync The sync command to call; tests pass a spy.
+ */
+export function setupSyncMirror(
+  sync: typeof syncCommand = syncCommand
+): (cwd: string) => Promise<void> {
+  return (cwd) => sync(undefined, { cwd, quiet: true });
 }

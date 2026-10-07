@@ -242,6 +242,7 @@ export async function pullRequestCommand(
 
     p.outro('✨ Pull request imported!');
   } catch (error) {
+    if (error instanceof CommandExitError) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Pull request import failed');
