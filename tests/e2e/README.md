@@ -113,6 +113,8 @@ the `describe` block with `describe.skip`, so no GitHub calls are made.
 | `VENFORK_E2E_ORG` | no | `memcard-dev` | GitHub org for the mirror + public fork |
 | `VENFORK_E2E_REAL_DISPATCH` | no | unset | Run the tier 2 and tier 6 workflow_dispatch tests |
 | `VENFORK_E2E_PAT` | no | falls back to `gh auth token` | Token written as the `VENFORK_PUSH_TOKEN` secret on the mirror in Tier 2. Override with a fine-grained PAT scoped to just the test repos if you don't want the test using your full gh OAuth token. |
+| `VENFORK_E2E_APP_CLIENT_ID` | no | unset | Client ID of the GitHub App for the App variant of Tier 2. Without it (or the key), that variant is skipped. |
+| `VENFORK_E2E_APP_PRIVATE_KEY` | no | unset | PEM private key of the same App, written as the `VENFORK_APP_PRIVATE_KEY` secret. |
 
 ## How Tier 2 authenticates cross-repo pushes
 
@@ -131,6 +133,27 @@ URL the test uploads has that form. The helper `getPushToken()`
 returns `$VENFORK_E2E_PAT` if set, otherwise `gh auth token` (your local OAuth
 token). The secret, the variable and the release are removed automatically
 when the test repos are deleted in `afterAll`.
+
+## Tier 2 under GitHub App auth
+
+Tier 2 runs twice on the same repos: first with `VENFORK_PUSH_TOKEN`, then
+with GitHub App auth. The App variant runs `venfork schedule set <cron> --app`,
+which rebuilds the managed commit with the mint step. It sets the
+`VENFORK_APP_CLIENT_ID` and `VENFORK_APP_PRIVATE_KEY` secrets, deletes
+`VENFORK_PUSH_TOKEN` and dispatches the workflow again. It needs
+`VENFORK_E2E_REAL_DISPATCH=1` and both `VENFORK_E2E_APP_*` variables.
+
+Create the App once in the e2e org (`VENFORK_E2E_ORG`, default
+`memcard-dev`), with no webhook and the repository permissions Contents: read
+and write and Workflows: read and write. Install it on **All repositories**
+of that org: the test repos are created per run, so a selected-repositories
+install cannot include them.
+
+```bash
+VENFORK_E2E_APP_CLIENT_ID=Iv23… \
+VENFORK_E2E_APP_PRIVATE_KEY="$(cat app-key.pem)" \
+bun run test:e2e:dispatch
+```
 
 ## If a run is interrupted
 

@@ -48,7 +48,7 @@ CLI entry `src/index.ts` parses `argv[0]` as the command and dispatches via a sw
 
 `src/commands/` holds one file per command. Helpers shared by several commands live in `src/shared/`: `net.ts` (network-op safety), `managed-commit.ts` (managed-commit detection), `mirror-commit.ts` (building the managed commit), `divergence.ts`, `redaction.ts`, `worktree.ts` (temporary detached worktrees), `confirm.ts`, `constants.ts`. The rest are focused modules:
 
-- **`config.ts`** — the source of truth for persisted state. All cross-run state lives in `VenforkConfig` (`.venfork/config.json`) on an **orphan `venfork-config` branch** in the private mirror — never on a working branch. It tracks `upstreamUrl`, `publicForkUrl`, `mode`, `schedule`, workflow allow/block lists, the `preserve` allowlist, and link maps (`shippedBranches`, `pulledPrs`, `shippedIssues`, `pulledIssues`). Mutate via `updateVenforkConfig` with a `VenforkConfigPatch` (shallow-merge; `null` deletes an entry or clears a field). Read with `fetchVenforkConfig` (clones only the config branch to a temp dir) or `readVenforkConfigFromRepo`.
+- **`config.ts`** — the source of truth for persisted state. All cross-run state lives in `VenforkConfig` (`.venfork/config.json`) on an **orphan `venfork-config` branch** in the private mirror — never on a working branch. It tracks `upstreamUrl`, `publicForkUrl`, `mode`, `schedule`, `scheduleAuth` (top level; `'app'` or absent for token auth), workflow allow/block lists, the `preserve` allowlist, and link maps (`shippedBranches`, `pulledPrs`, `shippedIssues`, `pulledIssues`). Mutate via `updateVenforkConfig` with a `VenforkConfigPatch` (shallow-merge; `null` deletes an entry or clears a field). Read with `fetchVenforkConfig` (clones only the config branch to a temp dir) or `readVenforkConfigFromRepo`.
 - **`git.ts`** — thin git/gh wrappers (`checkGhAuth`, `getRemotes`, `getDefaultBranch`, `ghRepoExists`, `ghRepoIsForkOf`, …).
 - **`utils.ts`** — URL/shorthand parsing (`parseOwner`, `parseRepoName`, `parseRepoPath`, `normalizeGitHubRepoInput`); shorthand `owner/repo` is treated as `git@github.com:owner/repo.git`.
 - **`workflow.ts`** — generates the deterministic GitHub Actions sync YAML (`.github/workflows/venfork-sync.yml`).
@@ -80,6 +80,8 @@ Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/n
 - `VENFORK_GIT_TIMEOUT` — ms cap per network op (default 600000).
 - `VENFORK_NONINTERACTIVE=1` — auto-confirm prompts that explicitly opt in (`allowNonInteractive`); does **not** blanket-yes every prompt.
 - `VENFORK_PUSH_TOKEN` — token used by the generated sync workflow for pushes.
+- `VENFORK_APP_CLIENT_ID` / `VENFORK_APP_PRIVATE_KEY` - repo secrets the generated workflow mints its push token from when `scheduleAuth` is `app` (`schedule set --app`).
+- `VENFORK_E2E_APP_CLIENT_ID` / `VENFORK_E2E_APP_PRIVATE_KEY` - GitHub App credentials that enable the App variant of the e2e dispatch tier.
 - `VENFORK_SEED_CHUNK` / `VENFORK_SEED_RETRY_MS` — commit batch size and retry delay for the initial mirror seed push.
 - `VENFORK_INSTALL_SPEC` — repository variable read by the generated workflow to override the pinned `npm install -g` spec.
 
