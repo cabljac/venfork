@@ -2687,7 +2687,7 @@ describe('scheduleCommand with GitHub App auth', () => {
       }),
       stderr: '',
     });
-    mockResponses.set('git config --get remote.origin.url', {
+    mockResponses.set('git remote get-url origin', {
       exitCode: 0,
       stdout: 'git@github.com:acme/widget-private.git',
       stderr: '',
@@ -2727,6 +2727,35 @@ describe('scheduleCommand with GitHub App auth', () => {
         String(call[0]).includes('can read VENFORK_APP_PRIVATE_KEY')
       )
     ).toBe(true);
+  });
+
+  test('set --app asks for one App per mirror and names the key reach', async () => {
+    useConfig({});
+    (clack.outro as ReturnType<typeof mock>).mockClear();
+
+    await scheduleCommand('set', '0 */6 * * *', { auth: 'app' });
+
+    expect(outroText()).toContain('one App per mirror');
+    expect(outroText()).toContain(
+      'VENFORK_APP_PRIVATE_KEY can mint a token for every repository the App is installed on'
+    );
+  });
+
+  test('the outro names the owner origin resolves to, not its insteadOf shorthand', async () => {
+    useConfig({});
+    mockResponses.set('git config --get remote.origin.url', {
+      exitCode: 0,
+      stdout: 'gh:acme/widget-private',
+      stderr: '',
+    });
+    (clack.outro as ReturnType<typeof mock>).mockClear();
+
+    await scheduleCommand('set', '0 */6 * * *', { auth: 'app' });
+
+    expect(outroText()).toContain(
+      'gh secret set VENFORK_APP_CLIENT_ID --repo acme/widget-private'
+    );
+    expect(outroText()).not.toContain('<owner>/<mirror>');
   });
 
   test('set without a flag keeps app auth and prints no delete advice', async () => {

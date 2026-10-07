@@ -1,5 +1,4 @@
 import * as p from '@clack/prompts';
-import { $ } from 'execa';
 import {
   readVenforkConfigFromRepo,
   type ScheduleAuth,
@@ -10,6 +9,7 @@ import { getDefaultBranch } from '../git.js';
 import { applyConfigChange } from '../shared/config-change.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
 import { isValidCronExpression } from '../shared/cron.js';
+import { mirrorOriginPath } from '../shared/mirror-origin.js';
 import { netFetch } from '../shared/net.js';
 import {
   appAuthAdvice,
@@ -25,19 +25,6 @@ const MIRROR_PLACEHOLDER = '<owner>/<mirror>';
 export interface ScheduleOptions {
   /** Auth mode for `set`; omitted keeps the mode stored in venfork-config. */
   auth?: ScheduleAuth;
-}
-
-/**
- * `owner/name` of origin as configured, before `insteadOf` rewrites, or
- * null when origin is not a GitHub repo.
- */
-async function originRepoPath(repoDir: string): Promise<string | null> {
-  const result = await $({
-    cwd: repoDir,
-    reject: false,
-  })`git config --get remote.origin.url`;
-  if (result.exitCode !== 0) return null;
-  return parseRepoPath(String(result.stdout).trim()) || null;
 }
 
 /**
@@ -95,7 +82,7 @@ export async function scheduleCommand(
         process.exit(1);
       }
 
-      const mirrorRepo = await originRepoPath(repoDir);
+      const mirrorRepo = await mirrorOriginPath(repoDir);
       const mirrorPath = mirrorRepo ?? MIRROR_PLACEHOLDER;
       const current = await readVenforkConfigFromRepo(repoDir, {
         allowInvalidCron: true,
@@ -179,7 +166,8 @@ export async function scheduleCommand(
       s.stop('Schedule disabled and workflow removed');
       const defaultBranch = await getDefaultBranch('upstream', repoDir);
       const auth = scheduleAuthOf(currentConfig);
-      const mirrorPath = (await originRepoPath(repoDir)) ?? MIRROR_PLACEHOLDER;
+      const mirrorPath =
+        (await mirrorOriginPath(repoDir)) ?? MIRROR_PLACEHOLDER;
 
       p.outro(
         `✨ Scheduled sync disabled\n\nBranch: ${defaultBranch}\nWorkflow removed: ${SYNC_WORKFLOW_PATH}\n\nNothing reads the ${auth === 'app' ? 'GitHub App secrets' : 'VENFORK_PUSH_TOKEN secret'} now. Delete ${auth === 'app' ? 'them' : 'it'} unless you will turn the schedule back on (the auth mode is kept for the next schedule set):\n${secretDeleteCommands(

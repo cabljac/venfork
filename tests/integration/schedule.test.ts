@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { chmod, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import * as prompts from '@clack/prompts';
 import { quietPrompts } from '../harness/prompts.js';
 
@@ -175,6 +177,41 @@ describe('schedule with GitHub App auth', () => {
     const mirrorUrl = 'git@github.com:other/project-private.git';
     await fx.git(fx.work, 'config', `url.${fx.origin}.insteadOf`, mirrorUrl);
     await fx.git(fx.work, 'remote', 'set-url', 'origin', mirrorUrl);
+    const configBefore = await fx.sha(fx.origin, 'venfork-config');
+    const mainBefore = await fx.sha(fx.origin, 'main');
+
+    await expect(scheduleCommand('set', cron, { auth: 'app' })).rejects.toThrow(
+      'process.exit(1)'
+    );
+
+    expect(
+      String(
+        (prompts.log.error as ReturnType<typeof mock>).mock.calls.at(-1)?.[0]
+      )
+    ).toContain(
+      'the mirror is other/project-private and the public fork is acme/project'
+    );
+    expect(await fx.sha(fx.origin, 'venfork-config')).toBe(configBefore);
+    expect(await fx.sha(fx.origin, 'main')).toBe(mainBefore);
+  });
+
+  test('set --app reads the mirror owner through an insteadOf shorthand origin', async () => {
+    await usePublicForkOnGitHub();
+    const fakeSsh = path.join(fx.root, 'fake-ssh');
+    await writeFile(
+      fakeSsh,
+      `#!/bin/sh\nfor last; do :; done\nexec \${last%% *} '${fx.origin}'\n`
+    );
+    await chmod(fakeSsh, 0o755);
+    await fx.git(fx.work, 'config', 'core.sshCommand', fakeSsh);
+    await fx.git(fx.work, 'config', 'url.git@github.com:.insteadOf', 'gh:');
+    await fx.git(
+      fx.work,
+      'remote',
+      'set-url',
+      'origin',
+      'gh:other/project-private'
+    );
     const configBefore = await fx.sha(fx.origin, 'venfork-config');
     const mainBefore = await fx.sha(fx.origin, 'main');
 
