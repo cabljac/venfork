@@ -24,7 +24,9 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint .",
-    "check": "biome check --write ."
+    "check": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build && bun run smoke:node"
   },
   "files": [
     "dist",
