@@ -6,7 +6,11 @@ import {
   updateVenforkConfig,
   type VenforkConfig,
 } from '../config.js';
-import { ConfigError, SyncDivergenceError } from '../errors.js';
+import {
+  CommandExitError,
+  ConfigError,
+  SyncDivergenceError,
+} from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import {
   checkDivergence,
@@ -351,6 +355,6 @@ export async function syncCommand(
     if (!quiet) {
       p.outro('❌ Sync failed');
     }
-    process.exit(1);
+    throw new CommandExitError(1);
   }
 }

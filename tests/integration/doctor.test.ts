@@ -20,7 +20,7 @@ import {
   syncCommand,
 } from '../../src/commands.js';
 import { updateVenforkConfig } from '../../src/config.js';
-import { UNMIGRATED_MIRROR_STEPS } from '../../src/errors.js';
+import { CommandExitError, UNMIGRATED_MIRROR_STEPS } from '../../src/errors.js';
 import { VENFORK_VERSION } from '../../src/version.js';
 import { generateSyncWorkflow } from '../../src/workflow.js';
 import {
@@ -522,7 +522,7 @@ describe('the preserve check asks the tip builder sync uses', () => {
     expect(checks.preserve.detail).toContain('directory');
     await expect(
       syncCommand(undefined, { cwd: fx.work, quiet: true })
-    ).rejects.toThrow('process.exit(1)');
+    ).rejects.toThrow(new CommandExitError(1));
   });
 
   test('an upstream file at an ancestor of a preserved path fails as it does in sync', async () => {

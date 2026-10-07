@@ -5,7 +5,7 @@ import path from 'node:path';
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { createConfigBranch, readVenforkConfigFromRepo } from '../config.js';
-import { ConfigError } from '../errors.js';
+import { CommandExitError, ConfigError } from '../errors.js';
 import {
   getGitHubUsername,
   ghGitProtocol,
@@ -20,7 +20,6 @@ import {
   parseRepoName,
   parseRepoPath,
 } from '../utils.js';
-import { syncCommand } from './sync.js';
 
 async function ensureVenforkRemotes(
   cwd: string,
@@ -106,13 +105,17 @@ async function assertExistingConfigAgrees(
  *
  * @param publicForkRepoName - Optional GitHub repo name for the public fork under `owner` (see `gh repo fork --fork-name`). Defaults to the upstream repo basename. Use when the fork must differ (e.g. same org as upstream).
  * @param options.noPublic - Skip the public-fork hop entirely. Only `origin` (private mirror) and `upstream` are configured; `stage` later pushes branches directly to `upstream`. Mutually exclusive with `publicForkRepoName`.
+ * @param options.syncMirror - Quietly syncs the local clone at `cwd` when the fork or mirror already existed on GitHub.
  */
 export async function setupCommand(
-  upstreamUrl?: string,
-  privateMirrorName?: string,
-  organization?: string,
-  publicForkRepoName?: string,
-  options: { noPublic?: boolean } = {}
+  upstreamUrl: string | undefined,
+  privateMirrorName: string | undefined,
+  organization: string | undefined,
+  publicForkRepoName: string | undefined,
+  options: {
+    noPublic?: boolean;
+    syncMirror: (cwd: string) => Promise<void>;
+  }
 ): Promise<void> {
   const noPublic = options.noPublic === true;
   if (noPublic && publicForkRepoName?.trim()) {
@@ -148,7 +151,7 @@ export async function setupCommand(
 
     if (p.isCancel(response)) {
       p.cancel('Operation cancelled');
-      process.exit(130);
+      throw new CommandExitError(130);
     }
 
     finalUpstreamUrl = normalizeGitHubRepoInput(response as string);
@@ -161,7 +164,7 @@ export async function setupCommand(
       'Invalid upstream repository. Pass a GitHub URL or owner/repo.'
     );
     p.outro('❌ Setup failed');
-    process.exit(1);
+    throw new CommandExitError(1);
   }
 
   // Prompt for private mirror name only if not provided
@@ -180,7 +183,7 @@ export async function setupCommand(
 
     if (p.isCancel(response)) {
       p.cancel('Operation cancelled');
-      process.exit(130);
+      throw new CommandExitError(130);
     }
 
     finalPrivateMirrorName = response as string;
@@ -198,7 +201,7 @@ export async function setupCommand(
       'Invalid --fork-name: use only letters, numbers, periods, hyphens, and underscores.'
     );
     p.outro('❌ Setup failed');
-    process.exit(1);
+    throw new CommandExitError(1);
   }
   const resolvedPublicForkName = forkNameFromCli || upstreamRepoBaseName;
   const useForkNameFlag = resolvedPublicForkName !== upstreamRepoBaseName;
@@ -225,11 +228,11 @@ export async function setupCommand(
 
     if (p.isCancel(confirmed)) {
       p.outro('❌ Setup cancelled');
-      process.exit(130);
+      throw new CommandExitError(130);
     }
     if (!confirmed) {
       p.outro('❌ Setup cancelled');
-      process.exit(0);
+      throw new CommandExitError(0);
     }
   }
 
@@ -253,17 +256,20 @@ export async function setupCommand(
     }
   };
 
-  // Handle Ctrl+C and kill signals
+  let interrupt: (reason: CommandExitError) => void = () => {};
+  const interrupted = new Promise<never>((_, reject) => {
+    interrupt = reject;
+  });
   const signalHandler = async () => {
     s.stop('Setup interrupted');
     await cleanup();
-    process.exit(130); // Standard exit code for SIGINT
+    interrupt(new CommandExitError(130));
   };
 
   process.on('SIGINT', signalHandler);
   process.on('SIGTERM', signalHandler);
 
-  try {
+  const steps = async () => {
     const upstreamRepoPath = parseRepoPath(config.upstreamUrl);
     const publicForkName = resolvedPublicForkName;
     const publicForkFullName = `${owner}/${publicForkName}`;
@@ -470,7 +476,7 @@ export async function setupCommand(
         'Repos already existed on GitHub; syncing default branch from upstream into this clone'
       );
       const repoAbs = path.resolve(repoDir);
-      await syncCommand(undefined, { cwd: repoAbs, quiet: true });
+      await options.syncMirror(repoAbs);
     }
 
     // Show remote configuration
@@ -496,12 +502,17 @@ Upstream: ${config.upstreamUrl} (read-only)`,
   # Do your work, push to origin (private)
   # When ready to share: venfork stage feature-branch`
     );
+  };
+
+  try {
+    await Promise.race([interrupted, steps()]);
   } catch (error) {
+    if (error instanceof CommandExitError) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Setup failed');
     await cleanup();
-    process.exit(1);
+    throw new CommandExitError(1);
   } finally {
     // Ensure cleanup and remove signal handlers
     await cleanup();

@@ -7,6 +7,7 @@ import {
   updateVenforkConfig,
   type VenforkConfigPatch,
 } from '../config.js';
+import { CommandExitError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { applyConfigChange } from '../shared/config-change.js';
 import { changedFilesInCommit } from '../shared/divergence.js';
@@ -203,6 +204,6 @@ export async function preserveCommand(
   } catch (error) {
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Preserve command failed');
-    process.exit(1);
+    throw new CommandExitError(1);
   }
 }

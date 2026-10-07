@@ -1,7 +1,7 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
-import { RemoteNotFoundError } from '../errors.js';
+import { CommandExitError, RemoteNotFoundError } from '../errors.js';
 import { parsePositiveInt } from '../shared/args.js';
 import { netExec, netFailureReason } from '../shared/net.js';
 import { parseRepoPath } from '../utils.js';
@@ -96,7 +96,7 @@ export async function pullRequestCommand(
     p.outro(
       'Usage: venfork pull pr <pr-number-or-url> [--branch-name <override>] [--no-push]'
     );
-    process.exit(1);
+    throw new CommandExitError(1);
   }
 
   const s = p.spinner();
@@ -245,6 +245,6 @@ export async function pullRequestCommand(
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Pull request import failed');
-    process.exit(1);
+    throw new CommandExitError(1);
   }
 }

@@ -21,7 +21,7 @@ import {
   readVenforkConfigFromRepo,
   updateVenforkConfig,
 } from '../../src/config.js';
-import { SyncDivergenceError } from '../../src/errors.js';
+import { CommandExitError, SyncDivergenceError } from '../../src/errors.js';
 import { buildMirrorTip } from '../../src/shared/mirror-commit.js';
 import { netExec, netFailureReason } from '../../src/shared/net.js';
 import {
@@ -59,7 +59,7 @@ async function originDev(): Promise<string> {
 }
 
 async function expectSyncError(message: string): Promise<void> {
-  await expect(sync()).rejects.toThrow('process.exit(1)');
+  await expect(sync()).rejects.toThrow(new CommandExitError(1));
   expect(prompts.log.error).toHaveBeenCalledWith(
     expect.stringContaining(message)
   );
@@ -70,7 +70,7 @@ describe('preserve cannot capture venfork state', () => {
     await scheduleCommand('set', '0 * * * *');
 
     await expect(preserveCommand('add', [WF])).rejects.toThrow(
-      'process.exit(1)'
+      new CommandExitError(1)
     );
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining(`Invalid preserve path '${WF}'`)
@@ -298,7 +298,7 @@ describe('schedule changes do not drift from origin', () => {
     await fx.git(dev, 'push', '--quiet', '--force', 'origin', 'main');
 
     await expect(scheduleCommand('set', '15 3 * * *')).rejects.toThrow(
-      'process.exit(1)'
+      new CommandExitError(1)
     );
 
     expect((await readVenforkConfigFromRepo(fx.work))?.schedule?.cron).toBe(
@@ -315,7 +315,7 @@ describe('schedule changes do not drift from origin', () => {
     await chmod(hook, 0o755);
 
     await expect(scheduleCommand('set', '0 * * * *')).rejects.toThrow(
-      'process.exit(1)'
+      new CommandExitError(1)
     );
 
     expect(

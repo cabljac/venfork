@@ -210,3 +210,14 @@ export class UnmigratedMirrorError extends VenforkError {
     this.name = 'UnmigratedMirrorError';
   }
 }
+
+/**
+ * Thrown by a command that has already printed its outcome. `src/index.ts`
+ * exits with `exitCode` and prints nothing more.
+ */
+export class CommandExitError extends VenforkError {
+  constructor(public readonly exitCode: number) {
+    super(`Command exited with code ${exitCode}`);
+    this.name = 'CommandExitError';
+  }
+}
