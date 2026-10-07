@@ -6,6 +6,7 @@ import { quietPrompts } from '../harness/prompts.js';
 mock.module('@clack/prompts', quietPrompts);
 
 import { stageCommand, syncCommand } from '../../src/commands.js';
+import { CommandExitError } from '../../src/errors.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
@@ -68,7 +69,7 @@ async function publishedText(repo: string, range: string): Promise<string> {
 }
 
 async function expectRefused(branch: string, message: string): Promise<void> {
-  await expect(stageCommand(branch)).rejects.toThrow('process.exit(1)');
+  await expect(stageCommand(branch)).rejects.toThrow(new CommandExitError(1));
   expect(prompts.log.error).toHaveBeenCalledWith(
     expect.stringContaining(message)
   );
@@ -249,7 +250,9 @@ describe.each(['standard', 'no-public'] as const)(
       await commitFile('INTERNAL.md', 'internal\n', 'chore: internal');
       const before = await fx.sha(target(), 'main');
 
-      await expect(stageCommand('main')).rejects.toThrow('process.exit(1)');
+      await expect(stageCommand('main')).rejects.toThrow(
+        new CommandExitError(1)
+      );
 
       expect(prompts.log.error).toHaveBeenCalledWith(
         expect.stringContaining("upstream's default branch")

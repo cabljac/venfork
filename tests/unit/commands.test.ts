@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import * as realFsPromises from 'node:fs/promises';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import * as clack from '@clack/prompts';
 
@@ -203,6 +204,10 @@ function getMockExecaResponse(
     return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
   }
 
+  if (command.startsWith('test -d ')) {
+    return Promise.reject(new Error('no such directory'));
+  }
+
   // For signal handler tests: make fork command hang to prevent cleanup
   // This keeps setupCommand running so signal handlers remain registered
   if (command.includes('gh repo fork') && shouldHangOnFork) {
@@ -293,23 +298,45 @@ import {
   issueCommand,
   pullRequestCommand,
   renderPulledComments,
+  setupCommand as runSetupCommand,
   scheduleCommand,
-  setupCommand,
   showHelp,
   stageCommand,
   syncCommand,
   workflowsCommand,
 } from '../../src/commands.js';
-import { SyncDivergenceError } from '../../src/errors.js';
+import { setupSyncMirror } from '../../src/dispatch.js';
+import { CommandExitError, SyncDivergenceError } from '../../src/errors.js';
+
+/** Calls setupCommand with the quiet sync that src/index.ts wires in, unless a test passes its own. */
+function setupCommand(
+  upstreamUrl?: string,
+  privateMirrorName?: string,
+  organization?: string,
+  publicForkRepoName?: string,
+  options: {
+    noPublic?: boolean;
+    syncMirror?: (cwd: string) => Promise<void>;
+  } = {}
+): Promise<void> {
+  return runSetupCommand(
+    upstreamUrl,
+    privateMirrorName,
+    organization,
+    publicForkRepoName,
+    { syncMirror: setupSyncMirror(), ...options }
+  );
+}
 
 /**
  * Helper function to start setupCommand and wait for async operations to progress
- * to the point where signal handlers are registered
+ * to the point where signal handlers are registered. `result` is the
+ * still-pending setup promise.
  */
 async function startSetupCommand(
   upstreamUrl = 'git@github.com:test/repo.git',
   privateMirrorName = 'test-vendor'
-): Promise<void> {
+): Promise<{ result: Promise<void> }> {
   // Enable fork hanging to keep setupCommand running for signal handler tests
   shouldHangOnFork = true;
 
@@ -321,6 +348,7 @@ async function startSetupCommand(
 
   // Suppress unhandled rejection warnings
   promise.catch(() => {});
+  return { result: promise };
 }
 
 /** Gives origin, upstream and public different GitHub URLs; origin is private. */
@@ -412,17 +440,15 @@ describe('setupCommand - execution tests', () => {
     expect(signalHandlers.has('SIGTERM')).toBe(true);
   });
 
-  test('cleanup called when SIGINT triggered', async () => {
-    await startSetupCommand();
+  test('cleanup called and setup ends with exit code 130 when SIGINT triggered', async () => {
+    const { result } = await startSetupCommand();
 
     const handler = signalHandlers.get('SIGINT');
     expect(handler).toBeDefined();
 
-    try {
-      await handler?.();
-    } catch {
-      // Expected to throw on process.exit(130)
-    }
+    await handler?.();
+
+    await expect(result).rejects.toThrow(new CommandExitError(130));
 
     // Verify rm was called
     expect(rmCalls.length).toBeGreaterThan(0);
@@ -728,6 +754,40 @@ describe('setupCommand - execution tests', () => {
 });
 
 describe('setupCommand - idempotent recovery', () => {
+  test('syncs the recovered clone once through syncMirror', async () => {
+    mockResponses.set('gh repo create', {
+      exitCode: 1,
+      stderr: 'name already exists on this account',
+      stdout: '',
+    });
+    const syncMirror = mock((_cwd: string) => Promise.resolve());
+
+    await setupCommand(
+      'git@github.com:test/repo.git',
+      'test-vendor',
+      undefined,
+      undefined,
+      { syncMirror }
+    );
+
+    expect(syncMirror).toHaveBeenCalledTimes(1);
+    expect(syncMirror).toHaveBeenCalledWith(path.resolve('test-vendor'));
+  });
+
+  test('a fresh setup never calls syncMirror', async () => {
+    const syncMirror = mock((_cwd: string) => Promise.resolve());
+
+    await setupCommand(
+      'git@github.com:test/repo.git',
+      'test-vendor',
+      undefined,
+      undefined,
+      { syncMirror }
+    );
+
+    expect(syncMirror).not.toHaveBeenCalled();
+  });
+
   test('skips upstream seed clone and runs sync when private mirror already exists on GitHub', async () => {
     mockResponses.set('gh repo create', {
       exitCode: 1,
@@ -737,7 +797,7 @@ describe('setupCommand - idempotent recovery', () => {
     try {
       await setupCommand('git@github.com:test/repo.git', 'test-vendor');
     } catch {
-      // process.exit if a nested command fails unexpectedly
+      // a nested command may fail unexpectedly
     }
 
     const cloneCalls = execaCalls.filter((c) => c.includes('gh repo clone'));
@@ -764,7 +824,7 @@ describe('setupCommand - idempotent recovery', () => {
 
     await expect(
       setupCommand('git@github.com:test/repo.git', 'test-vendor')
-    ).rejects.toThrow('process.exit(1)');
+    ).rejects.toThrow(new CommandExitError(1));
 
     expect(clack.log.error).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -840,7 +900,7 @@ describe('setupCommand - idempotent recovery', () => {
         'invertase',
         'firebase-extensions'
       )
-    ).rejects.toThrow('process.exit(');
+    ).rejects.toThrow(new CommandExitError(1));
   });
 
   test('fails when private mirror create fails and repo is not found on GitHub', async () => {
@@ -857,7 +917,7 @@ describe('setupCommand - idempotent recovery', () => {
 
     await expect(
       setupCommand('git@github.com:test/repo.git', 'test-vendor')
-    ).rejects.toThrow('process.exit(');
+    ).rejects.toThrow(new CommandExitError(1));
   });
 });
 
@@ -1138,7 +1198,7 @@ describe('syncCommand', () => {
       caught = true;
     }
 
-    // process.exit(1) is mocked to throw; sync errors before commit-tree.
+    // sync errors before commit-tree.
     expect(caught).toBe(true);
     expect(
       execaCalls.some(
@@ -1432,14 +1492,7 @@ describe('stageCommand', () => {
   });
 
   test('requires branch parameter', async () => {
-    try {
-      await stageCommand('');
-    } catch {
-      // Expected to exit
-    }
-
-    // Process.exit should have been called
-    expect(process.exit).toHaveBeenCalled();
+    await expect(stageCommand('')).rejects.toThrow(new CommandExitError(1));
   });
 
   test('omits workflow commits from public staging history', async () => {
@@ -1606,7 +1659,7 @@ describe('stageCommand', () => {
     );
 
     await expect(stageCommand('feature-branch')).rejects.toThrow(
-      'process.exit(1)'
+      new CommandExitError(1)
     );
 
     expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
@@ -1792,10 +1845,8 @@ describe('stageCommand', () => {
     });
 
     await expect(stageCommand('feature-branch')).rejects.toThrow(
-      'process.exit('
+      new CommandExitError(1)
     );
-
-    expect(process.exit).toHaveBeenCalledWith(1);
     // Guard must run before the worktree is created, so no cherry-picks happen.
     expect(
       execaCalls.some((cmd) => cmd.includes(' worktree add --detach'))
@@ -1833,10 +1884,8 @@ describe('stageCommand', () => {
     );
 
     await expect(stageCommand('feature-branch')).rejects.toThrow(
-      'process.exit('
+      new CommandExitError(1)
     );
-
-    expect(process.exit).toHaveBeenCalledWith(1);
     expect(
       execaCalls.some((cmd) => cmd.includes(' worktree add --detach'))
     ).toBe(false);
@@ -3046,14 +3095,9 @@ describe('setupCommand - VENFORK_ORG environment variable', () => {
     // Set confirm to return false (decline)
     confirmResponse = false;
 
-    try {
-      await setupCommand('git@github.com:test/repo.git', 'test-vendor');
-    } catch {
-      // Expected - command should exit
-    }
-
-    // Should call process.exit
-    expect(process.exit).toHaveBeenCalledWith(0);
+    await expect(
+      setupCommand('git@github.com:test/repo.git', 'test-vendor')
+    ).rejects.toThrow(new CommandExitError(0));
 
     // Should NOT create any repos
     const createCalls = execaCalls.filter((cmd) =>
@@ -3247,13 +3291,20 @@ describe('cloneCommand remote transport', () => {
 
 describe('cloneCommand - error paths', () => {
   test('requires vendor repo URL', async () => {
-    try {
-      await cloneCommand();
-    } catch {
-      // Expected - process.exit(1) throws
-    }
+    await expect(cloneCommand()).rejects.toThrow(new CommandExitError(1));
+  });
 
-    expect(process.exit).toHaveBeenCalledWith(1);
+  test('stops before cloning when the target directory already exists', async () => {
+    mockResponses.set('test -d', { exitCode: 0, stdout: '', stderr: '' });
+
+    await expect(cloneCommand('acme/project-private')).rejects.toThrow(
+      new CommandExitError(1)
+    );
+
+    expect(clack.log.error).toHaveBeenCalledWith(
+      "Directory 'project-private' already exists."
+    );
+    expect(execaCalls.some((cmd) => cmd.includes('gh repo clone'))).toBe(false);
   });
 });
 
@@ -3266,7 +3317,7 @@ describe('syncCommand - error paths', () => {
         : Promise.reject(new Error(stderr))
     );
 
-    await expect(syncCommand('main')).rejects.toThrow('process.exit(1)');
+    await expect(syncCommand('main')).rejects.toThrow(new CommandExitError(1));
     expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
   });
 
@@ -3444,9 +3495,7 @@ describe('syncCommand - error paths', () => {
       Promise.reject(new Error('fatal: bad revision'))
     );
 
-    await expect(syncCommand('main')).rejects.toThrow('process.exit(');
-
-    expect(process.exit).toHaveBeenCalledWith(1);
+    await expect(syncCommand('main')).rejects.toThrow(new CommandExitError(1));
     expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
   });
 
@@ -3465,7 +3514,7 @@ describe('syncCommand - error paths', () => {
       )
     );
 
-    await expect(syncCommand('main')).rejects.toThrow('process.exit(');
+    await expect(syncCommand('main')).rejects.toThrow(new CommandExitError(1));
 
     expect(clack.log.error).toHaveBeenLastCalledWith(
       'upstream/main not found after fetch. Check the upstream remote and the default branch name.'
@@ -3543,13 +3592,7 @@ describe('syncCommand - error paths', () => {
       Promise.reject(new Error('Fetch failed'))
     );
 
-    try {
-      await syncCommand('main');
-    } catch {
-      // Expected
-    }
-
-    expect(process.exit).toHaveBeenCalledWith(1);
+    await expect(syncCommand('main')).rejects.toThrow(new CommandExitError(1));
   });
 
   test('handles push errors', async () => {
@@ -3557,13 +3600,7 @@ describe('syncCommand - error paths', () => {
       Promise.reject(new Error('Push failed'))
     );
 
-    try {
-      await syncCommand('main');
-    } catch {
-      // Expected
-    }
-
-    expect(process.exit).toHaveBeenCalledWith(1);
+    await expect(syncCommand('main')).rejects.toThrow(new CommandExitError(1));
   });
 });
 
@@ -3652,7 +3689,7 @@ describe('stageCommand --pr payload', () => {
 
       await expect(
         stageCommand('feature-branch', { createPr: true })
-      ).rejects.toThrow('process.exit(1)');
+      ).rejects.toThrow(new CommandExitError(1));
 
       expect(bodies).toEqual([]);
       expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
@@ -3720,7 +3757,7 @@ describe('stageCommand --pr payload', () => {
 
     await expect(
       stageCommand('feature-branch', { createPr: true })
-    ).rejects.toThrow('process.exit(1)');
+    ).rejects.toThrow(new CommandExitError(1));
 
     expect(clack.log.error).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -3739,13 +3776,9 @@ describe('stageCommand - error paths', () => {
       stderr: 'not found',
     });
 
-    try {
-      await stageCommand('nonexistent-branch');
-    } catch {
-      // Expected - process.exit throws
-    }
-
-    expect(process.exit).toHaveBeenCalledWith(1);
+    await expect(stageCommand('nonexistent-branch')).rejects.toThrow(
+      new CommandExitError(1)
+    );
   });
 
   test('throws RemoteNotFoundError when public remote missing', async () => {
@@ -3755,13 +3788,9 @@ describe('stageCommand - error paths', () => {
       stderr: 'not found',
     });
 
-    try {
-      await stageCommand('feature-branch');
-    } catch {
-      // Expected
-    }
-
-    expect(process.exit).toHaveBeenCalledWith(1);
+    await expect(stageCommand('feature-branch')).rejects.toThrow(
+      new CommandExitError(1)
+    );
   });
 });
 
@@ -3953,7 +3982,9 @@ describe('pullRequestCommand', () => {
       stderr: '',
     });
 
-    await expect(pullRequestCommand('42')).rejects.toThrow('process.exit(');
+    await expect(pullRequestCommand('42')).rejects.toThrow(
+      new CommandExitError(1)
+    );
     expect(
       execaCalls.some((cmd) => cmd.includes('git fetch upstream pull/42'))
     ).toBe(false);
@@ -3966,7 +3997,7 @@ describe('pullRequestCommand', () => {
       stderr: '',
     });
     await expect(pullRequestCommand('not-a-pr-ref')).rejects.toThrow(
-      'process.exit('
+      new CommandExitError(1)
     );
   });
 });
@@ -4262,7 +4293,7 @@ describe('issueCommand', () => {
       });
 
       await expect(issueCommand('stage', '7')).rejects.toThrow(
-        'process.exit(1)'
+        new CommandExitError(1)
       );
 
       expect(execaCalls.some((cmd) => cmd.includes('gh issue create'))).toBe(
@@ -4346,13 +4377,13 @@ describe('issueCommand', () => {
     await expect(
       // biome-ignore lint/suspicious/noExplicitAny: testing invalid runtime input
       issueCommand('burn' as any, '7')
-    ).rejects.toThrow('process.exit(');
+    ).rejects.toThrow(new CommandExitError(1));
   });
 
   test('rejects missing target', async () => {
     setupCommonRemotes();
     await expect(issueCommand('stage', undefined)).rejects.toThrow(
-      'process.exit('
+      new CommandExitError(1)
     );
   });
 
@@ -4714,14 +4745,14 @@ describe('prompt cancel exits 130', () => {
 
   test('setup: cancelled upstream prompt', async () => {
     promptCancelled = true;
-    await expect(setupCommand()).rejects.toThrow('process.exit(130)');
+    await expect(setupCommand()).rejects.toThrow(new CommandExitError(130));
     expect(pushedOrCreated()).toEqual([]);
   });
 
   test('setup: cancelled mirror name prompt', async () => {
     promptCancelled = true;
     await expect(setupCommand('git@github.com:test/repo.git')).rejects.toThrow(
-      'process.exit(130)'
+      new CommandExitError(130)
     );
     expect(pushedOrCreated()).toEqual([]);
   });
@@ -4730,7 +4761,7 @@ describe('prompt cancel exits 130', () => {
     promptCancelled = true;
     await expect(
       setupCommand('git@github.com:test/repo.git', 'test-vendor')
-    ).rejects.toThrow('process.exit(130)');
+    ).rejects.toThrow(new CommandExitError(130));
     expect(pushedOrCreated()).toEqual([]);
   });
 
@@ -4772,7 +4803,7 @@ describe('prompt cancel exits 130', () => {
       });
       promptCancelled = true;
       await expect(issueCommand('stage', '7')).rejects.toThrow(
-        'process.exit(130)'
+        new CommandExitError(130)
       );
       expect(pushedOrCreated()).toEqual([]);
     });
@@ -4793,7 +4824,7 @@ describe('prompt cancel exits 130', () => {
       });
       promptCancelled = true;
       await expect(issueCommand('pull', '1234')).rejects.toThrow(
-        'process.exit(130)'
+        new CommandExitError(130)
       );
       expect(pushedOrCreated()).toEqual([]);
     });
@@ -4802,7 +4833,7 @@ describe('prompt cancel exits 130', () => {
       mockManagedCommitOnBranch();
       promptCancelled = true;
       await expect(stageCommand('feature-branch')).rejects.toThrow(
-        'process.exit(130)'
+        new CommandExitError(130)
       );
       expect(pushedOrCreated()).toEqual([]);
     });

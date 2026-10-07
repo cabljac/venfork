@@ -52,7 +52,7 @@ mock.module('../../src/shared/net.js', () => ({
 
 import { syncCommand } from '../../src/commands.js';
 import { updateVenforkConfig } from '../../src/config.js';
-import { SyncDivergenceError } from '../../src/errors.js';
+import { CommandExitError, SyncDivergenceError } from '../../src/errors.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
@@ -110,7 +110,7 @@ describe('sync works from one snapshot of origin', () => {
       await fx.git(fx.work, 'fetch', '--quiet', 'origin');
     };
 
-    await expect(sync()).rejects.toThrow('process.exit(1)');
+    await expect(sync()).rejects.toThrow(new CommandExitError(1));
 
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining('moved since this sync fetched it')

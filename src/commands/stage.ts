@@ -7,6 +7,7 @@ import {
 } from '../config.js';
 import {
   BranchNotFoundError,
+  CommandExitError,
   GitError,
   RemoteNotFoundError,
 } from '../errors.js';
@@ -600,15 +601,13 @@ export async function stageCommand(
     p.outro(
       'Usage: venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>]. Run `venfork stage --help` for every option.'
     );
-    process.exit(1);
+    throw new CommandExitError(1);
   }
 
   const createPr = Boolean(options.createPr || options.draft);
 
   const s = p.spinner();
   const repoDir = process.cwd();
-  let abortCode: number | undefined;
-
   try {
     s.start('Verifying branch and fetching upstream and origin');
     const plan = await planStaging(branch, repoDir);
@@ -734,14 +733,12 @@ export async function stageCommand(
 
     if (p.isCancel(shouldStage)) {
       p.cancel('Operation cancelled');
-      abortCode = 130;
-      return;
+      throw new CommandExitError(130);
     }
 
     if (!shouldStage) {
       p.outro('Stage cancelled');
-      abortCode = 0;
-      return;
+      throw new CommandExitError(0);
     }
 
     await pushStagedHead(plan, prepared.head, repoDir, s);
@@ -845,11 +842,10 @@ export async function stageCommand(
 
     p.outro('✨ Stage complete!');
   } catch (error) {
+    if (error instanceof CommandExitError) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Stage failed');
-    process.exit(1);
-  } finally {
-    if (abortCode !== undefined) process.exit(abortCode);
+    throw new CommandExitError(1);
   }
 }

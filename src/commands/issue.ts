@@ -1,7 +1,7 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
-import { RemoteNotFoundError } from '../errors.js';
+import { CommandExitError, RemoteNotFoundError } from '../errors.js';
 import { parsePositiveInt } from '../shared/args.js';
 import { confirmOrAutoYes } from '../shared/confirm.js';
 import {
@@ -127,19 +127,17 @@ export async function issueCommand(
       `Usage: venfork ${issueUsage(action)} <number-or-url> [--title <text>]`
     );
     p.outro('');
-    process.exit(1);
+    throw new CommandExitError(1);
   }
 
   if (action !== 'stage' && action !== 'pull') {
     p.log.error(`Unknown action '${action}'. Expected one of: stage, pull.`);
     p.outro('');
-    process.exit(1);
+    throw new CommandExitError(1);
   }
 
   const s = p.spinner();
   const repoDir = process.cwd();
-  let abortCode: number | undefined;
-
   try {
     s.start('Resolving remotes');
     const upstreamUrlResult = await $({
@@ -205,8 +203,7 @@ export async function issueCommand(
       });
       if (p.isCancel(ok) || !ok) {
         p.outro('Stage cancelled');
-        abortCode = p.isCancel(ok) ? 130 : 0;
-        return;
+        throw new CommandExitError(p.isCancel(ok) ? 130 : 0);
       }
 
       s.start('Opening upstream issue');
@@ -275,8 +272,7 @@ export async function issueCommand(
     });
     if (p.isCancel(ok) || !ok) {
       p.outro('Pull cancelled');
-      abortCode = p.isCancel(ok) ? 130 : 0;
-      return;
+      throw new CommandExitError(p.isCancel(ok) ? 130 : 0);
     }
 
     s.start('Opening internal issue');
@@ -307,11 +303,10 @@ export async function issueCommand(
 
     p.outro(`✨ Issue pulled: ${created.url}`);
   } catch (error) {
+    if (error instanceof CommandExitError) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Issue command failed');
-    process.exit(1);
-  } finally {
-    if (abortCode !== undefined) process.exit(abortCode);
+    throw new CommandExitError(1);
   }
 }

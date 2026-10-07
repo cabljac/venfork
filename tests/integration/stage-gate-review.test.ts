@@ -7,6 +7,7 @@ import { quietPrompts } from '../harness/prompts.js';
 mock.module('@clack/prompts', quietPrompts);
 
 import { stageCommand, syncCommand } from '../../src/commands.js';
+import { CommandExitError } from '../../src/errors.js';
 import {
   assertPublishableCommits,
   collectMirrorBlobs,
@@ -58,7 +59,9 @@ async function published(): Promise<boolean> {
 }
 
 async function expectRefused(...messages: string[]): Promise<void> {
-  await expect(stageCommand('feature')).rejects.toThrow('process.exit(1)');
+  await expect(stageCommand('feature')).rejects.toThrow(
+    new CommandExitError(1)
+  );
   for (const message of messages) {
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining(message)

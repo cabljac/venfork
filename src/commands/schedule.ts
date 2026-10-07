@@ -1,6 +1,7 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { readVenforkConfigFromRepo } from '../config.js';
+import { CommandExitError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { applyConfigChange } from '../shared/config-change.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
@@ -29,12 +30,12 @@ export async function scheduleCommand(
       if (!cron) {
         p.log.error('Cron expression is required');
         p.outro('Usage: venfork schedule set "<cron>"');
-        process.exit(1);
+        throw new CommandExitError(1);
       }
       if (!isValidCronExpression(cron)) {
         p.log.error('Invalid cron expression (expected 5 fields)');
         p.outro('Usage: venfork schedule set "<cron>"');
-        process.exit(1);
+        throw new CommandExitError(1);
       }
 
       s.start('Updating schedule and the workflow on the default branch');
@@ -129,11 +130,12 @@ export async function scheduleCommand(
     p.outro(
       'Usage: venfork schedule <status|set <cron>|disable>\nExample: venfork schedule set "0 */6 * * *"'
     );
-    process.exit(1);
+    throw new CommandExitError(1);
   } catch (error) {
+    if (error instanceof CommandExitError) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Schedule command failed');
-    process.exit(1);
+    throw new CommandExitError(1);
   }
 }

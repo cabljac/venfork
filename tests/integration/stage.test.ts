@@ -7,6 +7,7 @@ import { quietPrompts } from '../harness/prompts.js';
 mock.module('@clack/prompts', quietPrompts);
 
 import { stageCommand, syncCommand } from '../../src/commands.js';
+import { CommandExitError } from '../../src/errors.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
@@ -119,7 +120,9 @@ describe('stage against real repos', () => {
     await Bun.write(`${fx.work}/${CALLER}`, 'edited on the branch\n');
     await fx.git(fx.work, 'commit', '--quiet', '-am', 'chore: tweak caller');
 
-    await expect(stageCommand('feature')).rejects.toThrow('process.exit(1)');
+    await expect(stageCommand('feature')).rejects.toThrow(
+      new CommandExitError(1)
+    );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining(`preserved mirror-only path(s) ${CALLER}`)
@@ -152,7 +155,9 @@ async function useMode(mode: 'standard' | 'no-public'): Promise<void> {
 }
 
 async function expectLeakRefused(): Promise<void> {
-  await expect(stageCommand('feature')).rejects.toThrow('process.exit(1)');
+  await expect(stageCommand('feature')).rejects.toThrow(
+    new CommandExitError(1)
+  );
   expect(prompts.log.error).toHaveBeenCalledWith(
     expect.stringContaining(`mirror-only path(s) ${DOC}`)
   );
@@ -200,7 +205,7 @@ describe('stage refuses branches that are not upstream work', () => {
     await fx.git(fx.work, 'branch', 'venfork-config', 'origin/venfork-config');
 
     await expect(stageCommand('venfork-config')).rejects.toThrow(
-      'process.exit(1)'
+      new CommandExitError(1)
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
@@ -217,7 +222,9 @@ describe('stage refuses branches that are not upstream work', () => {
     await fx.git(fx.work, 'add', 'lonely.txt');
     await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: lonely');
 
-    await expect(stageCommand('lonely')).rejects.toThrow('process.exit(1)');
+    await expect(stageCommand('lonely')).rejects.toThrow(
+      new CommandExitError(1)
+    );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining('no history in common with upstream/main')

@@ -1,6 +1,7 @@
 import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { fetchVenforkConfig } from '../config.js';
+import { CommandExitError } from '../errors.js';
 import { ghGitProtocol } from '../git.js';
 import {
   githubUrlForProtocol,
@@ -23,7 +24,7 @@ export async function cloneCommand(
   if (!vendorRepoUrl?.trim()) {
     p.log.error('Vendor repository URL is required');
     p.outro('❌ Clone failed');
-    process.exit(1);
+    throw new CommandExitError(1);
   }
 
   const vendorCloneUrl = normalizeGitHubRepoInput(vendorRepoUrl);
@@ -32,7 +33,7 @@ export async function cloneCommand(
       'Invalid vendor repository. Use a GitHub URL or owner/repo (e.g. invertase/project-private).'
     );
     p.outro('❌ Clone failed');
-    process.exit(1);
+    throw new CommandExitError(1);
   }
 
   const s = p.spinner();
@@ -46,14 +47,14 @@ export async function cloneCommand(
       throw new Error('Invalid vendor repository URL');
     }
 
-    // Check if directory already exists
-    try {
-      await $`test -d ${vendorRepoName}`;
+    const dirExists = await $`test -d ${vendorRepoName}`.then(
+      () => true,
+      () => false
+    );
+    if (dirExists) {
       p.log.error(`Directory '${vendorRepoName}' already exists.`);
       p.outro('❌ Clone failed');
-      process.exit(1);
-    } catch {
-      // Directory doesn't exist, good to proceed
+      throw new CommandExitError(1);
     }
 
     // Step 2: Clone vendor repository (gh respects git_protocol and accepts owner/repo)
@@ -131,7 +132,7 @@ export async function cloneCommand(
           });
           if (p.isCancel(response) || !(response as string).trim()) {
             p.outro('❌ Clone cancelled');
-            process.exit(1);
+            throw new CommandExitError(1);
           }
           upstreamUrl = (response as string).trim();
         }
@@ -166,7 +167,7 @@ export async function cloneCommand(
 
           if (p.isCancel(response)) {
             p.outro('❌ Clone cancelled');
-            process.exit(1);
+            throw new CommandExitError(1);
           }
 
           publicForkUrl = response as string;
@@ -204,7 +205,7 @@ export async function cloneCommand(
 
             if (p.isCancel(response)) {
               p.outro('❌ Clone cancelled');
-              process.exit(1);
+              throw new CommandExitError(1);
             }
 
             upstreamUrl = response as string;
@@ -259,9 +260,10 @@ export async function cloneCommand(
   venfork stage feature-branch`
     );
   } catch (error) {
+    if (error instanceof CommandExitError) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Clone failed');
-    process.exit(1);
+    throw new CommandExitError(1);
   }
 }
