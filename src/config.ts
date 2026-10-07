@@ -81,6 +81,13 @@ export interface VenforkConfig {
     cron: string;
     enabled: boolean;
   };
+  /**
+   * How the scheduled sync workflow authenticates its pushes. `'app'` mints
+   * a GitHub App installation token at run time; absent means the
+   * `VENFORK_PUSH_TOKEN` secret. Kept top level because older CLIs rebuild
+   * `schedule` field by field and would drop a nested key.
+   */
+  scheduleAuth?: ScheduleAuth;
   enabledWorkflows?: string[];
   disabledWorkflows?: string[];
   /**
@@ -128,6 +135,20 @@ export interface VenforkConfig {
   invalidPreserve?: string[];
 }
 
+/** How the scheduled sync workflow authenticates its pushes. */
+export type ScheduleAuth = 'app' | 'token';
+
+/**
+ * The scheduled sync auth mode of `config`; `'token'` when it is unset.
+ *
+ * @param config Venfork config, or `null` when the mirror has none.
+ */
+export function scheduleAuthOf(
+  config: Pick<VenforkConfig, 'scheduleAuth'> | null | undefined
+): ScheduleAuth {
+  return config?.scheduleAuth === 'app' ? 'app' : 'token';
+}
+
 const CONFIG_BRANCH = 'venfork-config';
 const CONFIG_DIR = '.venfork';
 const CONFIG_FILE = 'config.json';
@@ -138,6 +159,7 @@ const VENFORK_BOT_EMAIL = 'venfork-bot@users.noreply.github.com';
 export type VenforkConfigPatch = Omit<
   Partial<VenforkConfig>,
   | 'schedule'
+  | 'scheduleAuth'
   | 'invalidPreserve'
   | 'enabledWorkflows'
   | 'disabledWorkflows'
@@ -149,6 +171,8 @@ export type VenforkConfigPatch = Omit<
 > & {
   /** Merged into the current schedule; `null` removes it. */
   schedule?: VenforkConfig['schedule'] | null;
+  /** `null` (or `'token'`) returns to token auth; omitted keeps the current mode. */
+  scheduleAuth?: ScheduleAuth | null;
   /** Replaces the whole allowlist; `null` clears it. */
   enabledWorkflows?: string[] | null;
   /** Replaces the whole block list; `null` clears it. */
@@ -529,6 +553,19 @@ function normalizeConfig(
     delete normalized.mode;
   }
 
+  const scheduleAuth: unknown = normalized.scheduleAuth;
+  if (
+    scheduleAuth !== undefined &&
+    scheduleAuth !== null &&
+    scheduleAuth !== 'app' &&
+    scheduleAuth !== 'token'
+  ) {
+    throw configProblem(
+      `scheduleAuth must be "app" or "token", got ${JSON.stringify(scheduleAuth)}`
+    );
+  }
+  if (scheduleAuth !== 'app') delete normalized.scheduleAuth;
+
   if (normalized.schedule) {
     const cron =
       typeof normalized.schedule.cron === 'string'
@@ -869,6 +906,7 @@ export function applyPatchAndNormalize(
     pulledPrs: _pulledPrsPatch,
     shippedIssues: _shippedIssuesPatch,
     pulledIssues: _pulledIssuesPatch,
+    scheduleAuth: scheduleAuthPatch,
     ...basePatch
   } = patch;
 
@@ -884,6 +922,12 @@ export function applyPatchAndNormalize(
   };
   if (basePatch.schedule === null || merged.schedule === undefined) {
     delete merged.schedule;
+  }
+
+  if (scheduleAuthPatch === null || scheduleAuthPatch === 'token') {
+    delete merged.scheduleAuth;
+  } else if (scheduleAuthPatch !== undefined) {
+    merged.scheduleAuth = scheduleAuthPatch;
   }
 
   if (patch.enabledWorkflows === null) {
