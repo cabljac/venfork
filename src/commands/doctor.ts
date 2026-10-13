@@ -21,7 +21,7 @@ import { isManagedCommit } from '../shared/managed-commit.js';
 import { buildOriginTip, syncWorkflowAuth } from '../shared/mirror-commit.js';
 import { netExec, netFailureReason } from '../shared/net.js';
 import {
-  OPEN_WORKFLOWS_WARNING,
+  openWorkflowsWarning,
   pushTokenCommand,
 } from '../shared/push-token.js';
 import {
@@ -600,7 +600,7 @@ async function collectChecks(
             detail: openWorkflows
               ? 'VENFORK_PUSH_TOKEN is set; every upstream workflow on the mirror can read it'
               : 'VENFORK_PUSH_TOKEN is set',
-            ...(openWorkflows ? { fix: OPEN_WORKFLOWS_WARNING } : {}),
+            ...(openWorkflows ? { fix: openWorkflowsWarning('token') } : {}),
           }
         : {
             id: 'token',

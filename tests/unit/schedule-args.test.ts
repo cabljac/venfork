@@ -58,3 +58,48 @@ describe('parseScheduleCliArgs', () => {
     });
   });
 });
+
+describe('schedule set auth flags', () => {
+  test('--app and --token set the auth mode in any position', () => {
+    expect(parseScheduleCliArgs(['set', '0 * * * *', '--app'])).toEqual({
+      action: 'set',
+      cron: '0 * * * *',
+      auth: 'app',
+    });
+    expect(parseScheduleCliArgs(['set', '--token', '0 * * * *'])).toEqual({
+      action: 'set',
+      cron: '0 * * * *',
+      auth: 'token',
+    });
+  });
+
+  test('without a flag the auth mode is left out so the stored one is kept', () => {
+    expect(parseScheduleCliArgs(['set', '0 * * * *'])).not.toHaveProperty(
+      'auth'
+    );
+  });
+
+  test('a repeated flag is accepted, both flags together are not', () => {
+    expect(
+      parseScheduleCliArgs(['set', '--app', '0 * * * *', '--app']).auth
+    ).toBe('app');
+    expect(() =>
+      parseScheduleCliArgs(['set', '0 * * * *', '--app', '--token'])
+    ).toThrow('--app and --token cannot be used together');
+  });
+
+  test.each([
+    ['status', '--app'],
+    ['disable', '--token'],
+  ])('%s rejects %s', (action, flag) => {
+    expect(() => parseScheduleCliArgs([action, flag])).toThrow(
+      `${flag} applies only to 'schedule set'`
+    );
+  });
+
+  test('--app after -- is a positional, not the flag', () => {
+    expect(() =>
+      parseScheduleCliArgs(['set', '0 * * * *', '--', '--app'])
+    ).toThrow("Unexpected argument '--app'");
+  });
+});

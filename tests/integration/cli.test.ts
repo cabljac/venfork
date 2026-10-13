@@ -227,9 +227,12 @@ describe('usage errors', () => {
     [['pull'], 'venfork pull <pr|issue> <number-or-url>'],
     [
       ['schedule', 'frobnicate'],
-      'venfork schedule <status|set <cron>|disable>',
+      'venfork schedule <status|set <cron> [--app|--token]|disable>',
     ],
-    [['schedule', 'set'], 'venfork schedule <status|set <cron>|disable>'],
+    [
+      ['schedule', 'set'],
+      'venfork schedule <status|set <cron> [--app|--token]|disable>',
+    ],
   ] as const) {
     test(`${args.join(' ')} reports usage on stderr only`, async () => {
       const result = await runCli(...args);

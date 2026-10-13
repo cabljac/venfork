@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   DEFAULT_REPO_NAME,
   githubUrlForProtocol,
+  githubUrlRepoPath,
   normalizeGitHubRepoInput,
   parseOwner,
   parseRepoName,
@@ -226,6 +227,26 @@ describe('parseOwner', () => {
     expect(parseOwner('https://www.github.com/facebook/react.git')).toBe(
       'facebook'
     );
+  });
+});
+
+describe('githubUrlRepoPath', () => {
+  test('reads owner/repo from a github.com URL only', () => {
+    expect(githubUrlRepoPath('git@github.com:acme/widget.git\n')).toBe(
+      'acme/widget'
+    );
+    expect(githubUrlRepoPath('https://github.com/acme/widget')).toBe(
+      'acme/widget'
+    );
+    for (const url of [
+      'acme/widget',
+      '../mirror.git',
+      'mirrors/x.git',
+      '/tmp/origin.git',
+      'gh:acme/widget',
+    ]) {
+      expect(githubUrlRepoPath(url)).toBe('');
+    }
   });
 });
 
