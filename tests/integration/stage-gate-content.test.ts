@@ -6,6 +6,7 @@ import { quietPrompts } from '../harness/prompts.js';
 mock.module('@clack/prompts', quietPrompts);
 
 import { stageCommand, syncCommand } from '../../src/commands.js';
+import { CommandExitError } from '../../src/errors.js';
 import {
   assertNoMirrorReference,
   mirrorDenyList,
@@ -365,7 +366,7 @@ describe('a branch name that runs on from the mirror name', () => {
     await featureFromUpstream();
     await git('branch', '--quiet', '-m', branch);
 
-    await expect(stageCommand(branch)).rejects.toThrow('process.exit(1)');
+    await expect(stageCommand(branch)).rejects.toThrow(new CommandExitError(1));
 
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining("the branch name contains 'widget-private'")

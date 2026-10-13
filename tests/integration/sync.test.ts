@@ -6,7 +6,11 @@ mock.module('@clack/prompts', quietPrompts);
 
 import { syncCommand } from '../../src/commands.js';
 import { updateVenforkConfig } from '../../src/config.js';
-import { ConfigError, SyncDivergenceError } from '../../src/errors.js';
+import {
+  CommandExitError,
+  ConfigError,
+  SyncDivergenceError,
+} from '../../src/errors.js';
 import { getDefaultBranch } from '../../src/git.js';
 import { checkDivergence } from '../../src/shared/divergence.js';
 import { isManagedCommit } from '../../src/shared/managed-commit.js';
@@ -231,7 +235,7 @@ describe('sync with the managed commit', () => {
     await fx.git(fx.work, 'remote', 'set-url', 'origin', stale);
     await fx.git(fx.work, 'remote', 'set-url', '--push', 'origin', fx.origin);
 
-    await expect(sync()).rejects.toThrow('process.exit(1)');
+    await expect(sync()).rejects.toThrow(new CommandExitError(1));
 
     expect(await fx.sha(fx.origin, 'main')).toBe(teammate);
     expect(prompts.log.error).toHaveBeenCalledWith(
@@ -357,7 +361,7 @@ describe('sync with the managed commit', () => {
     const originBefore = await fx.sha(fx.origin, 'main');
     await fx.commitOnUpstream({ config: 'upstream file named config\n' });
 
-    await expect(sync()).rejects.toThrow('process.exit(1)');
+    await expect(sync()).rejects.toThrow(new CommandExitError(1));
 
     expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
     expect(prompts.log.error).toHaveBeenCalledWith(
@@ -420,7 +424,7 @@ describe('unmigrated mirror on the runner', () => {
     const originBefore = await fx.sha(fx.origin, 'main');
     process.env.GITHUB_ACTIONS = 'true';
     try {
-      await expect(sync()).rejects.toThrow('process.exit(1)');
+      await expect(sync()).rejects.toThrow(new CommandExitError(1));
     } finally {
       delete process.env.GITHUB_ACTIONS;
     }
@@ -453,7 +457,7 @@ describe('pinned version downgrade guard', () => {
     await fx.commitOnUpstream({ 'src/new.txt': 'new\n' });
     const originBefore = await fx.sha(fx.origin, 'main');
 
-    await expect(sync()).rejects.toThrow('process.exit(1)');
+    await expect(sync()).rejects.toThrow(new CommandExitError(1));
 
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining(

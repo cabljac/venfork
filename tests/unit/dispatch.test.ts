@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test';
-import { requiresGhAuth } from '../../src/dispatch.js';
+import { describe, expect, mock, test } from 'bun:test';
+import { requiresGhAuth, setupSyncMirror } from '../../src/dispatch.js';
 
 describe('requiresGhAuth', () => {
   test.each([
@@ -29,5 +29,17 @@ describe('requiresGhAuth', () => {
     ['help', [], false],
   ] as const)('%s %p -> %p', (command, args, expected) => {
     expect(requiresGhAuth(command, [...args])).toBe(expected);
+  });
+});
+
+describe('setupSyncMirror', () => {
+  test('runs a quiet sync of the given clone', async () => {
+    const sync = mock(() => Promise.resolve());
+    await setupSyncMirror(sync)('/work/acme-private');
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(sync).toHaveBeenCalledWith(undefined, {
+      cwd: '/work/acme-private',
+      quiet: true,
+    });
   });
 });

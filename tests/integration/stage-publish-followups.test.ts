@@ -6,6 +6,7 @@ import { quietPrompts } from '../harness/prompts.js';
 mock.module('@clack/prompts', quietPrompts);
 
 import { stageCommand } from '../../src/commands.js';
+import { CommandExitError } from '../../src/errors.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
@@ -49,7 +50,9 @@ async function featureFrom(base: string): Promise<void> {
 }
 
 async function expectRefused(message: string): Promise<void> {
-  await expect(stageCommand('feature')).rejects.toThrow('process.exit(1)');
+  await expect(stageCommand('feature')).rejects.toThrow(
+    new CommandExitError(1)
+  );
   expect(prompts.log.error).toHaveBeenCalledWith(
     expect.stringContaining(message)
   );
@@ -68,7 +71,7 @@ describe('the branch name is checked', () => {
     await fx.git(fx.work, 'checkout', '--quiet', '-b', 'venfork-client-plan');
 
     await expect(stageCommand('venfork-client-plan')).rejects.toThrow(
-      'process.exit(1)'
+      new CommandExitError(1)
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(

@@ -10,6 +10,7 @@ import {
   stageCommand,
   syncCommand,
 } from '../../src/commands.js';
+import { CommandExitError } from '../../src/errors.js';
 import { collectMirrorBlobs } from '../../src/shared/stage-gate.js';
 import {
   createMirrorFixture,
@@ -58,7 +59,9 @@ async function featureFrom(base: string): Promise<void> {
 }
 
 async function expectRefused(message: string): Promise<void> {
-  await expect(stageCommand('feature')).rejects.toThrow('process.exit(1)');
+  await expect(stageCommand('feature')).rejects.toThrow(
+    new CommandExitError(1)
+  );
   expect(prompts.log.error).toHaveBeenCalledWith(
     expect.stringContaining(message)
   );
@@ -119,7 +122,7 @@ describe('preserve add verifies each entry is a file on origin', () => {
     await fx.commitOnOrigin({ [DIR_FILE]: 'client plan\n' });
 
     await expect(preserveCommand('add', [DIR])).rejects.toThrow(
-      'process.exit(1)'
+      new CommandExitError(1)
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
@@ -130,7 +133,7 @@ describe('preserve add verifies each entry is a file on origin', () => {
 
   test('refuses a path that is not on the default branch', async () => {
     await expect(preserveCommand('add', [DOC])).rejects.toThrow(
-      'process.exit(1)'
+      new CommandExitError(1)
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
@@ -155,7 +158,7 @@ describe('preserve add verifies each entry is a file on origin', () => {
     await fx.git(fx.work, 'push', '--quiet', 'origin', 'HEAD:main');
 
     await expect(preserveCommand('add', ['vendor/lib'])).rejects.toThrow(
-      'process.exit(1)'
+      new CommandExitError(1)
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(

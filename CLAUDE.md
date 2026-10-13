@@ -54,7 +54,7 @@ CLI entry `src/index.ts` parses `argv[0]` as the command and dispatches via a sw
 - **`git.ts`** — thin git/gh wrappers (`checkGhAuth`, `getRemotes`, `getDefaultBranch`, `ghRepoExists`, `ghRepoIsForkOf`, …).
 - **`utils.ts`** — URL/shorthand parsing (`parseOwner`, `parseRepoName`, `parseRepoPath`, `normalizeGitHubRepoInput`); shorthand `owner/repo` is treated as `git@github.com:owner/repo.git`.
 - **`workflow.ts`** — generates the deterministic GitHub Actions sync YAML (`.github/workflows/venfork-sync.yml`).
-- **`errors.ts`** — typed errors (`VenforkError` + subclasses); `index.ts` prints `.message` and exits non-zero.
+- **`errors.ts`** — typed errors (`VenforkError` + subclasses); `index.ts` prints `.message` and exits non-zero. Commands never call `process.exit`: one that already printed its outcome throws `CommandExitError(code)`, which `index.ts` turns into that exit code without printing more.
 
 ### The "+0/+1 managed commit" model (the core invariant)
 

@@ -15,8 +15,9 @@ import {
   syncCommand,
   workflowsCommand,
 } from './commands.js';
-import { requiresGhAuth } from './dispatch.js';
+import { requiresGhAuth, setupSyncMirror } from './dispatch.js';
 import { parseDoctorCliArgs } from './doctor-args.js';
+import { CommandExitError } from './errors.js';
 import { ensureGhAuth } from './git.js';
 import { parsePreserveCliArgs } from './preserve-args.js';
 import { parsePullCliArgs } from './pull-args.js';
@@ -81,7 +82,10 @@ async function main(): Promise<void> {
         parsed.privateMirrorName,
         parsed.organization,
         parsed.publicForkRepoName,
-        { noPublic: parsed.noPublic }
+        {
+          noPublic: parsed.noPublic,
+          syncMirror: setupSyncMirror(),
+        }
       );
       break;
     }
@@ -172,6 +176,7 @@ main()
     process.off('beforeExit', exitOnAbandonedPrompt);
   })
   .catch((error) => {
+    if (error instanceof CommandExitError) process.exit(error.exitCode);
     console.error(
       `Error: ${error instanceof Error ? error.message : String(error)}`
     );

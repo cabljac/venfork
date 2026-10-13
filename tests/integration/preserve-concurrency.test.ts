@@ -48,6 +48,7 @@ mock.module('../../src/shared/config-change.js', () => ({
 }));
 
 import { preserveCommand, syncCommand } from '../../src/commands.js';
+import { CommandExitError } from '../../src/errors.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
@@ -110,7 +111,7 @@ describe('preserve changes are deltas on the list as written', () => {
     const before = await fx.sha(fx.origin, 'venfork-config');
 
     await expect(preserveCommand('remove', ['nope.txt'])).rejects.toThrow(
-      'process.exit(1)'
+      new CommandExitError(1)
     );
 
     expect(await fx.sha(fx.origin, 'venfork-config')).toBe(before);
