@@ -18,7 +18,7 @@ import {
 } from '../shared/cron.js';
 import { checkDivergence } from '../shared/divergence.js';
 import { isManagedCommit } from '../shared/managed-commit.js';
-import { buildOriginTip } from '../shared/mirror-commit.js';
+import { buildOriginTip, syncWorkflowAuth } from '../shared/mirror-commit.js';
 import { netExec, netFailureReason } from '../shared/net.js';
 import {
   OPEN_WORKFLOWS_WARNING,
@@ -31,7 +31,7 @@ import {
 } from '../shared/semver.js';
 import { parseRepoPath } from '../utils.js';
 import { VENFORK_VERSION } from '../version.js';
-import { generateSyncWorkflow } from '../workflow.js';
+import { generateSyncWorkflow, type SyncAuth } from '../workflow.js';
 
 /** Result of one doctor check. `'skipped'` means it could not be evaluated. */
 export interface DoctorCheck {
@@ -470,11 +470,25 @@ async function collectChecks(
       stripFinalNewline: false,
     })`git show ${`${originTip}:${SYNC_WORKFLOW_PATH}`}`;
     const workflowOnOrigin = onOrigin.exitCode === 0 ? onOrigin.stdout : null;
-    if (scheduleActive && schedule) {
+    let auth: SyncAuth | Error;
+    try {
+      auth = syncWorkflowAuth(config);
+    } catch (error) {
+      auth = error instanceof Error ? error : new Error(String(error));
+    }
+    if (scheduleActive && schedule && auth instanceof Error) {
+      checks.push({
+        id: 'workflow',
+        ok: false,
+        detail: oneLine(auth.message),
+        fix: `Run \`venfork schedule set "${schedule.cron}" --token\`.`,
+      });
+    } else if (scheduleActive && schedule && !(auth instanceof Error)) {
       const expected = generateSyncWorkflow(
         schedule.cron,
         noPublic ? 'no-public' : 'standard',
-        VENFORK_VERSION
+        VENFORK_VERSION,
+        auth
       );
       if (workflowOnOrigin === null) {
         checks.push({

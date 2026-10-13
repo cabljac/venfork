@@ -113,3 +113,279 @@ jobs:
           fi
 "
 `;
+
+exports[`GitHub App auth app workflow snapshot (standard) 1`] = `
+"name: Venfork Sync
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: venfork-sync-\${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY
+        id: token-check
+        shell: bash
+        env:
+          VENFORK_APP_CLIENT_ID: \${{ secrets.VENFORK_APP_CLIENT_ID }}
+          VENFORK_APP_PRIVATE_KEY: \${{ secrets.VENFORK_APP_PRIVATE_KEY }}
+        run: |
+          MISSING=0
+          if [ -z "$VENFORK_APP_CLIENT_ID" ]; then
+            echo "::error::VENFORK_APP_CLIENT_ID is not set on this repository. Copy the GitHub App's client ID, then: gh secret set VENFORK_APP_CLIENT_ID --repo $GITHUB_REPOSITORY --body <client-id>"
+            MISSING=1
+          fi
+          if [ -z "$VENFORK_APP_PRIVATE_KEY" ]; then
+            echo "::error::VENFORK_APP_PRIVATE_KEY is not set on this repository. Generate a private key for the GitHub App, then: gh secret set VENFORK_APP_PRIVATE_KEY --repo $GITHUB_REPOSITORY < <key.pem>"
+            MISSING=1
+          fi
+          if [ "$MISSING" -ne 0 ]; then
+            exit 1
+          fi
+          OWNER="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          if [ "$OWNER" != "acme" ]; then
+            echo "::error::The public fork Acme/project has a different owner than $GITHUB_REPOSITORY. One GitHub App installation token covers one owner, so switch this mirror to token auth: venfork schedule set <cron> --token"
+            exit 1
+          fi
+          echo "mirror=\${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+      - name: Install venfork
+        env:
+          VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SPEC="\${VENFORK_INSTALL_SPEC:-venfork@1.2.3}"
+          SEMVER_SPEC='^venfork@[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          TARBALL_SPEC='^https://[^[:space:]]+\\.tgz$'
+          if ! [[ "$SPEC" =~ $SEMVER_SPEC ]] && ! [[ "$SPEC" =~ $TARBALL_SPEC ]]; then
+            echo "::error::VENFORK_INSTALL_SPEC must be venfork@<semver> or an https:// URL ending in .tgz"
+            exit 1
+          fi
+          npm install -g --ignore-scripts "$SPEC"
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: \${{ secrets.VENFORK_APP_CLIENT_ID }}
+          private-key: \${{ secrets.VENFORK_APP_PRIVATE_KEY }}
+          owner: \${{ github.repository_owner }}
+          repositories: \${{ steps.token-check.outputs.mirror }},project
+          permission-contents: write
+          permission-workflows: write
+      - name: Checkout mirror
+        uses: actions/checkout@v4
+        with:
+          token: \${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+      - name: Rewrite SSH GitHub URLs to HTTPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          # venfork-config can store SSH remote URLs (gh defaults to ssh).
+          # actions/checkout's extraheader auth only applies to https://github.com/,
+          # so rewrite SSH forms to HTTPS. --add is required: each insteadOf
+          # value is a separate entry under the same key.
+          git config --global --add url."https://github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com:22/"
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@ssh.github.com:443/"
+          git config --global --add url."https://github.com/".insteadOf "git@GitHub.com:"
+      - name: Configure venfork remotes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin venfork-config
+          CONFIG_JSON="$(git show FETCH_HEAD:.venfork/config.json)"
+          UPSTREAM_URL="$(node -e "const c = JSON.parse(process.argv[1]); process.stdout.write(c.upstreamUrl || '')" "$CONFIG_JSON")"
+          PUBLIC_URL="$(node -e "const c = JSON.parse(process.argv[1]); process.stdout.write(c.publicForkUrl || '')" "$CONFIG_JSON")"
+          if [ -z "$UPSTREAM_URL" ] || [ -z "$PUBLIC_URL" ]; then
+            echo "Missing upstream/public URL in venfork-config"
+            exit 1
+          fi
+          git remote remove upstream 2>/dev/null || true
+          git remote remove public 2>/dev/null || true
+          git remote add upstream "$UPSTREAM_URL"
+          git remote set-url --push upstream DISABLE
+          git remote add public "$PUBLIC_URL"
+      - name: Sync from upstream
+        id: sync
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: venfork sync --report-issues
+      - name: Report failed sync
+        if: failure() && steps.sync.outputs.reported != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: \${{ github.token }}
+          RUN_URL: \${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}
+          TOKEN_CHECK: \${{ steps.token-check.outcome }}
+          APP_TOKEN: \${{ steps.app-token.outcome }}
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          MESSAGE="Scheduled venfork sync failed. See $RUN_URL"
+          if [ "$TOKEN_CHECK" = "failure" ]; then
+            MESSAGE="$MESSAGE"$'\\n\\n'"Cause: the GitHub App secrets are not usable. Set both VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY (gh secret set VENFORK_APP_CLIENT_ID --repo $REPO --body <client-id>; gh secret set VENFORK_APP_PRIVATE_KEY --repo $REPO < <key.pem>), or see the run log when the public fork has a different owner."
+          elif [ "$APP_TOKEN" = "failure" ]; then
+            MESSAGE="$MESSAGE"$'\\n\\n'"Cause: the GitHub App token could not be minted. Check that the App is installed on $REPO and Acme/project with Contents and Workflows write, and that VENFORK_APP_PRIVATE_KEY holds a current private key for the App in VENFORK_APP_CLIENT_ID."
+          fi
+          if ! gh label list --repo "$REPO" --search venfork-sync-blocked --json name --jq '.[].name' | grep -qx venfork-sync-blocked; then
+            gh label create venfork-sync-blocked --repo "$REPO" --color B60205 --description "Scheduled venfork sync is blocked"
+          fi
+          NUMBER="$(gh api "repos/$REPO/issues?labels=venfork-sync-blocked&state=open&per_page=100" --jq 'map(select(.pull_request == null))[0].number // empty')"
+          if [ -z "$NUMBER" ]; then
+            gh issue create --repo "$REPO" --label venfork-sync-blocked --title "Scheduled sync failed" --body "$MESSAGE"
+          # A blocked sync already wrote this run URL into the issue body.
+          else
+            BODY="$(gh issue view "$NUMBER" --repo "$REPO" --json body --jq '.body')"
+            if ! grep -qF "$RUN_URL" <<<"$BODY"; then
+              gh issue comment "$NUMBER" --repo "$REPO" --body "$MESSAGE"
+            fi
+          fi
+"
+`;
+
+exports[`GitHub App auth app workflow snapshot (no-public) 1`] = `
+"name: Venfork Sync
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: venfork-sync-\${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY
+        id: token-check
+        shell: bash
+        env:
+          VENFORK_APP_CLIENT_ID: \${{ secrets.VENFORK_APP_CLIENT_ID }}
+          VENFORK_APP_PRIVATE_KEY: \${{ secrets.VENFORK_APP_PRIVATE_KEY }}
+        run: |
+          MISSING=0
+          if [ -z "$VENFORK_APP_CLIENT_ID" ]; then
+            echo "::error::VENFORK_APP_CLIENT_ID is not set on this repository. Copy the GitHub App's client ID, then: gh secret set VENFORK_APP_CLIENT_ID --repo $GITHUB_REPOSITORY --body <client-id>"
+            MISSING=1
+          fi
+          if [ -z "$VENFORK_APP_PRIVATE_KEY" ]; then
+            echo "::error::VENFORK_APP_PRIVATE_KEY is not set on this repository. Generate a private key for the GitHub App, then: gh secret set VENFORK_APP_PRIVATE_KEY --repo $GITHUB_REPOSITORY < <key.pem>"
+            MISSING=1
+          fi
+          if [ "$MISSING" -ne 0 ]; then
+            exit 1
+          fi
+          echo "mirror=\${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+      - name: Install venfork
+        env:
+          VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SPEC="\${VENFORK_INSTALL_SPEC:-venfork@1.2.3}"
+          SEMVER_SPEC='^venfork@[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          TARBALL_SPEC='^https://[^[:space:]]+\\.tgz$'
+          if ! [[ "$SPEC" =~ $SEMVER_SPEC ]] && ! [[ "$SPEC" =~ $TARBALL_SPEC ]]; then
+            echo "::error::VENFORK_INSTALL_SPEC must be venfork@<semver> or an https:// URL ending in .tgz"
+            exit 1
+          fi
+          npm install -g --ignore-scripts "$SPEC"
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: \${{ secrets.VENFORK_APP_CLIENT_ID }}
+          private-key: \${{ secrets.VENFORK_APP_PRIVATE_KEY }}
+          owner: \${{ github.repository_owner }}
+          repositories: \${{ steps.token-check.outputs.mirror }}
+          permission-contents: write
+          permission-workflows: write
+      - name: Checkout mirror
+        uses: actions/checkout@v4
+        with:
+          token: \${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+      - name: Rewrite SSH GitHub URLs to HTTPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          # venfork-config can store SSH remote URLs (gh defaults to ssh).
+          # actions/checkout's extraheader auth only applies to https://github.com/,
+          # so rewrite SSH forms to HTTPS. --add is required: each insteadOf
+          # value is a separate entry under the same key.
+          git config --global --add url."https://github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com:22/"
+          git config --global --add url."https://github.com/".insteadOf "ssh://git@ssh.github.com:443/"
+          git config --global --add url."https://github.com/".insteadOf "git@GitHub.com:"
+      - name: Configure venfork remotes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin venfork-config
+          CONFIG_JSON="$(git show FETCH_HEAD:.venfork/config.json)"
+          UPSTREAM_URL="$(node -e "const c = JSON.parse(process.argv[1]); process.stdout.write(c.upstreamUrl || '')" "$CONFIG_JSON")"
+          if [ -z "$UPSTREAM_URL" ]; then
+            echo "Missing upstream URL in venfork-config"
+            exit 1
+          fi
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "$UPSTREAM_URL"
+          git remote set-url --push upstream DISABLE
+      - name: Sync from upstream
+        id: sync
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: venfork sync --report-issues
+      - name: Report failed sync
+        if: failure() && steps.sync.outputs.reported != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: \${{ github.token }}
+          RUN_URL: \${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}
+          TOKEN_CHECK: \${{ steps.token-check.outcome }}
+          APP_TOKEN: \${{ steps.app-token.outcome }}
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          MESSAGE="Scheduled venfork sync failed. See $RUN_URL"
+          if [ "$TOKEN_CHECK" = "failure" ]; then
+            MESSAGE="$MESSAGE"$'\\n\\n'"Cause: the GitHub App secrets are not usable. Set both VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY (gh secret set VENFORK_APP_CLIENT_ID --repo $REPO --body <client-id>; gh secret set VENFORK_APP_PRIVATE_KEY --repo $REPO < <key.pem>)."
+          elif [ "$APP_TOKEN" = "failure" ]; then
+            MESSAGE="$MESSAGE"$'\\n\\n'"Cause: the GitHub App token could not be minted. Check that the App is installed on $REPO with Contents and Workflows write, and that VENFORK_APP_PRIVATE_KEY holds a current private key for the App in VENFORK_APP_CLIENT_ID."
+          fi
+          if ! gh label list --repo "$REPO" --search venfork-sync-blocked --json name --jq '.[].name' | grep -qx venfork-sync-blocked; then
+            gh label create venfork-sync-blocked --repo "$REPO" --color B60205 --description "Scheduled venfork sync is blocked"
+          fi
+          NUMBER="$(gh api "repos/$REPO/issues?labels=venfork-sync-blocked&state=open&per_page=100" --jq 'map(select(.pull_request == null))[0].number // empty')"
+          if [ -z "$NUMBER" ]; then
+            gh issue create --repo "$REPO" --label venfork-sync-blocked --title "Scheduled sync failed" --body "$MESSAGE"
+          # A blocked sync already wrote this run URL into the issue body.
+          else
+            BODY="$(gh issue view "$NUMBER" --repo "$REPO" --json body --jq '.body')"
+            if ! grep -qF "$RUN_URL" <<<"$BODY"; then
+              gh issue comment "$NUMBER" --repo "$REPO" --body "$MESSAGE"
+            fi
+          fi
+"
+`;

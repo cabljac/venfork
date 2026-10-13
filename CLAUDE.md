@@ -89,6 +89,7 @@ Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/n
 - `VENFORK_GIT_TIMEOUT` — ms cap per network op (default 600000).
 - `VENFORK_NONINTERACTIVE=1` — auto-confirm prompts that explicitly opt in (`allowNonInteractive`); does **not** blanket-yes every prompt.
 - `VENFORK_PUSH_TOKEN` — token used by the generated sync workflow for pushes.
+- `VENFORK_APP_CLIENT_ID` / `VENFORK_APP_PRIVATE_KEY` - repo secrets the generated workflow mints its push token from when `scheduleAuth` is `app` (`schedule set --app`).
 - `VENFORK_SEED_CHUNK` / `VENFORK_SEED_RETRY_MS` — commit batch size and retry delay for the initial mirror seed push.
 - `VENFORK_INSTALL_SPEC` — repository variable read by the generated workflow to override the pinned `npm install -g` spec.
 - `VENFORK_ALLOW_SELF_REFERENCE=1` — stops `stage` refusing the bare word `venfork` in commit messages, PR titles and bodies (mirror URL, owner and repo terms stay refused).

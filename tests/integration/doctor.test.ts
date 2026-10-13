@@ -547,3 +547,81 @@ describe('the preserve check asks the tip builder sync uses', () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe('doctor and GitHub App auth', () => {
+  const schedule = { enabled: true, cron: '0 */6 * * *' };
+  const syncAt = (cwd: string) => syncCommand(undefined, { cwd, quiet: true });
+
+  test('a no-public mirror gets the mint step and an up-to-date workflow check', async () => {
+    const noPublic = await createMirrorFixture({ mode: 'no-public' });
+    try {
+      await updateVenforkConfig(noPublic.work, {
+        schedule,
+        scheduleAuth: 'app',
+      });
+      await syncAt(noPublic.work);
+
+      const workflow = await noPublic.fileAt(
+        noPublic.origin,
+        'main',
+        '.github/workflows/venfork-sync.yml'
+      );
+      expect(workflow).toBe(
+        generateSyncWorkflow(schedule.cron, 'no-public', VENFORK_VERSION, {
+          kind: 'app',
+        })
+      );
+      const checks = byId(await runDoctorChecks({ cwd: noPublic.work }));
+      expect(checks.workflow).toEqual({
+        id: 'workflow',
+        ok: true,
+        detail: expect.any(String),
+      });
+    } finally {
+      await noPublic.cleanup();
+    }
+  });
+
+  test('a standard mirror scopes the token to the public fork named in config', async () => {
+    const config = await fx.readRawConfig();
+    await fx.writeRawConfig(
+      JSON.stringify({
+        ...config,
+        publicForkUrl: 'git@github.com:acme/project.git',
+        schedule,
+        scheduleAuth: 'app',
+      })
+    );
+    await syncAt(fx.work);
+
+    expect(
+      await fx.fileAt(fx.origin, 'main', '.github/workflows/venfork-sync.yml')
+    ).toBe(
+      generateSyncWorkflow(schedule.cron, 'standard', VENFORK_VERSION, {
+        kind: 'app',
+        publicRepo: { owner: 'acme', name: 'project' },
+      })
+    );
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+    expect(checks.workflow.ok).toBe(true);
+  });
+
+  test('a public fork that is not on GitHub stops sync and fails the workflow check', async () => {
+    await updateVenforkConfig(fx.work, { schedule, scheduleAuth: 'app' });
+    const originBefore = await fx.sha(fx.origin, 'main');
+
+    await expect(syncAt(fx.work)).rejects.toThrow(
+      'GitHub App auth needs the public fork on GitHub'
+    );
+    expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
+
+    const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+    expect(checks.workflow.ok).toBe(false);
+    expect(checks.workflow.detail).toContain(
+      'GitHub App auth needs the public fork on GitHub'
+    );
+    expect(checks.workflow.fix).toBe(
+      'Run `venfork schedule set "0 */6 * * *" --token`.'
+    );
+  });
+});
