@@ -398,3 +398,118 @@ describe('doctorSummary', () => {
     );
   });
 });
+
+describe('doctor token check under GitHub App auth', () => {
+  const sameOwnerApp = {
+    publicForkUrl: 'git@github.com:acme/widget.git',
+    scheduleAuth: 'app',
+  };
+  const now = new Date('2026-03-01T01:00:00Z');
+
+  test('passes when both App secrets are set and says what it cannot verify', async () => {
+    useMirror('standard', {
+      ...sameOwnerApp,
+      disabledWorkflows: ['deploy.yml'],
+    });
+    responses.unshift([
+      'gh secret list',
+      ok(
+        '[{"name":"VENFORK_APP_CLIENT_ID"},{"name":"VENFORK_APP_PRIVATE_KEY"}]'
+      ),
+    ]);
+    lastRun('success');
+
+    const checks = await ghChecks(now);
+
+    expect(checks.token).toEqual({
+      id: 'token',
+      ok: true,
+      detail:
+        'VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY are set; doctor cannot verify the key or the App installation, see last-run',
+    });
+  });
+
+  test.each([
+    [
+      '[{"name":"VENFORK_PUSH_TOKEN"}]',
+      'VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY are not set',
+      'gh secret set VENFORK_APP_CLIENT_ID --repo acme/widget-private --body "<client ID>"; gh secret set VENFORK_APP_PRIVATE_KEY --repo acme/widget-private < <private-key>.pem',
+    ],
+    [
+      '[{"name":"VENFORK_APP_CLIENT_ID"}]',
+      'VENFORK_APP_PRIVATE_KEY is not set',
+      'gh secret set VENFORK_APP_PRIVATE_KEY --repo acme/widget-private < <private-key>.pem',
+    ],
+  ])('fails with the missing App secrets (%s)', async (listed, detail, fix) => {
+    useMirror('standard', sameOwnerApp);
+    responses.unshift(['gh secret list', ok(listed)]);
+    lastRun('success');
+
+    const checks = await ghChecks(now);
+
+    expect(checks.token.ok).toBe(false);
+    expect(checks.token.detail).toContain(`${detail} on acme/widget-private`);
+    expect(checks.token.fix).toBe(fix);
+  });
+
+  test('names a leftover VENFORK_PUSH_TOKEN and the private key upstream workflows can read', async () => {
+    useMirror('standard', sameOwnerApp);
+    responses.unshift([
+      'gh secret list',
+      ok(
+        '[{"name":"VENFORK_APP_CLIENT_ID"},{"name":"VENFORK_APP_PRIVATE_KEY"},{"name":"VENFORK_PUSH_TOKEN"}]'
+      ),
+    ]);
+    lastRun('success');
+
+    const checks = await ghChecks(now);
+
+    expect(checks.token.ok).toBe(true);
+    expect(checks.token.detail).toContain(
+      'VENFORK_PUSH_TOKEN is still set but unused'
+    );
+    expect(checks.token.detail).toContain(
+      'Every upstream workflow runs on the mirror and can read VENFORK_APP_PRIVATE_KEY.'
+    );
+    expect(checks.token.fix).toBe(
+      'gh secret delete VENFORK_PUSH_TOKEN --repo acme/widget-private'
+    );
+  });
+
+  test('fails when the public fork has another owner, since one installation token covers one owner', async () => {
+    useMirror('standard', { scheduleAuth: 'app' });
+    responses.unshift([
+      'gh secret list',
+      ok(
+        '[{"name":"VENFORK_APP_CLIENT_ID"},{"name":"VENFORK_APP_PRIVATE_KEY"}]'
+      ),
+    ]);
+    lastRun('success');
+
+    const checks = await ghChecks(now);
+
+    expect(checks.token.ok).toBe(false);
+    expect(checks.token.detail).toContain(
+      'the mirror is acme/widget-private and the public fork is vendor/widget'
+    );
+    expect(checks.token.fix).toBe(
+      `Run \`venfork schedule set "${CRON}" --token\` and set VENFORK_PUSH_TOKEN.`
+    );
+  });
+
+  test('no-public mode needs only the App secrets on the mirror', async () => {
+    useMirror('no-public', { scheduleAuth: 'app' });
+    responses.unshift([
+      'gh secret list',
+      ok(
+        '[{"name":"VENFORK_APP_CLIENT_ID"},{"name":"VENFORK_APP_PRIVATE_KEY"}]'
+      ),
+    ]);
+    lastRun('success');
+
+    const checks = await ghChecks(now);
+
+    expect(checks.token.ok).toBe(true);
+    expect(checks.token.detail).toContain('can read the private key');
+  });
+});

@@ -47,7 +47,8 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
     'doctor',
     `venfork doctor [--json]
   Check mirror health: remotes, the managed-commit invariant, divergence,
-  preserved files, the sync workflow, VENFORK_PUSH_TOKEN and the last scheduled run
+  preserved files, the sync workflow, the push secrets (VENFORK_PUSH_TOKEN, or the
+  GitHub App secrets with schedule set --app) and the last scheduled run
   Also lists the shipped and pulled branch, PR and issue links from venfork-config
   Exits 1 when any check fails; --json prints { checks, links } for CI`,
   ],
