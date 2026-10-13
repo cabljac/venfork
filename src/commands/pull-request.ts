@@ -3,6 +3,7 @@ import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
 import { RemoteNotFoundError } from '../errors.js';
 import { parsePositiveInt } from '../shared/args.js';
+import { netExec, netFailureReason } from '../shared/net.js';
 import { parseRepoPath } from '../utils.js';
 
 export interface PullRequestOptions {
@@ -157,14 +158,13 @@ export async function pullRequestCommand(
     let pushedToMirror = false;
     if (push) {
       s.start(`Pushing ${localBranch} to origin`);
-      const pushResult = await $({
-        cwd: repoDir,
-        reject: false,
+      const pushResult = await netExec(repoDir, {
+        bufferOutput: true,
       })`git push origin ${localBranch} --no-follow-tags`;
       if (pushResult.exitCode !== 0) {
         s.stop('Push failed');
         p.log.warn(
-          `Could not push ${localBranch} to origin: ${pushResult.stderr.trim()}`
+          `Could not push ${localBranch} to origin: ${netFailureReason(pushResult)}`
         );
         p.log.warn(
           'The local branch is still available for review, but no pulledPrs entry was recorded — `venfork sync` will not know how to refresh it until the next successful push.'

@@ -13,6 +13,10 @@ import {
   translateInternalTitle,
 } from '../shared/redaction.js';
 import { findMirrorRepoPath } from '../shared/repo.js';
+import {
+  createMirrorIssue,
+  createUpstreamIssue,
+} from '../shared/upstream-publish.js';
 import { parseRepoPath } from '../utils.js';
 
 /** One comment on a GitHub issue as returned by `gh issue view --json comments`. */
@@ -69,30 +73,6 @@ export function renderPulledComments(
   });
   const label = comments.length === 1 ? 'comment' : 'comments';
   return `\n\n---\n\n### Upstream ${label} (${comments.length})\n\n${blocks.join('\n\n---\n\n')}`;
-}
-
-async function createIssue(args: {
-  repoPath: string;
-  title: string;
-  body: string;
-  cwd: string;
-}): Promise<{ url: string; number: number }> {
-  const result = await $({
-    cwd: args.cwd,
-    reject: false,
-    input: args.body,
-  })`gh issue create --repo ${args.repoPath} --title ${args.title} --body-file -`;
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `Failed to create issue on ${args.repoPath}: ${result.stderr.trim() || `exit ${result.exitCode}`}`
-    );
-  }
-  const url = result.stdout.trim().split(/\s+/).pop() ?? '';
-  const numberMatch = url.match(/\/issues\/(\d+)/);
-  if (!numberMatch) {
-    throw new Error(`gh issue create returned an unexpected output: ${url}`);
-  }
-  return { url, number: Number(numberMatch[1]) };
 }
 
 /** Resolve a number or same-repo URL to a positive number; throws on anything else. */
@@ -230,10 +210,11 @@ export async function issueCommand(
       }
 
       s.start('Opening upstream issue');
-      const created = await createIssue({
+      const created = await createUpstreamIssue({
         repoPath: upstreamRepoPath,
         title: upstreamTitle,
         body: translatedBody,
+        denyList,
         cwd: repoDir,
       });
       s.stop(`Upstream issue created: ${created.url}`);
@@ -299,7 +280,7 @@ export async function issueCommand(
     }
 
     s.start('Opening internal issue');
-    const created = await createIssue({
+    const created = await createMirrorIssue({
       repoPath: mirrorRepoPath,
       title: internalTitle,
       body: internalBody,

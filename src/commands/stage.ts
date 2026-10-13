@@ -36,6 +36,10 @@ import {
   assertPublishableCommits,
   collectMirrorBlobs,
 } from '../shared/stage-gate.js';
+import {
+  createUpstreamPr,
+  editUpstreamPrBody,
+} from '../shared/upstream-publish.js';
 import { withDetachedWorktree } from '../shared/worktree.js';
 import { parseRepoPath } from '../utils.js';
 
@@ -578,46 +582,6 @@ function buildUpstreamPrPayload(
 }
 
 /**
- * Creates the upstream PR via gh and returns its URL. Surfaces the duplicate-PR
- * case ("already exists") cleanly so the caller can recover.
- */
-async function createUpstreamPr(args: {
-  upstreamRepoPath: string;
-  /** Owner where the head branch lives. Same as upstream owner in no-public mode. */
-  headOwner: string;
-  /** True when head and base live in the same repo (no-public mode) — gh wants a bare branch name in that case, not `owner:branch`. */
-  sameRepoHead: boolean;
-  branch: string;
-  base: string;
-  title: string;
-  body: string;
-  draft: boolean;
-  cwd: string;
-}): Promise<{ url: string; alreadyExists: boolean }> {
-  const head = args.sameRepoHead
-    ? args.branch
-    : `${args.headOwner}:${args.branch}`;
-  const result = await $({
-    cwd: args.cwd,
-    reject: false,
-    input: args.body,
-  })`gh pr create --repo ${args.upstreamRepoPath} --base ${args.base} --head ${head} --title ${args.title} --body-file - ${args.draft ? '--draft' : []}`;
-
-  if (result.exitCode === 0) {
-    return { url: result.stdout.trim(), alreadyExists: false };
-  }
-  // gh prints something like "a pull request for branch X into branch Y already exists: https://..."
-  const combined = `${result.stdout}\n${result.stderr}`;
-  const existing = combined.match(/https?:\/\/\S*\/pull\/\d+/);
-  if (existing && /already exists/i.test(combined)) {
-    return { url: existing[0], alreadyExists: true };
-  }
-  throw new Error(
-    `Failed to create upstream PR via gh: ${combined.trim() || `exit ${result.exitCode}`}`
-  );
-}
-
-/**
  * Stage command: Push branch to public fork for PR to upstream.
  *
  * With `--pr` (createPr), additionally opens the upstream PR using the
@@ -797,6 +761,7 @@ export async function stageCommand(
           title: prTitle,
           body: translatedBody,
           draft: Boolean(options.draft),
+          denyList: prepared.denyList,
           cwd: repoDir,
         });
         upstreamPrUrl = result.url;
@@ -820,11 +785,12 @@ export async function stageCommand(
       // if the user wants the upstream body frozen at first-stage time.
       if (alreadyExisted && upstreamPrUrl && !options.noUpdateExisting) {
         s.start('Updating existing upstream PR body');
-        const editResult = await $({
+        const editResult = await editUpstreamPrBody({
+          prUrl: upstreamPrUrl,
+          body: translatedBody,
+          denyList: prepared.denyList,
           cwd: repoDir,
-          reject: false,
-          input: translatedBody,
-        })`gh pr edit ${upstreamPrUrl} --body-file -`;
+        });
         if (editResult.exitCode === 0) {
           s.stop('Updated upstream PR body');
         } else {
