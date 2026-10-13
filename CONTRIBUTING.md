@@ -57,6 +57,8 @@ npm run test:watch
 
 **Important**: All tests must pass before submitting a PR.
 
+The e2e suite runs against real GitHub and is opt-in. [tests/e2e/README.md](tests/e2e/README.md) lists its environment variables, including the GitHub App credentials for the App variant of the dispatch tier.
+
 ### Code Quality
 
 We use [Biome](https://biomejs.dev/) for formatting and linting.
