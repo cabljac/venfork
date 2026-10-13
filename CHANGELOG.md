@@ -1,5 +1,15 @@
 # venfork
 
+## [0.12.0](https://github.com/cabljac/venfork/compare/v0.11.0...v0.12.0) (2026-10-13)
+
+
+### Features
+
+* **config:** add scheduleAuth to venfork-config ([#95](https://github.com/cabljac/venfork/issues/95)) ([b1287f1](https://github.com/cabljac/venfork/commit/b1287f1b7664bef37ee4ce5a6828fd39918c7c1b))
+* **doctor:** check GitHub App secrets when scheduleAuth is app ([#98](https://github.com/cabljac/venfork/issues/98)) ([8232a2c](https://github.com/cabljac/venfork/commit/8232a2c9ee77eabe0223d0c54a30445b03ff87eb))
+* **schedule:** add --app and --token to schedule set ([#97](https://github.com/cabljac/venfork/issues/97)) ([d3bb0da](https://github.com/cabljac/venfork/commit/d3bb0da8cac6c8183925feda45728d936e887861))
+* **schedule:** generate a GitHub App token step when scheduleAuth is app ([#96](https://github.com/cabljac/venfork/issues/96)) ([4ec7745](https://github.com/cabljac/venfork/commit/4ec774524215d1fe3c9e6e72aa21441e501c279d))
+
 ## [0.11.0](https://github.com/cabljac/venfork/compare/v0.10.0...v0.11.0) (2026-10-06)
 
 
