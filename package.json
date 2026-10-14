@@ -55,7 +55,7 @@
   },
   "homepage": "https://github.com/cabljac/venfork#readme",
   "dependencies": {
-    "@clack/prompts": "^0.11.0",
+    "@clack/prompts": "^1.8.1",
     "execa": "^9.6.1"
   },
   "devDependencies": {
@@ -64,6 +64,6 @@
     "typescript": "^5.7.3"
   },
   "engines": {
-    "node": "^18.19.0 || >=20.5.0"
+    "node": ">=22"
   }
 }

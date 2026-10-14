@@ -271,6 +271,11 @@ mock.module('@clack/prompts', () => ({
   spinner: mock(() => ({
     start: mock(() => {}),
     stop: mock(() => {}),
+    cancel: mock(() => {}),
+    error: mock(() => {}),
+    message: mock(() => {}),
+    clear: mock(() => {}),
+    isCancelled: false,
   })),
   note: mock((message: string, title?: string) => {
     noteCalls.push({ message, title });

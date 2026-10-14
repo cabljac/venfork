@@ -36,7 +36,7 @@ When you run `venfork stage`, your work becomes visible on the public fork and r
 
 Before using Venfork, ensure you have:
 
-- **Node.js 18.19+ or 20.5+** or **Bun** (for running the CLI)
+- **Node.js 22+** or **Bun** (for running the CLI)
 - **GitHub CLI (`gh`)** installed and authenticated
   ```bash
   # Install gh (macOS)
@@ -447,7 +447,7 @@ The cron is five fields. Month and weekday names (`JAN`, `MON-FRI`) are accepted
 
 The workflow runs `venfork sync --report-issues` with the job's `GITHUB_TOKEN` (the workflow asks for `issues: write`). If sync is blocked by divergent commits, it opens an issue on the mirror labelled `venfork-sync-blocked`, or refreshes the body of the open one, with the changed files and the exact `venfork preserve add ...` or rebase steps. A final `if: failure()` step covers every other failure (install errors, a missing token, timeouts) by opening the same labelled issue or commenting on it with the run URL. The next successful sync comments "Resolved by <run>" and closes the issue. If you close the issue by hand while the divergence is still there, the next blocked run opens a new one. Outside GitHub Actions, `--report-issues` only files the issue when gh confirms the mirror is a private repository.
 
-The workflow runs one sync at a time (concurrency group `venfork-sync-<workflow name>`, queued, not cancelled) and stops a run after 30 minutes. It installs venfork before checking out the mirror, with `npm install -g --ignore-scripts`, so no install script runs with the push token in the git config.
+The workflow runs one sync at a time (concurrency group `venfork-sync-<workflow name>`, queued, not cancelled) and stops a run after 30 minutes. It installs venfork before checking out the mirror, with `npm install -g --ignore-scripts`, so no install script runs with the push token in the git config. Before that it sets up Node.js 22 with `actions/setup-node` (pinned by commit), so the run does not depend on the Node the runner image ships.
 
 **Pinned venfork version**
 
@@ -861,7 +861,7 @@ npm run check
 
 ## Tech Stack
 
-- **Runtime:** Node.js 18.19+ or 20.5+ (or Bun for faster development)
+- **Runtime:** Node.js 22+ (or Bun for faster development)
 - **Language:** TypeScript (strict mode)
 - **Shell Execution:** execa
 - **CLI Framework:** @clack/prompts

@@ -34,8 +34,13 @@ export interface AutoYesConfirmOptions extends ConfirmPromptOptions {
 export async function promptText(
   opts: TextPromptOptions
 ): Promise<string | symbol> {
-  const { flag: _flag, ...clackOpts } = opts;
-  return p.text(clackOpts);
+  const { flag: _flag, validate, ...clackOpts } = opts;
+  return p.text({
+    ...clackOpts,
+    // clack validates before it substitutes defaultValue for an empty line.
+    validate:
+      validate && ((value) => validate(value || (opts.defaultValue ?? ''))),
+  });
 }
 
 /**

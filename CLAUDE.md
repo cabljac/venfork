@@ -14,7 +14,7 @@ A CLI that creates and manages **private mirrors of public GitHub repos** for ve
 
 ## Commands (development)
 
-Runtime is **Bun** (primary); Node.js `^18.19.0 || >=20.5.0` (execa 9) is a supported target.
+Runtime is **Bun** (primary); Node.js `>=22` is a supported target (`engines.node`; CI runs Node 22 and 24). `bun run smoke:node` fails when a runtime dependency needs a newer Node than `engines.node` allows.
 
 ```bash
 bun install              # deps
