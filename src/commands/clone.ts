@@ -3,6 +3,7 @@ import { $ } from 'execa';
 import { fetchVenforkConfig } from '../config.js';
 import { CommandExitError } from '../errors.js';
 import { ghGitProtocol } from '../git.js';
+import { isCancel, promptText } from '../shared/prompt.js';
 import {
   githubUrlForProtocol,
   normalizeGitHubRepoInput,
@@ -125,16 +126,16 @@ export async function cloneCommand(
         if (options.upstreamUrl) {
           upstreamUrl = options.upstreamUrl;
         } else {
-          const response = await p.text({
+          const response = await promptText({
             message:
               'Upstream URL? (no venfork-config branch was found, so it cannot be auto-detected)',
             placeholder: 'git@github.com:owner/repo.git',
           });
-          if (p.isCancel(response) || !(response as string).trim()) {
+          if (isCancel(response) || !response.trim()) {
             p.outro('❌ Clone cancelled');
             throw new CommandExitError(1);
           }
-          upstreamUrl = (response as string).trim();
+          upstreamUrl = response.trim();
         }
       } else {
         // Step 3a: Auto-detect public fork
@@ -160,17 +161,17 @@ export async function cloneCommand(
             'Detection Failed'
           );
 
-          const response = await p.text({
+          const response = await promptText({
             message: 'Please provide the public fork URL:',
             placeholder: 'git@github.com:owner/repo.git',
           });
 
-          if (p.isCancel(response)) {
+          if (isCancel(response)) {
             p.outro('❌ Clone cancelled');
             throw new CommandExitError(1);
           }
 
-          publicForkUrl = response as string;
+          publicForkUrl = response;
           publicRepoName = parseRepoName(publicForkUrl);
         }
 
@@ -198,17 +199,17 @@ export async function cloneCommand(
 
             p.log.warn('⚠️  Public fork has no parent repository.');
 
-            const response = await p.text({
+            const response = await promptText({
               message: 'Please provide the upstream URL:',
               placeholder: 'git@github.com:original/repo.git',
             });
 
-            if (p.isCancel(response)) {
+            if (isCancel(response)) {
               p.outro('❌ Clone cancelled');
               throw new CommandExitError(1);
             }
 
-            upstreamUrl = response as string;
+            upstreamUrl = response;
           }
         }
       }

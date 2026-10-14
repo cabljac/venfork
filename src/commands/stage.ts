@@ -12,7 +12,6 @@ import {
   RemoteNotFoundError,
 } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
-import { confirmOrAutoYes } from '../shared/confirm.js';
 import { WORKFLOWS_DIR } from '../shared/constants.js';
 import {
   assertNoMirrorReference,
@@ -25,6 +24,7 @@ import {
 } from '../shared/managed-commit.js';
 import { resolveCommit } from '../shared/mirror-commit.js';
 import { netExec, netFailureReason, netFetch } from '../shared/net.js';
+import { confirmOrAutoYes, isCancel } from '../shared/prompt.js';
 import {
   findInternalPr,
   type InternalPrInfo,
@@ -731,7 +731,7 @@ export async function stageCommand(
       allowNonInteractive: createPr,
     });
 
-    if (p.isCancel(shouldStage)) {
+    if (isCancel(shouldStage)) {
       p.cancel('Operation cancelled');
       throw new CommandExitError(130);
     }
