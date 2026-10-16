@@ -1,13 +1,13 @@
 ---
 command: schedule
 entry: src/commands/schedule.ts
-shared: [config-change, constants, cron, net, push-token, divergence, mirror-commit]
+shared: [config-change, constants, cron, json-output, net, push-token, divergence, mirror-commit]
 config:
   read: [schedule, mode, preserve, enabledWorkflows, disabledWorkflows]
   written: [schedule]
 tests:
-  unit: [tests/unit/commands.test.ts, tests/unit/schedule-args.test.ts, tests/unit/cron.test.ts, tests/unit/workflow.test.ts]
-  integration: [tests/integration/schedule.test.ts, tests/integration/integrity.test.ts, tests/integration/config-change.test.ts]
+  unit: [tests/unit/commands.test.ts, tests/unit/schedule-args.test.ts, tests/unit/cron.test.ts, tests/unit/workflow.test.ts, tests/unit/json-output.test.ts]
+  integration: [tests/integration/cli.test.ts, tests/integration/schedule.test.ts, tests/integration/integrity.test.ts, tests/integration/config-change.test.ts]
   e2e: [tests/e2e/sync-flow.test.ts]
 ---
 
@@ -20,11 +20,12 @@ Pending #85 stack: `schedule set --app`/`--token` and `scheduleAuth`; update thi
 - `disable` writes `enabled: false` and re-stamps origin without the workflow. With no preserve or workflow list, origin returns to the plain upstream tip.
 - Order inside `set`/`disable`: read config at SHA S, refuse divergence, build the tip, write the config with a lease on S (no retry), push the tip with a lease. If the push fails, the config is restored to S.
 - `set` warns that every upstream workflow can read `VENFORK_PUSH_TOKEN` while both workflow lists are empty, and prints the `gh secret set` command.
-- Usage errors (exit 2): "Invalid cron expression '<cron>' (expected 5 fields)", "Missing cron expression", "Unknown schedule action". Runtime errors (exit 1): `SyncDivergenceError` (origin has user commits), `PinDowngradeError`, `GitError` "origin/main moved since this sync fetched it" (stale lease; the message says sync even here), `ConfigError` reason `conflict` (config moved between read and write), a combined error when the rollback also fails.
+- Usage errors (exit 2): "Invalid cron expression '<cron>' (expected 5 fields)", "Missing cron expression", "Unknown schedule action". Runtime errors (exit 1): `SyncDivergenceError` (origin has user commits), `PinDowngradeError`, `GitError` "origin/main moved since this sync fetched it" (stale lease; the message says sync even here), `ConfigError` reason `conflict` (config moved between read and write), `ConfigError` reason `missing` ("venfork-config branch not found or invalid"), `PreconditionError` (`set --app` with the public fork under another owner), a combined error when the rollback also fails.
+- `--json` on every action prints one envelope line on stdout. `result` is the schedule after the action: `{ enabled, cron?, auth: 'token' | 'app' }`. `cron` is absent when none is stored; `disable` keeps the stored cron.
 
 ## How a user reaches it
 
-`venfork schedule`, `venfork schedule status`, `venfork schedule set "0 */6 * * *"`, `venfork schedule disable`. No prompt.
+`venfork schedule`, `venfork schedule status`, `venfork schedule set "0 */6 * * *"`, `venfork schedule disable`, each with optional `--json`. No prompt.
 
 ## How to drive it
 
@@ -34,6 +35,7 @@ git -C "$VF_ORIGIN" show --stat --format=%s main                             # m
 A=$(vf_tip "$VF_ORIGIN"); N=$(vf_pushes "$VF_ORIGIN")
 venfork sync </dev/null >/dev/null 2>&1; echo "$A $(vf_tip "$VF_ORIGIN") $N $(vf_pushes "$VF_ORIGIN")"  # same SHA, same count
 venfork schedule status </dev/null 2>&1 | grep -E "Enabled|Cron"
+venfork schedule status --json </dev/null 2>/dev/null | jq -c .result          # {"enabled":true,"cron":"0 */6 * * *","auth":"token"}
 venfork schedule set "61 * * * *" </dev/null 2>&1 | grep Invalid             # usage, exit 2
 venfork schedule disable </dev/null 2>&1 | grep "Scheduled sync disabled"   # origin back to upstream (+0)
 vf_origin_commit src/hot.txt x; venfork schedule set "0 * * * *" </dev/null 2>&1 | grep "Sync aborted"  # divergence, exit 1

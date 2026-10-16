@@ -540,17 +540,20 @@ describe('updateVenforkConfig', () => {
       );
     });
 
-    await expect(
-      updateVenforkConfig('/tmp/repo', {
-        shippedBranches: {
-          'feat/auth': {
-            upstreamPrUrl: 'https://github.com/u/r/pull/1',
-            head: 'aaa',
-            shippedAt: '2026-04-28T10:00:00Z',
-          },
+    const err = await updateVenforkConfig('/tmp/repo', {
+      shippedBranches: {
+        'feat/auth': {
+          upstreamPrUrl: 'https://github.com/u/r/pull/1',
+          head: 'aaa',
+          shippedAt: '2026-04-28T10:00:00Z',
         },
-      })
-    ).rejects.toThrow(/concurrent-write retries|stale info/i);
+      },
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ConfigError);
+    expect((err as ConfigError).reason).toBe('conflict');
+    expect((err as Error).message).toContain('concurrent-write retries');
+    expect(String((err as Error).cause)).toContain('stale info');
 
     // Bounded at MAX_RETRIES = 3.
     expect(pushAttempt).toBe(3);

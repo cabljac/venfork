@@ -1,12 +1,12 @@
 ---
 command: setup
 entry: src/commands/setup.ts
-shared: [net, fs, prompt]
+shared: [net, fs, json-output, prompt]
 config:
   read: [mode, upstreamUrl, publicForkUrl]
   written: [version, mode, upstreamUrl, publicForkUrl]
 tests:
-  unit: [tests/unit/commands.test.ts, tests/unit/setup-args.test.ts, tests/unit/net.test.ts]
+  unit: [tests/unit/commands.test.ts, tests/unit/setup-args.test.ts, tests/unit/net.test.ts, tests/unit/json-output.test.ts]
   integration: [tests/integration/cli.test.ts, tests/integration/integrity.test.ts]
   e2e: [tests/e2e/sync-flow.test.ts]
 ---
@@ -20,11 +20,12 @@ tests:
 - Writes the orphan `venfork-config` branch. Never overwrites one: an existing config that agrees is kept, one that disagrees is a `ConfigError` ("The existing venfork-config disagrees with this setup").
 - Sets remotes: `origin`, `public` (not with `--no-public`; a stale `public` is removed), `upstream` with push URL `DISABLE`. URLs follow `gh config get git_protocol`.
 - Recovery: when the fork or the mirror already exists on GitHub, setup skips the seed, reuses a matching local clone and runs `sync` quietly inside it.
-- Usage errors (exit 2, before gh auth): `--no-public` with `--fork-name`, invalid upstream, invalid `--fork-name`. Runtime errors (exit 1): upstream already under the owner without `--fork-name`, an existing repo that is not a fork of upstream, a local directory that is not the expected mirror clone.
+- Usage errors (exit 2, before gh auth): `--no-public` with `--fork-name`, invalid upstream, invalid `--fork-name`. Runtime errors (exit 1): `PreconditionError` for upstream already under the owner without `--fork-name`, an existing repo that is not a fork of upstream, a local directory that is not the expected mirror clone; `GitHubError` (gh's own message) when `gh repo fork` or `gh repo create` fails and no usable repo exists.
+- `--json` implies `--no-input` and prints one envelope line on stdout. `result` is `{ mode, mirror: { repo, url }, publicFork?: { repo, url }, upstream: { repo, url }, directory }`: `repo` is `owner/name`, `url` the `https://github.com/` page, `publicFork` absent with `--no-public`, `directory` the absolute checkout path. Failures carry `error.code` (`missing-input` with `flag`, `precondition`, `github`, `config`, `usage`).
 
 ## How a user reaches it
 
-`venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public] [--yes] [--no-input]`. `<upstream>` is a GitHub URL or `owner/repo`.
+`venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public] [--yes] [--no-input] [--json]`. `<upstream>` is a GitHub URL or `owner/repo`.
 
 ## How to drive it
 
@@ -34,6 +35,7 @@ The success and recovery paths need real GitHub (e2e tier 1, opt-in). On the fix
 cd "$VF_ROOT"
 venfork setup </dev/null 2>&1; echo $?                                 # 2, "Pass the <upstream> argument."
 venfork setup a/b b-private </dev/null 2>&1; echo $?                   # 2, "Continue with personal account?" ... "Pass --yes."
+venfork setup a/b b-private --json </dev/null 2>/dev/null | jq -c '[.error.code, .error.flag]'   # ["missing-input","--yes"]
 venfork setup a/b --org c </dev/null 2>&1 | grep -o "Private mirror repo name? b-private.*"   # default used, then exit 1 at gh
 venfork setup a/b --no-public --fork-name x </dev/null 2>&1; echo $?   # 1, "--no-public cannot be combined with --fork-name"
 venfork setup a/b m --fork-name "bad name" --org c </dev/null 2>&1 | grep -o "Invalid --fork-name"

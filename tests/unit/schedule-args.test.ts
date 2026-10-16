@@ -3,18 +3,25 @@ import { parseScheduleCliArgs } from '../../src/schedule-args.js';
 
 describe('parseScheduleCliArgs', () => {
   test('defaults to status', () => {
-    expect(parseScheduleCliArgs([])).toEqual({ action: 'status' });
-    expect(parseScheduleCliArgs(['status'])).toEqual({ action: 'status' });
+    expect(parseScheduleCliArgs([])).toEqual({ action: 'status', json: false });
+    expect(parseScheduleCliArgs(['status'])).toEqual({
+      action: 'status',
+      json: false,
+    });
   });
 
   test('parses disable', () => {
-    expect(parseScheduleCliArgs(['disable'])).toEqual({ action: 'disable' });
+    expect(parseScheduleCliArgs(['disable'])).toEqual({
+      action: 'disable',
+      json: false,
+    });
   });
 
   test('parses set with a cron expression', () => {
     expect(parseScheduleCliArgs(['set', '0 */6 * * *'])).toEqual({
       action: 'set',
       cron: '0 */6 * * *',
+      json: false,
     });
   });
 
@@ -55,6 +62,7 @@ describe('parseScheduleCliArgs', () => {
     expect(parseScheduleCliArgs(['set', '--', '0 * * * *'])).toEqual({
       action: 'set',
       cron: '0 * * * *',
+      json: false,
     });
   });
 });
@@ -65,11 +73,13 @@ describe('schedule set auth flags', () => {
       action: 'set',
       cron: '0 * * * *',
       auth: 'app',
+      json: false,
     });
     expect(parseScheduleCliArgs(['set', '--token', '0 * * * *'])).toEqual({
       action: 'set',
       cron: '0 * * * *',
       auth: 'token',
+      json: false,
     });
   });
 

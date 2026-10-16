@@ -6,6 +6,7 @@ describe('parsePreserveCliArgs', () => {
     expect(parsePreserveCliArgs([])).toEqual({
       action: 'list',
       paths: [],
+      json: false,
     });
   });
 
@@ -13,6 +14,7 @@ describe('parsePreserveCliArgs', () => {
     expect(parsePreserveCliArgs(['list'])).toEqual({
       action: 'list',
       paths: [],
+      json: false,
     });
   });
 
@@ -26,6 +28,7 @@ describe('parsePreserveCliArgs', () => {
     ).toEqual({
       action: 'add',
       paths: ['.github/workflows/caller.yml', 'docs/MIRROR.md'],
+      json: false,
     });
   });
 
@@ -35,6 +38,7 @@ describe('parsePreserveCliArgs', () => {
     ).toEqual({
       action: 'remove',
       paths: ['.github/workflows/caller.yml'],
+      json: false,
     });
   });
 
@@ -42,6 +46,7 @@ describe('parsePreserveCliArgs', () => {
     expect(parsePreserveCliArgs(['clear'])).toEqual({
       action: 'clear',
       paths: [],
+      json: false,
     });
   });
 
@@ -49,6 +54,7 @@ describe('parsePreserveCliArgs', () => {
     expect(parsePreserveCliArgs(['add', 'a,b/c.yml'])).toEqual({
       action: 'add',
       paths: ['a,b/c.yml'],
+      json: false,
     });
   });
 

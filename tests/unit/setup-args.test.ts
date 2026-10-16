@@ -14,6 +14,7 @@ describe('parseSetupCliArgs', () => {
       publicForkRepoName: undefined,
       noPublic: false,
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 
@@ -27,6 +28,7 @@ describe('parseSetupCliArgs', () => {
       publicForkRepoName: undefined,
       noPublic: false,
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 
@@ -38,6 +40,7 @@ describe('parseSetupCliArgs', () => {
       publicForkRepoName: undefined,
       noPublic: false,
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 
@@ -58,6 +61,7 @@ describe('parseSetupCliArgs', () => {
       publicForkRepoName: 'p-public',
       noPublic: false,
       prompt: { yes: false, noInput: false },
+      json: false,
     });
 
     expect(
@@ -69,6 +73,7 @@ describe('parseSetupCliArgs', () => {
       publicForkRepoName: 'other-fork',
       noPublic: false,
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 
@@ -82,6 +87,7 @@ describe('parseSetupCliArgs', () => {
       publicForkRepoName: undefined,
       noPublic: false,
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 
@@ -94,6 +100,7 @@ describe('parseSetupCliArgs', () => {
       publicForkRepoName: undefined,
       noPublic: false,
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 
@@ -129,6 +136,7 @@ describe('parseSetupCliArgs', () => {
       publicForkRepoName: undefined,
       noPublic: true,
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 

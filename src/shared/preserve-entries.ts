@@ -1,4 +1,5 @@
 import { $ } from 'execa';
+import { PreconditionError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { netFetch } from './net.js';
 
@@ -11,7 +12,7 @@ const BLOB_MODES = new Set(['100644', '100755', '120000']);
  *
  * @param entries Normalized preserve paths to add.
  * @param cwd Mirror checkout.
- * @throws Error naming the first entry that is a directory, missing or not a file.
+ * @throws PreconditionError naming the first entry that is a directory, missing or not a file.
  */
 export async function assertPreserveEntriesAreFiles(
   entries: readonly string[],
@@ -38,13 +39,13 @@ export async function assertPreserveEntriesAreFiles(
       .find((item) => item.path === entry);
     const mode = found?.meta[0];
     if (mode === undefined) {
-      throw new Error(
+      throw new PreconditionError(
         `Cannot preserve '${entry}': it does not exist on origin/${defaultBranch}. Commit the file to origin/${defaultBranch} first.`
       );
     }
     if (!BLOB_MODES.has(mode)) {
       const kind = found?.meta[1] === 'tree' ? 'a directory' : 'not a file';
-      throw new Error(
+      throw new PreconditionError(
         `Cannot preserve '${entry}': it is ${kind} on origin/${defaultBranch}. Preserve supports single files only; list each file instead.`
       );
     }

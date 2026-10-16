@@ -157,6 +157,13 @@ export function scheduleAuthOf(
 }
 
 const CONFIG_BRANCH = 'venfork-config';
+
+/** The error for a command that needs `venfork-config` when origin has none. */
+export function configNotFoundError(): ConfigError {
+  return new ConfigError(`${CONFIG_BRANCH} branch not found or invalid`, {
+    reason: 'missing',
+  });
+}
 const CONFIG_DIR = '.venfork';
 const CONFIG_FILE = 'config.json';
 const UPDATE_CONFIG_COMMIT_MESSAGE = 'chore: update venfork configuration';
@@ -1027,12 +1034,14 @@ export async function updateVenforkConfig(
 ): Promise<VenforkConfig> {
   const MAX_RETRIES = 3;
 
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+  for (let attempt = 0; ; attempt += 1) {
     const read = await readVenforkConfigFromRepoWithSha(repoDir, {
       allowInvalidCron: patch.schedule?.cron !== undefined,
     });
     if (!read) {
-      throw new ConfigError(`${CONFIG_BRANCH} branch not found on origin`);
+      throw new ConfigError(`${CONFIG_BRANCH} branch not found on origin`, {
+        reason: 'missing',
+      });
     }
 
     const normalized = applyPatchAndNormalize(read.config, patch);
@@ -1048,19 +1057,18 @@ export async function updateVenforkConfig(
       );
       return normalized;
     } catch (err) {
-      if (isLeaseFailure(err) && attempt < MAX_RETRIES - 1) {
-        // Another venfork command updated the config between our read and
-        // our push. Re-read on the next iteration so the merge is on top
-        // of their winning content.
-        continue;
+      if (!isLeaseFailure(err)) throw err;
+      if (attempt === MAX_RETRIES - 1) {
+        throw new ConfigError(
+          `Could not update venfork-config after ${MAX_RETRIES} concurrent-write retries. Re-run the command, or resolve any unexpected state on the venfork-config branch.`,
+          { reason: 'conflict', cause: err }
+        );
       }
-      throw err;
+      // Another venfork command updated the config between our read and
+      // our push. Re-read on the next iteration so the merge is on top of
+      // their winning content.
     }
   }
-
-  throw new Error(
-    `Could not update venfork-config after ${MAX_RETRIES} concurrent-write retries. Re-run the command, or resolve any unexpected state on the venfork-config branch.`
-  );
 }
 
 /**

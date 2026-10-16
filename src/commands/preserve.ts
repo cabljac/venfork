@@ -1,12 +1,19 @@
 import { $ } from 'execa';
 import {
+  configNotFoundError,
   normalizePreservePath,
   preserveRemoveHint,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
+  type VenforkConfig,
   type VenforkConfigPatch,
 } from '../config.js';
-import { CommandExitError, isEntryReported, UsageError } from '../errors.js';
+import {
+  CommandExitError,
+  isEntryReported,
+  PreconditionError,
+  UsageError,
+} from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { applyConfigChange } from '../shared/config-change.js';
 import { changedFilesInCommit } from '../shared/divergence.js';
@@ -70,35 +77,36 @@ async function managedCommitCarrying(
  * dropped file, origin is re-stamped in the same step so the managed commit
  * never holds a file the list no longer names. When user commits sit on top
  * of that managed commit, only the config is written and a warning says
- * sync drops the file once origin is back in line.
+ * sync drops the file once origin is back in line. Returns the written
+ * config.
  */
 async function writeRemoval(
   repoDir: string,
   patch: VenforkConfigPatch,
   removed: string[],
   listed: string[]
-): Promise<void> {
+): Promise<VenforkConfig> {
   const carrying = await managedCommitCarrying(repoDir, removed);
   const unknown = removed.filter(
     (entry) =>
       !listed.includes(entry) && !(carrying?.carried.includes(entry) ?? false)
   );
   if (unknown.length > 0) {
-    throw new Error(
+    throw new PreconditionError(
       `Not in the preserve list: ${unknown.map((entry) => `'${entry}'`).join(', ')}. Run \`venfork preserve list\` to see the entries.`
     );
   }
   if (carrying?.where === 'tip') {
-    await applyConfigChange(repoDir, patch);
-    return;
+    return applyConfigChange(repoDir, patch);
   }
-  await updateVenforkConfig(repoDir, patch);
+  const updated = await updateVenforkConfig(repoDir, patch);
   if (carrying?.where === 'buried') {
     const names = carrying.carried.map((entry) => `'${entry}'`).join(', ');
     p.log.warn(
       `origin/${carrying.defaultBranch} has diverged and its managed commit still carries ${names}. \`venfork sync\` drops it once the divergent commits are moved off origin/${carrying.defaultBranch}.`
     );
   }
+  return updated;
 }
 
 /**
@@ -117,17 +125,33 @@ function normalizePreserveArgs(paths: string[]): string[] {
   });
 }
 
+/** The preserve list after `venfork preserve`, reported as the `--json` result. */
+export interface PreserveResult {
+  /** The valid preserve entries. */
+  paths: string[];
+  /** Entries sync refuses to run with until they are removed. */
+  invalidPaths: string[];
+}
+
+function preserveResult(config: VenforkConfig): PreserveResult {
+  return {
+    paths: config.preserve ?? [],
+    invalidPaths: config.invalidPreserve ?? [],
+  };
+}
+
 /**
  * Preserve command: manage the `preserve` allowlist of mirror-only file paths
  * carried forward by `venfork sync`. Allowlist-only / opt-in: there's no
  * "deny preserve" concept (entries can still be added, removed, or cleared;
  * only the deny-direction has no semantics). Remove and clear re-stamp
  * origin's default branch when its managed commit carries a dropped file.
+ * @returns The list after the action, for `--json`.
  */
 export async function preserveCommand(
   action: 'list' | 'add' | 'remove' | 'clear',
   paths: string[]
-): Promise<void> {
+): Promise<PreserveResult> {
   p.intro('🧷 Venfork Preserve');
   const repoDir = process.cwd();
 
@@ -135,7 +159,7 @@ export async function preserveCommand(
     if (action === 'list') {
       const config = await readVenforkConfigFromRepo(repoDir);
       if (!config) {
-        throw new Error('venfork-config branch not found or invalid');
+        throw configNotFoundError();
       }
       const entries = config.preserve ?? [];
       if (entries.length === 0) {
@@ -159,7 +183,7 @@ export async function preserveCommand(
         );
       }
       p.outro('✨ Preserve list shown');
-      return;
+      return preserveResult(config);
     }
 
     if (action === 'clear') {
@@ -168,9 +192,14 @@ export async function preserveCommand(
         ...(config?.preserve ?? []),
         ...(config?.invalidPreserve ?? []),
       ];
-      await writeRemoval(repoDir, { preserve: null }, listed, listed);
+      const cleared = await writeRemoval(
+        repoDir,
+        { preserve: null },
+        listed,
+        listed
+      );
       p.outro('✨ Preserve list cleared.');
-      return;
+      return preserveResult(cleared);
     }
 
     if (action === 'remove') {
@@ -182,7 +211,7 @@ export async function preserveCommand(
       const toRemove = [
         ...new Set(paths.map((entry) => normalizePreservePath(entry) ?? entry)),
       ];
-      await writeRemoval(
+      const updated = await writeRemoval(
         repoDir,
         { preserveRemove: toRemove },
         toRemove,
@@ -193,12 +222,14 @@ export async function preserveCommand(
         'Removed from preserve list'
       );
       p.outro('✨ Preserve list updated.');
-      return;
+      return preserveResult(updated);
     }
 
     const validated = normalizePreserveArgs(paths);
     await assertPreserveEntriesAreFiles(validated, repoDir);
-    await updateVenforkConfig(repoDir, { preserveAdd: validated });
+    const updated = await updateVenforkConfig(repoDir, {
+      preserveAdd: validated,
+    });
     p.note(
       validated.map((entry) => `- ${entry}`).join('\n'),
       'Added to preserve list'
@@ -206,10 +237,11 @@ export async function preserveCommand(
     p.outro(
       '✨ Preserve list updated. Run `venfork sync` to apply on the private mirror default branch.'
     );
+    return preserveResult(updated);
   } catch (error) {
     if (isEntryReported(error)) throw error;
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Preserve command failed');
-    throw new CommandExitError(1);
+    throw new CommandExitError(1, error);
   }
 }

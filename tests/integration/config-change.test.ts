@@ -47,6 +47,7 @@ import {
   readVenforkConfigFromRepo,
   updateVenforkConfig,
 } from '../../src/config.js';
+import { SyncDivergenceError } from '../../src/errors.js';
 import { applyConfigChange } from '../../src/shared/config-change.js';
 import {
   createMirrorFixture,
@@ -192,4 +193,34 @@ test('a failed push restores the exact config commit that was read', async () =>
 
   expect(err.message).toContain('push to origin/main failed');
   expect(await fx.sha(fx.origin, 'venfork-config')).toBe(before);
+});
+
+test('schedule set on an origin with a user commit refuses and changes nothing', async () => {
+  const userCommit = await fx.commitOnOrigin(
+    { 'src/hotfix.ts': 'export {};\n' },
+    'fix: hotfix on the mirror'
+  );
+  const configBefore = await fx.sha(fx.origin, 'venfork-config');
+
+  const err = await rejection(setCron(fx.work, '0 * * * *'));
+
+  expect(err).toBeInstanceOf(SyncDivergenceError);
+  expect(await fx.sha(fx.origin, 'main')).toBe(userCommit);
+  expect(await fx.sha(fx.origin, 'venfork-config')).toBe(configBefore);
+});
+
+test('preserve remove of the entry that allows an origin commit refuses and changes nothing', async () => {
+  await updateVenforkConfig(fx.work, { preserve: ['notes.md'] });
+  const preservedCommit = await fx.commitOnOrigin(
+    { 'notes.md': 'internal\n' },
+    'docs: internal notes'
+  );
+  const configBefore = await fx.sha(fx.origin, 'venfork-config');
+
+  const err = await rejection(applyConfigChange(fx.work, { preserve: [] }));
+
+  expect(err).toBeInstanceOf(SyncDivergenceError);
+  expect(await fx.sha(fx.origin, 'main')).toBe(preservedCommit);
+  expect(await fx.fileAt(fx.origin, 'main', 'notes.md')).toBe('internal\n');
+  expect(await fx.sha(fx.origin, 'venfork-config')).toBe(configBefore);
 });

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { parseCloneCliArgs } from '../../src/clone-args.js';
 import { parseDoctorCliArgs } from '../../src/doctor-args.js';
 import {
   AuthenticationError,
@@ -7,10 +8,12 @@ import {
   ConfigError,
   exitCodeFor,
   GitError,
+  GitHubError,
   MirrorReferenceError,
   MissingInputError,
   NotInRepositoryError,
   PinDowngradeError,
+  PreconditionError,
   RedactionError,
   RemoteNotFoundError,
   StageLeakError,
@@ -19,7 +22,10 @@ import {
   UsageError,
   VenforkError,
 } from '../../src/errors.js';
+import { parsePreserveCliArgs } from '../../src/preserve-args.js';
 import { parsePullCliArgs } from '../../src/pull-args.js';
+import { parseScheduleCliArgs } from '../../src/schedule-args.js';
+import { parseSetupCliArgs } from '../../src/setup-args.js';
 import {
   errorEnvelope,
   type JsonEnvelope,
@@ -29,6 +35,7 @@ import {
 } from '../../src/shared/json-output.js';
 import { parseStageCliArgs } from '../../src/stage-args.js';
 import { parseSyncCliArgs } from '../../src/sync-args.js';
+import { parseWorkflowsCliArgs } from '../../src/workflows-args.js';
 
 describe('error codes', () => {
   const none = { count: 0, files: [] };
@@ -36,6 +43,8 @@ describe('error codes', () => {
     ['VenforkError', new VenforkError('x'), 'runtime'],
     ['AuthenticationError', new AuthenticationError(), 'auth'],
     ['GitError', new GitError('x', 'op'), 'git'],
+    ['GitHubError', new GitHubError('x'), 'github'],
+    ['PreconditionError', new PreconditionError('x'), 'precondition'],
     [
       'RemoteNotFoundError',
       new RemoteNotFoundError('origin'),
@@ -206,6 +215,7 @@ describe('jsonRequested', () => {
 
   test('stops at --', () => {
     expect(jsonRequested('stage', ['--', '--json'])).toBe(false);
+    expect(jsonRequested('preserve', ['add', '--', '--json'])).toBe(false);
   });
 
   const parsedJson: Record<string, (args: string[]) => boolean> = {
@@ -213,6 +223,11 @@ describe('jsonRequested', () => {
     stage: (args) => parseStageCliArgs(args).json,
     pull: (args) => parsePullCliArgs(args).json,
     doctor: (args) => parseDoctorCliArgs(args).json,
+    setup: (args) => parseSetupCliArgs(args).json,
+    clone: (args) => parseCloneCliArgs(args).json,
+    schedule: (args) => parseScheduleCliArgs(args).json,
+    workflows: (args) => parseWorkflowsCliArgs(args).json,
+    preserve: (args) => parsePreserveCliArgs(args).json,
   };
   test.each([
     ['sync', []],
@@ -227,6 +242,21 @@ describe('jsonRequested', () => {
     ['pull', ['issue', '3', '--json', '--yes']],
     ['doctor', ['--json']],
     ['doctor', []],
+    ['setup', ['a/b', '--json']],
+    ['setup', ['a/b', 'b-private', '--org', 'acme']],
+    ['clone', ['acme/p-private', '--json']],
+    ['clone', ['acme/p-private']],
+    ['schedule', ['--json']],
+    ['schedule', ['status', '--json']],
+    ['schedule', ['set', '0 * * * *', '--app', '--json']],
+    ['schedule', ['disable']],
+    ['workflows', ['status', '--json']],
+    ['workflows', ['allow', 'ci.yml', '--json']],
+    ['workflows', []],
+    ['preserve', ['--json']],
+    ['preserve', ['add', 'a.txt', '--json']],
+    ['preserve', ['add', '--', '--json']],
+    ['preserve', ['list']],
   ] as const)('%s %p: the pre-scan agrees with the parser', (command, args) => {
     expect(jsonRequested(command, [...args])).toBe(
       parsedJson[command]([...args])
@@ -240,5 +270,13 @@ describe('jsonRequested', () => {
     expect(issue.prompt).toEqual({ yes: true, noInput: true });
     const pull = parsePullCliArgs(['issue', '3', '--json']);
     expect(pull.kind === 'issue' && pull.prompt.noInput).toBe(true);
+    expect(parseSetupCliArgs(['a/b', '--json', '-y']).prompt).toEqual({
+      yes: true,
+      noInput: true,
+    });
+    expect(parseCloneCliArgs(['acme/p-private', '--json']).prompt).toEqual({
+      yes: false,
+      noInput: true,
+    });
   });
 });

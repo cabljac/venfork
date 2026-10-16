@@ -9,6 +9,7 @@ describe('parseCloneCliArgs', () => {
         noPublic: false,
         upstreamUrl: undefined,
         prompt: { yes: false, noInput: false },
+        json: false,
       }
     );
   });
@@ -19,6 +20,7 @@ describe('parseCloneCliArgs', () => {
       noPublic: true,
       upstreamUrl: undefined,
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 
@@ -35,6 +37,7 @@ describe('parseCloneCliArgs', () => {
       noPublic: true,
       upstreamUrl: 'git@github.com:acme/proj.git',
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 
@@ -49,6 +52,7 @@ describe('parseCloneCliArgs', () => {
       noPublic: false,
       upstreamUrl: 'git@github.com:acme/proj.git',
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 
@@ -76,6 +80,7 @@ describe('parseCloneCliArgs', () => {
       noPublic: true,
       upstreamUrl: 'git@github.com:acme/proj.git',
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 });
@@ -158,6 +163,7 @@ describe('parseCloneCliArgs --public-fork', () => {
       upstreamUrl: 'up/b',
       publicForkUrl: 'acme/b',
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 

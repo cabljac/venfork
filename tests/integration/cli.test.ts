@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
@@ -16,6 +17,7 @@ import {
   createMirrorFixture,
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
+import { seedPreserve } from '../harness/preserve.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..', '..');
 let tmp: string;
@@ -547,6 +549,70 @@ describe('clone on a legacy mirror without venfork-config', () => {
     }
   });
 
+  test('--json reports the checkout and its remotes on stdout', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const { path: ghPath } = await legacyMirror(fx);
+
+      const result = await runCliWithoutTty(
+        fx.root,
+        [
+          'clone',
+          'acme/legacy-private',
+          '--public-fork',
+          'other-org/legacy',
+          '--json',
+        ],
+        { PATH: ghPath }
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(parseEnvelope(result.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: true,
+        result: {
+          mode: 'standard',
+          directory: path.join(await realpath(fx.root), 'legacy-private'),
+          remotes: {
+            origin: fx.origin,
+            public: 'git@github.com:other-org/legacy.git',
+            upstream: fx.upstream,
+          },
+        },
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('--json without --public-fork is a missing-input envelope, exit 2', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const { path: ghPath } = await legacyMirror(fx);
+
+      const result = await runCliWithoutTty(
+        fx.root,
+        ['clone', 'acme/legacy-private', '--json'],
+        { PATH: ghPath }
+      );
+
+      expect(result.exitCode).toBe(2);
+      expect(parseEnvelope(result.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: {
+          code: 'missing-input',
+          message: expect.stringContaining(
+            'Please provide the public fork URL:'
+          ),
+          flag: '--public-fork <url>',
+        },
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
   test('without --public-fork, an undetected fork exits 2 naming --public-fork <url>', async () => {
     const fx = await createMirrorFixture();
     try {
@@ -1019,11 +1085,184 @@ describe('--json envelope on stdout, no TTY', () => {
     }
   });
 
+  test('schedule: status, set and disable report the schedule', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const run = async (args: string[]) => {
+        const result = await runCliWithoutTty(fx.work, [
+          'schedule',
+          ...args,
+          '--json',
+        ]);
+        expect(result.exitCode).toBe(0);
+        return parseEnvelope(result.stdout);
+      };
+
+      expect(await run(['status'])).toEqual({
+        schemaVersion: 1,
+        ok: true,
+        result: { enabled: false, auth: 'token' },
+      });
+      expect(await run(['set', '0 */6 * * *'])).toEqual({
+        schemaVersion: 1,
+        ok: true,
+        result: { enabled: true, cron: '0 */6 * * *', auth: 'token' },
+      });
+      expect(await run(['disable'])).toEqual({
+        schemaVersion: 1,
+        ok: true,
+        result: { enabled: false, cron: '0 */6 * * *', auth: 'token' },
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('workflows: status and list edits report the policy', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const run = async (args: string[]) => {
+        const result = await runCliWithoutTty(fx.work, [
+          'workflows',
+          ...args,
+          '--json',
+        ]);
+        expect(result.exitCode).toBe(0);
+        return parseEnvelope(result.stdout).result;
+      };
+
+      expect(await run(['status'])).toEqual({
+        mode: 'none',
+        enabledWorkflows: [],
+        disabledWorkflows: [],
+      });
+      expect(await run(['block', 'deploy.yml'])).toEqual({
+        mode: 'block',
+        enabledWorkflows: [],
+        disabledWorkflows: ['deploy.yml'],
+      });
+      expect(await run(['allow', 'ci.yml'])).toEqual({
+        mode: 'allow',
+        enabledWorkflows: ['ci.yml'],
+        disabledWorkflows: ['deploy.yml'],
+      });
+      expect(await run(['clear'])).toEqual({
+        mode: 'none',
+        enabledWorkflows: [],
+        disabledWorkflows: [],
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('preserve: list reports valid and invalid entries; remove reports the list after it', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await seedPreserve(fx, ['docs/MIRROR.md', '../escape.txt']);
+
+      const listed = await runCliWithoutTty(fx.work, [
+        'preserve',
+        'list',
+        '--json',
+      ]);
+      expect(listed.exitCode).toBe(0);
+      expect(parseEnvelope(listed.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: true,
+        result: { paths: ['docs/MIRROR.md'], invalidPaths: ['../escape.txt'] },
+      });
+
+      const removed = await runCliWithoutTty(fx.work, [
+        'preserve',
+        'remove',
+        '../escape.txt',
+        '--json',
+      ]);
+      expect(removed.exitCode).toBe(0);
+      expect(parseEnvelope(removed.stdout).result).toEqual({
+        paths: ['docs/MIRROR.md'],
+        invalidPaths: [],
+      });
+
+      const unknown = await runCliWithoutTty(fx.work, [
+        'preserve',
+        'remove',
+        'nope.txt',
+        '--json',
+      ]);
+      expect(unknown.exitCode).toBe(1);
+      expect(parseEnvelope(unknown.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: {
+          code: 'precondition',
+          message: expect.stringContaining(
+            "Not in the preserve list: 'nope.txt'"
+          ),
+        },
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('a mirror without venfork-config is a config error, exit 1', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.git(fx.origin, 'branch', '-D', 'venfork-config');
+
+      for (const args of [
+        ['schedule', 'status', '--json'],
+        ['workflows', 'status', '--json'],
+        ['preserve', 'list', '--json'],
+      ]) {
+        const result = await runCliWithoutTty(fx.work, args);
+        expect(result.exitCode).toBe(1);
+        expect(parseEnvelope(result.stdout)).toEqual({
+          schemaVersion: 1,
+          ok: false,
+          error: {
+            code: 'config',
+            message: 'venfork-config branch not found or invalid',
+          },
+        });
+      }
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('setup: --json on a personal account is a missing-input envelope naming --yes', async () => {
+    const result = await runCliWithoutTty(tmp, [
+      'setup',
+      'a/b',
+      'b-private',
+      '--json',
+    ]);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(2);
+    expect(parseEnvelope(result.stdout)).toEqual({
+      schemaVersion: 1,
+      ok: false,
+      error: {
+        code: 'missing-input',
+        message: expect.stringContaining('Continue with personal account?'),
+        flag: '--yes',
+      },
+    });
+  });
+
   for (const args of [
     ['sync', '--json', '--bogus'],
     ['stage', '--json'],
     ['pull', 'nope', '--json'],
     ['doctor', '--json', 'extra'],
+    ['schedule', 'set', '--json'],
+    ['workflows', 'allow', '--json'],
+    ['preserve', 'bogus', '--json'],
+    ['clone', '--json'],
   ]) {
     test(`usage error: venfork ${args.join(' ')} prints the usage envelope, exit 2`, async () => {
       const result = await runCliWithoutTty(tmp, args);
@@ -1042,6 +1281,9 @@ describe('--json envelope on stdout, no TTY', () => {
     ['pull', 'pr', '12', '--json'],
     ['sync', '--json'],
     ['stage', 'feature', '--yes', '--json'],
+    ['schedule', 'status', '--json'],
+    ['workflows', 'status', '--json'],
+    ['preserve', 'list', '--json'],
   ]) {
     test(`outside a git repository, venfork ${args.join(' ')} is not-in-repository, exit 1`, async () => {
       const result = await runCliWithoutTty(tmp, args);
@@ -1055,14 +1297,33 @@ describe('--json envelope on stdout, no TTY', () => {
     });
   }
 
-  test('a command without --json support prints the usage envelope, exit 2', async () => {
-    const result = await runCliWithoutTty(tmp, ['setup', '--json']);
+  test('clone --json when gh repo clone fails is a github envelope, exit 1', async () => {
+    const work = await mkdtemp(path.join(tmp, 'clone-fail-'));
+    const result = await runCliWithoutTty(work, [
+      'clone',
+      'acme/proj-private',
+      '--json',
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(parseEnvelope(result.stdout)).toEqual({
+      schemaVersion: 1,
+      ok: false,
+      error: {
+        code: 'github',
+        message: expect.stringContaining('gh repo clone'),
+      },
+    });
+  });
+
+  test('an unknown command with --json prints the usage envelope, exit 2', async () => {
+    const result = await runCliWithoutTty(tmp, ['bogus', '--json']);
 
     expect(result.exitCode).toBe(2);
     expect(parseEnvelope(result.stdout)).toEqual({
       schemaVersion: 1,
       ok: false,
-      error: { code: 'usage', message: expect.stringContaining('--json') },
+      error: { code: 'usage', message: expect.stringContaining('bogus') },
     });
   });
 

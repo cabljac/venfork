@@ -6,6 +6,7 @@ describe('parseWorkflowsCliArgs', () => {
     expect(parseWorkflowsCliArgs([])).toEqual({
       action: 'status',
       workflows: [],
+      json: false,
     });
   });
 
@@ -15,6 +16,7 @@ describe('parseWorkflowsCliArgs', () => {
     ).toEqual({
       action: 'allow',
       workflows: ['ci.yml', 'lint.yml', 'build.yml'],
+      json: false,
     });
   });
 
@@ -22,6 +24,7 @@ describe('parseWorkflowsCliArgs', () => {
     expect(parseWorkflowsCliArgs(['clear'])).toEqual({
       action: 'clear',
       workflows: [],
+      json: false,
     });
   });
 
@@ -29,6 +32,7 @@ describe('parseWorkflowsCliArgs', () => {
     expect(parseWorkflowsCliArgs(['block', 'deploy.yml', 'e2e.yml'])).toEqual({
       action: 'block',
       workflows: ['deploy.yml', 'e2e.yml'],
+      json: false,
     });
   });
 
@@ -42,7 +46,7 @@ describe('parseWorkflowsCliArgs', () => {
 
   test.each(['unblock', 'unallow'] as const)('parses %s values', (action) => {
     expect(parseWorkflowsCliArgs([action, 'ci.yml,lint.yml', 'x.yml'])).toEqual(
-      { action, workflows: ['ci.yml', 'lint.yml', 'x.yml'] }
+      { action, workflows: ['ci.yml', 'lint.yml', 'x.yml'], json: false }
     );
   });
 

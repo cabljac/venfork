@@ -314,7 +314,9 @@ import {
 import { setupSyncMirror } from '../../src/dispatch.js';
 import {
   CommandExitError,
+  GitHubError,
   MissingInputError,
+  PreconditionError,
   SyncDivergenceError,
   UsageError,
 } from '../../src/errors.js';
@@ -331,7 +333,7 @@ function setupCommand(
     prompt?: { yes: boolean; noInput: boolean };
     organizationFromEnv?: boolean;
   } = {}
-): Promise<void> {
+): ReturnType<typeof runSetupCommand> {
   return runSetupCommand(
     upstreamUrl,
     privateMirrorName,
@@ -349,7 +351,7 @@ function setupCommand(
 async function startSetupCommand(
   upstreamUrl = 'git@github.com:test/repo.git',
   privateMirrorName = 'test-vendor'
-): Promise<{ result: Promise<void> }> {
+): Promise<{ result: Promise<unknown> }> {
   // Enable fork hanging to keep setupCommand running for signal handler tests
   shouldHangOnFork = true;
 
@@ -907,14 +909,16 @@ describe('setupCommand - idempotent recovery', () => {
       stderr: '',
     });
 
-    await expect(
-      setupCommand(
-        'git@github.com:firebase/extensions.git',
-        'firebase-extensions-private',
-        'invertase',
-        'firebase-extensions'
-      )
-    ).rejects.toThrow(new CommandExitError(1));
+    const error = await setupCommand(
+      'git@github.com:firebase/extensions.git',
+      'firebase-extensions-private',
+      'invertase',
+      'firebase-extensions'
+    ).catch((err: unknown) => err);
+    expect(error).toMatchObject({
+      exitCode: 1,
+      cause: expect.any(PreconditionError),
+    });
   });
 
   test('fails when private mirror create fails and repo is not found on GitHub', async () => {
@@ -929,9 +933,54 @@ describe('setupCommand - idempotent recovery', () => {
       stderr: 'HTTP 404: Not Found',
     });
 
-    await expect(
-      setupCommand('git@github.com:test/repo.git', 'test-vendor')
-    ).rejects.toThrow(new CommandExitError(1));
+    const error = await setupCommand(
+      'git@github.com:test/repo.git',
+      'test-vendor'
+    ).catch((err: unknown) => err);
+    expect(error).toMatchObject({
+      exitCode: 1,
+      cause: new GitHubError('GraphQL: error'),
+    });
+  });
+});
+
+describe('setupCommand result', () => {
+  test('names the mirror, public fork, upstream and checkout', async () => {
+    const result = await setupCommand('test/repo', 'test-vendor');
+
+    expect(result).toEqual({
+      mode: 'standard',
+      mirror: {
+        repo: 'testuser/test-vendor',
+        url: 'https://github.com/testuser/test-vendor',
+      },
+      publicFork: {
+        repo: 'testuser/repo',
+        url: 'https://github.com/testuser/repo',
+      },
+      upstream: { repo: 'test/repo', url: 'https://github.com/test/repo' },
+      directory: path.resolve('test-vendor'),
+    });
+  });
+
+  test('has no publicFork in no-public mode, and uses the org', async () => {
+    const result = await setupCommand(
+      'test/repo',
+      'test-vendor',
+      'acme',
+      undefined,
+      { noPublic: true }
+    );
+
+    expect(result).toEqual({
+      mode: 'no-public',
+      mirror: {
+        repo: 'acme/test-vendor',
+        url: 'https://github.com/acme/test-vendor',
+      },
+      upstream: { repo: 'test/repo', url: 'https://github.com/test/repo' },
+      directory: path.resolve('test-vendor'),
+    });
   });
 });
 
@@ -3657,6 +3706,27 @@ describe('cloneCommand remote transport', () => {
     }
   );
 
+  test('returns the mode, the checkout and the remote URLs', async () => {
+    useRecordedConfig('ssh');
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:acme/project-private.git\n',
+      stderr: '',
+    });
+
+    const result = await cloneCommand('acme/project-private');
+
+    expect(result).toEqual({
+      mode: 'standard',
+      directory: path.resolve('project-private'),
+      remotes: {
+        origin: 'git@github.com:acme/project-private.git',
+        public: 'git@github.com:acme/project.git',
+        upstream: 'git@github.com:upstream/project.git',
+      },
+    });
+  });
+
   test('keeps a non-github.com URL as recorded', async () => {
     useRecordedConfig('https');
     mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
@@ -3687,9 +3757,15 @@ describe('cloneCommand - error paths', () => {
   test('stops before cloning when the target directory already exists', async () => {
     mockResponses.set('test -d', { exitCode: 0, stdout: '', stderr: '' });
 
-    await expect(cloneCommand('acme/project-private')).rejects.toThrow(
-      new CommandExitError(1)
+    const error = await cloneCommand('acme/project-private').catch(
+      (err: unknown) => err
     );
+    expect(error).toMatchObject({
+      exitCode: 1,
+      cause: new PreconditionError(
+        "Directory 'project-private' already exists."
+      ),
+    });
 
     expect(clack.log.error).toHaveBeenCalledWith(
       "Directory 'project-private' already exists.",

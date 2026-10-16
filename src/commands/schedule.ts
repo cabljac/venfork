@@ -1,10 +1,16 @@
 import {
+  configNotFoundError,
   readVenforkConfigFromRepo,
   type ScheduleAuth,
   scheduleAuthOf,
   type VenforkConfig,
 } from '../config.js';
-import { CommandExitError, isEntryReported, UsageError } from '../errors.js';
+import {
+  CommandExitError,
+  isEntryReported,
+  PreconditionError,
+  UsageError,
+} from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { SCHEDULE_USAGE } from '../schedule-args.js';
 import { applyConfigChange } from '../shared/config-change.js';
@@ -29,6 +35,23 @@ export interface ScheduleOptions {
   auth?: ScheduleAuth;
 }
 
+/** The schedule after `venfork schedule`, reported as the `--json` result. */
+export interface ScheduleResult {
+  enabled: boolean;
+  /** The stored cron expression; absent when none is stored. */
+  cron?: string;
+  auth: ScheduleAuth;
+}
+
+function scheduleResult(config: VenforkConfig): ScheduleResult {
+  const cron = config.schedule?.cron;
+  return {
+    enabled: Boolean(config.schedule?.enabled),
+    ...(cron ? { cron } : {}),
+    auth: scheduleAuthOf(config),
+  };
+}
+
 /**
  * Throws when App auth would need one installation token to cover a public
  * fork whose owner differs from the mirror's.
@@ -43,7 +66,7 @@ function assertAppCoversPublicFork(
   const mirrorOwner = mirrorPath.split('/')[0];
   const publicOwner = publicPath.split('/')[0];
   if (mirrorOwner.toLowerCase() === publicOwner.toLowerCase()) return;
-  throw new Error(
+  throw new PreconditionError(
     `GitHub App auth needs the mirror and the public fork under one owner, but the mirror is ${mirrorPath} and the public fork is ${publicPath}. An App installation token covers one owner. Keep VENFORK_PUSH_TOKEN for this mirror (venfork schedule set "<cron>" --token).`
   );
 }
@@ -60,12 +83,13 @@ function authLabel(auth: ScheduleAuth): string {
  * @param action `status`, `set` or `disable`.
  * @param value Cron expression for `set`.
  * @param options Auth mode for `set`.
+ * @returns The schedule after the action, for `--json`.
  */
 export async function scheduleCommand(
   action?: string,
   value?: string,
   options: ScheduleOptions = {}
-): Promise<void> {
+): Promise<ScheduleResult> {
   p.intro('⏰ Venfork Schedule');
   const repoDir = process.cwd();
   const s = p.spinner();
@@ -90,7 +114,7 @@ export async function scheduleCommand(
         allowInvalidCron: true,
       });
       if (!current) {
-        throw new Error('venfork-config branch not found or invalid');
+        throw configNotFoundError();
       }
       const previousAuth = scheduleAuthOf(current);
       if ((options.auth ?? previousAuth) === 'app') {
@@ -133,7 +157,7 @@ export async function scheduleCommand(
         p.outro(
           `${summary}\n\nNext: let the workflow mint its push token from a GitHub App.\n${appAuthAdvice(mirrorPath, noPublic)}\n(skip if VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY are already configured)${leftover}`
         );
-        return;
+        return scheduleResult(updated);
       }
       const tokenPurpose = noPublic
         ? 'so the workflow can push upstream commits that change .github/workflows (the job token cannot)'
@@ -141,7 +165,7 @@ export async function scheduleCommand(
       p.outro(
         `${summary}\n\nNext: set VENFORK_PUSH_TOKEN ${tokenPurpose}.\n${pushTokenAdvice(mirrorPath, noPublic)}\n(skip if VENFORK_PUSH_TOKEN is already configured)${leftover}`
       );
-      return;
+      return scheduleResult(updated);
     }
 
     if (action === 'disable') {
@@ -150,10 +174,10 @@ export async function scheduleCommand(
         allowInvalidCron: true,
       });
       if (!currentConfig) {
-        throw new Error('venfork-config branch not found or invalid');
+        throw configNotFoundError();
       }
       const currentCron = currentConfig.schedule?.cron ?? '';
-      await applyConfigChange(
+      const disabled = await applyConfigChange(
         repoDir,
         {
           schedule: {
@@ -179,7 +203,7 @@ export async function scheduleCommand(
           .map((command) => `  ${command}`)
           .join('\n')}`
       );
-      return;
+      return scheduleResult(disabled);
     }
 
     if (action === 'status' || !action) {
@@ -189,7 +213,7 @@ export async function scheduleCommand(
       const config = await readVenforkConfigFromRepo(repoDir);
       s.stop('Configuration loaded');
       if (!config) {
-        throw new Error('venfork-config branch not found or invalid');
+        throw configNotFoundError();
       }
       const schedule = config.schedule;
       const enabled = Boolean(schedule?.enabled);
@@ -199,7 +223,7 @@ export async function scheduleCommand(
         'Schedule Status'
       );
       p.outro('✨ Schedule status shown');
-      return;
+      return scheduleResult(config);
     }
 
     throw new UsageError(
@@ -210,6 +234,6 @@ export async function scheduleCommand(
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Schedule command failed');
-    throw new CommandExitError(1);
+    throw new CommandExitError(1, error);
   }
 }

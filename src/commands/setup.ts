@@ -4,7 +4,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { $ } from 'execa';
 import { createConfigBranch, readVenforkConfigFromRepo } from '../config.js';
-import { CommandExitError, ConfigError, isEntryReported } from '../errors.js';
+import {
+  CommandExitError,
+  ConfigError,
+  GitHubError,
+  isEntryReported,
+  PreconditionError,
+} from '../errors.js';
 import {
   getGitHubUsername,
   ghGitProtocol,
@@ -108,6 +114,29 @@ async function assertExistingConfigAgrees(
   }
 }
 
+/** A GitHub repository in the `--json` result of `venfork setup`. */
+export interface SetupRepo {
+  /** `owner/name`. */
+  repo: string;
+  /** Web URL, `https://github.com/<owner>/<name>`. */
+  url: string;
+}
+
+/** What `venfork setup` created or reused, reported as the `--json` result. */
+export interface SetupResult {
+  mode: 'standard' | 'no-public';
+  mirror: SetupRepo;
+  /** Absent in no-public mode. */
+  publicFork?: SetupRepo;
+  upstream: SetupRepo;
+  /** Absolute path of the local mirror checkout. */
+  directory: string;
+}
+
+function setupRepo(repo: string): SetupRepo {
+  return { repo, url: `https://github.com/${repo}` };
+}
+
 /**
  * Setup command: Create private mirror and public fork
  *
@@ -116,6 +145,7 @@ async function assertExistingConfigAgrees(
  * @param options.prompt - `--yes` answers the personal-account confirm; `--no-input` never prompts.
  * @param options.organizationFromEnv - `organization` came from `VENFORK_ORG`, so naming your own account there is not consent.
  * @param options.syncMirror - Quietly syncs the local clone at `cwd` when the fork or mirror already existed on GitHub.
+ * @returns The repos and the local checkout, for `--json`.
  */
 export async function setupCommand(
   upstreamUrl: string | undefined,
@@ -128,7 +158,7 @@ export async function setupCommand(
     prompt?: PromptContext;
     organizationFromEnv?: boolean;
   }
-): Promise<void> {
+): Promise<SetupResult> {
   const noPublic = options.noPublic === true;
   checkSetupInputs({ upstreamUrl, publicForkRepoName, noPublic });
   p.intro('🔧 Venfork Setup');
@@ -278,7 +308,7 @@ export async function setupCommand(
   process.on('SIGTERM', signalHandler);
   const releaseInterrupts = claimInterrupts();
 
-  const steps = async () => {
+  const steps = async (): Promise<SetupResult> => {
     const upstreamRepoPath = parseRepoPath(config.upstreamUrl);
     const publicForkName = resolvedPublicForkName;
     const publicForkFullName = `${owner}/${publicForkName}`;
@@ -319,13 +349,13 @@ export async function setupCommand(
 
       if (forkResult.exitCode !== 0) {
         if (publicForkFullName === upstreamRepoPath && !useForkNameFlag) {
-          throw new Error(
+          throw new PreconditionError(
             `The upstream repo is already under ${owner}. Use --fork-name to give the public fork a different name, or pass --no-public to skip the public fork hop entirely.`
           );
         }
         const exists = await ghRepoExists(publicForkFullName);
         if (!exists) {
-          throw new Error(
+          throw new GitHubError(
             forkResult.stderr.trim() ||
               forkResult.stdout.trim() ||
               'gh repo fork failed'
@@ -336,7 +366,7 @@ export async function setupCommand(
           upstreamRepoPath
         );
         if (!isExpectedFork) {
-          throw new Error(
+          throw new PreconditionError(
             `Cannot reuse ${publicForkFullName} as public fork: it is not a fork of ${upstreamRepoPath}. Choose a different --fork-name.`
           );
         }
@@ -357,7 +387,7 @@ export async function setupCommand(
     if (createResult.exitCode !== 0) {
       const exists = await ghRepoExists(privateMirrorGhPath);
       if (!exists) {
-        throw new Error(
+        throw new GitHubError(
           createResult.stderr.trim() ||
             createResult.stdout.trim() ||
             'gh repo create failed'
@@ -409,7 +439,7 @@ export async function setupCommand(
         reject: false,
       })`git rev-parse --git-dir`;
       if (inGit.exitCode !== 0) {
-        throw new Error(
+        throw new PreconditionError(
           `Directory '${repoDir}' already exists and is not a git repository`
         );
       }
@@ -418,14 +448,14 @@ export async function setupCommand(
         reject: false,
       })`git remote get-url origin`;
       if (originResult.exitCode !== 0) {
-        throw new Error(
+        throw new PreconditionError(
           `Directory '${repoDir}' exists but has no origin remote configured`
         );
       }
       const existingPath = parseRepoPath(originResult.stdout.trim());
       const expectedPath = parseRepoPath(privateCloneUrl);
       if (existingPath !== expectedPath) {
-        throw new Error(
+        throw new PreconditionError(
           `Directory '${repoDir}' exists with origin ${originResult.stdout.trim()}, expected ${privateCloneUrl}`
         );
       }
@@ -511,17 +541,24 @@ Upstream: ${config.upstreamUrl} (read-only)`,
   # Do your work, push to origin (private)
   # When ready to share: venfork stage feature-branch`
     );
+    return {
+      mode,
+      mirror: setupRepo(privateMirrorGhPath),
+      ...(noPublic ? {} : { publicFork: setupRepo(publicForkFullName) }),
+      upstream: setupRepo(upstreamRepoPath),
+      directory: path.resolve(repoDir),
+    };
   };
 
   try {
-    await Promise.race([interrupted, steps()]);
+    return await Promise.race([interrupted, steps()]);
   } catch (error) {
     if (isEntryReported(error)) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Setup failed');
     await cleanup();
-    throw new CommandExitError(1);
+    throw new CommandExitError(1, error);
   } finally {
     // Ensure cleanup and remove signal handlers
     await cleanup();
