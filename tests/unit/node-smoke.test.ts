@@ -4,6 +4,7 @@ import {
   EXPECTED_DOCTOR_IDS,
   enginesFloorShortfall,
   nodeRangeFloor,
+  nonBuiltinImports,
   runtimeDependencyEngines,
   SKIPPED_DOCTOR_IDS,
   verifyDoctorOutput,
@@ -109,4 +110,33 @@ test('rejects output that is not a success envelope', () => {
       JSON.stringify({ schemaVersion: 1, ok: false, error: {} })
     )
   ).toContain('envelope');
+});
+
+test('accepts a bundle that imports only Node builtins', () => {
+  const bundle = [
+    '#!/usr/bin/env node',
+    'import { createRequire } from "node:module";',
+    'import fs from "node:fs";',
+    'var __require = createRequire(import.meta.url);',
+    'var cp = __require("child_process");',
+    'const p = require("path");',
+    'const s = `git log --format from ${branch}`;',
+  ].join('\n');
+  expect(nonBuiltinImports(bundle)).toEqual([]);
+});
+
+test('lists each non-builtin import, require and dynamic import once', () => {
+  const bundle = [
+    'import { $ } from "execa";',
+    'import * as p from "@clack/prompts";',
+    'var a = __require("left-pad");',
+    'var b = require("left-pad");',
+    'const c = await import("chalk");',
+  ].join('\n');
+  expect(nonBuiltinImports(bundle)).toEqual([
+    '@clack/prompts',
+    'chalk',
+    'execa',
+    'left-pad',
+  ]);
 });
