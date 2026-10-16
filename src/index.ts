@@ -165,11 +165,19 @@ async function main(): Promise<void> {
 // A clack prompt whose stdin hits EOF never resolves; the loop then drains
 // with the command still pending, and Node would exit 0.
 function exitOnAbandonedPrompt(): void {
-  if (process.stdout.isTTY) process.stdout.write('\x1b[?25h');
+  if (process.stderr.isTTY) process.stderr.write('\x1b[?25h');
   process.stderr.write('Cancelled: input ended at a prompt\n');
   process.exit(130);
 }
 
+// A reader that stopped early (`venfork help | head -1`) is not a failure.
+function exitQuietlyOnClosedPipe(error: NodeJS.ErrnoException): void {
+  if (error.code !== 'EPIPE') throw error;
+  process.exit();
+}
+
+process.stdout.on('error', exitQuietlyOnClosedPipe);
+process.stderr.on('error', exitQuietlyOnClosedPipe);
 process.on('beforeExit', exitOnAbandonedPrompt);
 main()
   .finally(() => {

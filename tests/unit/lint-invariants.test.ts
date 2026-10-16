@@ -1,6 +1,7 @@
 /** biome-ignore-all lint/suspicious/noTemplateCurlyInString: fixtures are TypeScript source held in strings */
 import { describe, expect, test } from 'bun:test';
 import {
+  clackViaUi,
   denyListCoverage,
   importBoundary,
   noProcessExit,
@@ -9,6 +10,7 @@ import {
   promptsViaModule,
   pushViaNet,
   remoteRefs,
+  UI_MODULE,
 } from '../../scripts/lint-invariants';
 
 const src = (file: string, text: string) => ({ file, text });
@@ -195,5 +197,32 @@ describe('promptsViaModule', () => {
       'other.text({ message });',
     ].join('\n');
     expect(promptsViaModule(src('src/commands/x.ts', text))).toEqual([]);
+  });
+});
+
+describe('clackViaUi', () => {
+  test('flags every form of @clack/prompts import outside ui and prompt', () => {
+    const text = [
+      "import * as p from '@clack/prompts';",
+      "import { log } from '@clack/prompts';",
+      "import type { SpinnerResult } from '@clack/prompts';",
+      "export { note } from '@clack/prompts';",
+      "const c = await import('@clack/prompts');",
+      "import '@clack/prompts';",
+    ].join('\n');
+    const found = clackViaUi(src('src/commands/x.ts', text));
+    expect(found.map((f) => f.line)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  test('allows the ui and prompt modules, comments and other packages', () => {
+    const text = "import * as p from '@clack/prompts';";
+    expect(clackViaUi(src(UI_MODULE, text))).toEqual([]);
+    expect(clackViaUi(src(PROMPT_MODULE, text))).toEqual([]);
+    const other = [
+      "// import * as p from '@clack/prompts';",
+      "import * as core from '@clack/core';",
+      "import * as p from '../shared/ui.js';",
+    ].join('\n');
+    expect(clackViaUi(src('src/commands/x.ts', other))).toEqual([]);
   });
 });

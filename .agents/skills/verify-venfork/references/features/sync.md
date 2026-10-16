@@ -51,7 +51,8 @@ vf_origin_commit src/hotfix.txt hot; venfork sync </dev/null 2>&1 | grep "Sync a
 
 ## What usually lies
 
-- The outro "Sync complete!" also prints after a no-op. Read the spinner lines.
+- The outro "Sync complete!" also prints after a no-op. Read the spinner lines (`step:` / `done:` on stderr).
+- `venfork sync >/dev/null` still shows all progress: sync writes nothing to stdout, and git's output goes to stderr too.
 - `sync upstream-pr/<n>` only warns when the origin push fails and still exits 0 with "synced". Check `vf_tip "$VF_ORIGIN" upstream-pr/<n>`.
 - `sync upstream-pr/<n>` writes a new `venfork-config` commit every run (`lastSyncedAt`), even when the branch did not move.
 - With a local-path upstream, `pulledPrs[...].upstreamPrUrl` is a made-up `https://github.com/<dir>/upstream/pull/<n>`.

@@ -11,9 +11,26 @@ const exitStub = mock((code?: number | string | null) => {
 
 process.exit = exitStub as unknown as typeof process.exit;
 
+/**
+ * Pins src/shared/ui.ts to rich mode, so command output reaches the mocked
+ * `@clack/prompts` instead of the real stderr whatever runs the tests.
+ */
+function pinRichUi(): void {
+  Object.defineProperty(process.stderr, 'isTTY', {
+    value: true,
+    configurable: true,
+    writable: true,
+  });
+  delete process.env.NO_COLOR;
+  if (process.env.TERM === 'dumb') delete process.env.TERM;
+}
+
+pinRichUi();
+
 /** Re-installs the stub and clears shared mocks before every test. */
 beforeEach(() => {
   process.exit = exitStub as unknown as typeof process.exit;
   exitStub.mockClear();
+  pinRichUi();
   resetQuietPrompts();
 });

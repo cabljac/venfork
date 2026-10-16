@@ -43,6 +43,7 @@ describe('promptText', () => {
     await promptText({ message: 'Org?', flag: '--org' });
     expect(lastTextOptions()).toEqual({
       message: 'Org?',
+      output: process.stderr,
       validate: undefined,
     });
   });

@@ -1,10 +1,10 @@
 import { appendFile } from 'node:fs/promises';
-import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import type { SyncDivergenceError } from '../errors.js';
 import { parseRepoPath } from '../utils.js';
 import { formatDivergenceReport } from './divergence.js';
 import { netExec, netFailureReason } from './net.js';
+import * as p from './ui.js';
 
 /** Label on the mirror issue that tracks a blocked scheduled sync. */
 export const SYNC_BLOCKED_LABEL = 'venfork-sync-blocked';

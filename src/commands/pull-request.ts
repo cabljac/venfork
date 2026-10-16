@@ -1,9 +1,9 @@
-import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
 import { CommandExitError, RemoteNotFoundError } from '../errors.js';
 import { parsePositiveInt } from '../shared/args.js';
 import { netExec, netFailureReason } from '../shared/net.js';
+import * as p from '../shared/ui.js';
 import { parseRepoPath } from '../utils.js';
 
 export interface PullRequestOptions {

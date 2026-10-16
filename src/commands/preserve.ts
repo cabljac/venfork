@@ -1,4 +1,3 @@
-import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import {
   normalizePreservePath,
@@ -15,6 +14,7 @@ import { hasManagedTrailer } from '../shared/managed-commit.js';
 import { resolveCommit } from '../shared/mirror-commit.js';
 import { netFetch } from '../shared/net.js';
 import { assertPreserveEntriesAreFiles } from '../shared/preserve-entries.js';
+import * as p from '../shared/ui.js';
 
 /**
  * Which of `paths` origin's managed commit carries, and where that commit

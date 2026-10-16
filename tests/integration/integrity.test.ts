@@ -5,7 +5,7 @@ import path from 'node:path';
 import * as prompts from '@clack/prompts';
 import { $ } from 'execa';
 import { seedPreserve } from '../harness/preserve.js';
-import { quietPrompts } from '../harness/prompts.js';
+import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
@@ -61,7 +61,8 @@ async function originDev(): Promise<string> {
 async function expectSyncError(message: string): Promise<void> {
   await expect(sync()).rejects.toThrow(new CommandExitError(1));
   expect(prompts.log.error).toHaveBeenCalledWith(
-    expect.stringContaining(message)
+    expect.stringContaining(message),
+    ON_STDERR
   );
 }
 
@@ -73,7 +74,8 @@ describe('preserve cannot capture venfork state', () => {
       new CommandExitError(1)
     );
     expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining(`Invalid preserve path '${WF}'`)
+      expect.stringContaining(`Invalid preserve path '${WF}'`),
+      ON_STDERR
     );
     await scheduleCommand('set', '30 2 * * *');
 
@@ -173,10 +175,12 @@ describe('managed commit left behind by a preserve removal', () => {
     await sync();
 
     expect(prompts.log.warn).toHaveBeenCalledWith(
-      expect.stringMatching(/\(stale-trailer\)[\s\S]*tools\/n\.txt/)
+      expect.stringMatching(/\(stale-trailer\)[\s\S]*tools\/n\.txt/),
+      ON_STDERR
     );
     expect(prompts.log.warn).not.toHaveBeenCalledWith(
-      expect.stringContaining('without the Venfork-Managed trailer')
+      expect.stringContaining('without the Venfork-Managed trailer'),
+      ON_STDERR
     );
     expect(await fx.fileAt(fx.origin, 'main', 'tools/m.txt')).toBe('m\n');
     expect(await fx.fileAt(fx.origin, 'main', 'tools/n.txt')).toBeNull();
@@ -250,7 +254,8 @@ describe('managed commit left behind by a preserve removal', () => {
     expect(prompts.log.warn).toHaveBeenCalledWith(
       expect.stringContaining(
         "origin/main has diverged and its managed commit still carries 'tools/n.txt'"
-      )
+      ),
+      ON_STDERR
     );
     expect(await fx.sha(fx.origin, 'main')).toBe(before);
     expect((await readVenforkConfigFromRepo(fx.work))?.preserve).toEqual([
@@ -520,7 +525,8 @@ describe('workflow deletions in the managed commit', () => {
     await sync();
 
     expect(prompts.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining('(stale-trailer)')
+      expect.stringContaining('(stale-trailer)'),
+      ON_STDERR
     );
     expect(await fx.fileAt(fx.origin, 'main', DEPLOY)).toBe('deploy\n');
   });

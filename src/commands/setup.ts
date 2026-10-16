@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { createConfigBranch, readVenforkConfigFromRepo } from '../config.js';
 import { CommandExitError, ConfigError } from '../errors.js';
@@ -15,6 +14,7 @@ import {
 import { pathExists } from '../shared/fs.js';
 import { netExec, runNetOp, seedMirrorInChunks } from '../shared/net.js';
 import { isCancel, promptConfirm, promptText } from '../shared/prompt.js';
+import * as p from '../shared/ui.js';
 import {
   githubUrlForProtocol,
   normalizeGitHubRepoInput,

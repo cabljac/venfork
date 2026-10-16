@@ -1,4 +1,3 @@
-import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
 import { CommandExitError, RemoteNotFoundError } from '../errors.js';
@@ -13,6 +12,7 @@ import {
   translateInternalTitle,
 } from '../shared/redaction.js';
 import { findMirrorRepoPath } from '../shared/repo.js';
+import * as p from '../shared/ui.js';
 import {
   createMirrorIssue,
   createUpstreamIssue,

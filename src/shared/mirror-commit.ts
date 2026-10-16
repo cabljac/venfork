@@ -1,7 +1,6 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import {
   assertNoInvalidPreserve,
@@ -36,6 +35,7 @@ import {
   normalizeWorkflowList,
   policyKeepsWorkflow,
 } from './managed-commit.js';
+import * as p from './ui.js';
 
 export { normalizeWorkflowList };
 

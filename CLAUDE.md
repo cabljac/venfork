@@ -50,7 +50,7 @@ Never run the real-GitHub e2e unless the user asks. It needs the test org (`memc
 
 CLI entry `src/index.ts` parses `argv[0]` as the command and dispatches via a switch. Each command has a dedicated arg parser (`src/<command>-args.ts`) returning a typed options object, then calls the matching `*Command` function in `src/commands/<command>.ts` (re-exported through the `src/commands.ts` barrel). To add/modify a command: touch the arg parser, the command impl, the `index.ts` switch, and `showHelp()`.
 
-`src/commands/` holds one file per command. Helpers shared by several commands live in `src/shared/`: `net.ts` (network-op safety), `managed-commit.ts` (managed-commit detection), `mirror-commit.ts` (building the managed commit), `divergence.ts`, `redaction.ts`, `worktree.ts` (temporary detached worktrees), `prompt.ts` (every interactive prompt), `constants.ts`. The rest are focused modules:
+`src/commands/` holds one file per command. Helpers shared by several commands live in `src/shared/`: `net.ts` (network-op safety), `managed-commit.ts` (managed-commit detection), `mirror-commit.ts` (building the managed commit), `divergence.ts`, `redaction.ts`, `worktree.ts` (temporary detached worktrees), `prompt.ts` (every interactive prompt), `ui.ts` (all human output, on stderr), `constants.ts`. The rest are focused modules:
 
 - **`config.ts`** — the source of truth for persisted state. All cross-run state lives in `VenforkConfig` (`.venfork/config.json`) on an **orphan `venfork-config` branch** in the private mirror — never on a working branch. It tracks `upstreamUrl`, `publicForkUrl`, `mode`, `schedule`, `scheduleAuth` (top level; `'app'` or absent for token auth), workflow allow/block lists, the `preserve` allowlist, and link maps (`shippedBranches`, `pulledPrs`, `shippedIssues`, `pulledIssues`). Mutate via `updateVenforkConfig` with a `VenforkConfigPatch` (shallow-merge; `null` deletes an entry or clears a field). Read with `fetchVenforkConfig` (clones only the config branch to a temp dir) or `readVenforkConfigFromRepo`.
 - **`git.ts`** — thin git/gh wrappers (`checkGhAuth`, `getRemotes`, `getDefaultBranch`, `ghRepoExists`, `ghRepoIsForkOf`, …).
@@ -73,6 +73,10 @@ Determinism rule: the managed commit's author and committer are the venfork bot 
 ### Health checks
 
 `venfork doctor` (`src/commands/doctor.ts`) returns `{ id, ok: true | false | 'skipped', detail, fix? }` per check and exits 1 when any check is `false`. Git checks are covered by integration tests; the gh-backed checks (`token`, `last-run`, `cron-age`) are string-mocked in `tests/unit/doctor.test.ts` and degrade to `skipped` without gh auth or a GitHub origin.
+
+### Output streams
+
+stdout carries only results (`--version`, help that was asked for, `doctor --json`). Everything else goes to stderr through the `src/shared/ui.ts` facade (`log`, `note`, `spinner`, `intro`, `outro`, `cancel`), and prompts render on stderr too. The facade delegates to clack when stderr is a TTY, `NO_COLOR` is unset or empty and `TERM` is not `dumb`, and prints plain `prefix message` lines otherwise. Subprocess stdout from `netExec` is routed to stderr. The test preload pins `process.stderr.isTTY` to true so ui output reaches the mocked `@clack/prompts`; assert clack calls with `ON_STDERR` from `tests/harness/prompts.ts`.
 
 ### Network-op safety
 
@@ -102,4 +106,4 @@ Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/n
 - Review and PR shape: use `.agents/skills/review-venfork/` for adversarial review and `.github/pull_request_template.md` for PR bodies.
 - Known traps live in `docs/agents/gotchas.md`; append there after a correction.
 - `gh repo clone` is used for fetching, so SSH-vs-HTTPS transport follows the user's `gh config get git_protocol`.
-- Invariants (remote refs, pushes via net.ts, import boundary, `gh pr|issue create|edit` only in `src/shared/upstream-publish.ts`, process.exit, clack prompts only in `src/shared/prompt.ts`) are enforced by scripts/lint-invariants.ts.
+- Invariants (remote refs, pushes via net.ts, import boundary, `gh pr|issue create|edit` only in `src/shared/upstream-publish.ts`, process.exit, clack prompts only in `src/shared/prompt.ts`, `@clack/prompts` imported only in `src/shared/ui.ts` and `src/shared/prompt.ts`) are enforced by scripts/lint-invariants.ts.

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import * as prompts from '@clack/prompts';
 import { $ } from 'execa';
-import { quietPrompts } from '../harness/prompts.js';
+import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
@@ -54,7 +54,8 @@ async function expectRefused(message: string): Promise<void> {
     new CommandExitError(1)
   );
   expect(prompts.log.error).toHaveBeenCalledWith(
-    expect.stringContaining(message)
+    expect.stringContaining(message),
+    ON_STDERR
   );
   expect(await refExists(fx.publicFork ?? '', 'refs/heads/feature')).toBe(
     false
@@ -75,7 +76,8 @@ describe('the branch name is checked', () => {
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining('the branch name')
+      expect.stringContaining('the branch name'),
+      ON_STDERR
     );
   });
 });
@@ -122,15 +124,18 @@ describe('the preview', () => {
     expect(prompts.log.warn).toHaveBeenCalledWith(
       expect.stringContaining(
         '1 commit message(s) reference issue/PR numbers that will resolve against upstream'
-      )
+      ),
+      ON_STDERR
     );
     expect(prompts.note).toHaveBeenCalledWith(
       expect.stringContaining('Files (2)'),
-      'Staging Details'
+      'Staging Details',
+      ON_STDERR
     );
     expect(prompts.note).toHaveBeenCalledWith(
       expect.stringContaining('src/b.txt'),
-      'Staging Details'
+      'Staging Details',
+      ON_STDERR
     );
   });
 });

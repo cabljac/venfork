@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { GitError } from '../errors.js';
 import { gitNetTimeoutMs, NET_ENV, NET_SSH_OPTIONS } from './constants.js';
+import * as p from './ui.js';
 
 function configuredSshCommand(cwd?: string): string | undefined {
   const fromEnv = process.env.GIT_SSH_COMMAND?.trim();
@@ -28,7 +28,8 @@ export function netSshCommand(cwd?: string): string {
 /**
  * An execa `$` bound for a heavy network git/gh op: no stdin (any
  * credential/host-key prompt fails fast instead of hanging on an invisible
- * prompt), a hard timeout, and live progress on stderr.
+ * prompt), a hard timeout, and live progress on stderr. The child's stdout
+ * also goes to stderr, so venfork's stdout carries only results.
  *
  * @param cwd Working directory for the command, or undefined for the default.
  * @param opts.captureOutput Pipe stdout/stderr unbuffered so the caller can
@@ -53,7 +54,7 @@ export function netExec(
     stdio:
       captureOutput || bufferOutput
         ? [stdin, 'pipe', 'pipe']
-        : [stdin, 'inherit', 'inherit'],
+        : [stdin, 2, 'inherit'],
     ...(captureOutput ? { buffer: false } : {}),
     ...(bufferOutput ? { reject: false } : {}),
   });
@@ -224,7 +225,7 @@ async function pushSeedRef(
   let stderrTail = '';
   push.stdout?.on('data', (chunk: string | Buffer) => {
     const text = typeof chunk === 'string' ? chunk : chunk.toString();
-    process.stdout.write(text);
+    process.stderr.write(text);
     stdoutTail = appendTail(stdoutTail, text);
   });
   push.stderr?.on('data', (chunk: string | Buffer) => {

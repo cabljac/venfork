@@ -16,7 +16,7 @@ tests:
 Pending #85 stack: the GitHub App secret check; update this file when it lands.
 
 - Ten checks, always in this order: `repo`, `remotes`, `mode`, `invariant`, `divergence`, `preserve`, `workflow`, `token`, `last-run`, `cron-age`. Each is `{ id, ok: true | false | 'skipped', detail, fix? }`.
-- `--json` prints only `{ "checks": [...], "links": {...} }`. `links` holds the four link maps, or `null` when the config is unreadable.
+- `--json` prints only `{ "checks": [...], "links": {...} }` on stdout. Without `--json` the human report goes to stderr and stdout stays empty. `links` holds the four link maps, or `null` when the config is unreadable.
 - Exit 1 when any check is `false`. `skipped` does not fail.
 - It only reads, apart from `git fetch --multiple origin upstream [public]` and fetching `venfork-config`.
 - `repo` false for a non-repo or a missing, invalid or unfetchable config marks every later check `skipped`. An invalid cron also fails `repo`, but the git checks still run. A failed remote fetch fails `remotes` and skips `invariant` to `workflow`.
