@@ -13,7 +13,12 @@ import {
 } from '../git.js';
 import { pathExists } from '../shared/fs.js';
 import { netExec, runNetOp, seedMirrorInChunks } from '../shared/net.js';
-import { isCancel, promptConfirm, promptText } from '../shared/prompt.js';
+import {
+  isCancel,
+  type PromptContext,
+  promptConfirm,
+  promptText,
+} from '../shared/prompt.js';
 import * as p from '../shared/ui.js';
 import {
   githubUrlForProtocol,
@@ -106,6 +111,7 @@ async function assertExistingConfigAgrees(
  *
  * @param publicForkRepoName - Optional GitHub repo name for the public fork under `owner` (see `gh repo fork --fork-name`). Defaults to the upstream repo basename. Use when the fork must differ (e.g. same org as upstream).
  * @param options.noPublic - Skip the public-fork hop entirely. Only `origin` (private mirror) and `upstream` are configured; `stage` later pushes branches directly to `upstream`. Mutually exclusive with `publicForkRepoName`.
+ * @param options.prompt - `--yes` answers the personal-account confirm; `--no-input` never prompts.
  * @param options.syncMirror - Quietly syncs the local clone at `cwd` when the fork or mirror already existed on GitHub.
  */
 export async function setupCommand(
@@ -116,6 +122,7 @@ export async function setupCommand(
   options: {
     noPublic?: boolean;
     syncMirror: (cwd: string) => Promise<void>;
+    prompt?: PromptContext;
   }
 ): Promise<void> {
   const noPublic = options.noPublic === true;
@@ -144,11 +151,15 @@ export async function setupCommand(
 
   // Prompt for upstream URL only if not provided
   if (!finalUpstreamUrl) {
-    const response = await promptText({
-      message: 'Upstream repository URL or owner/repo?',
-      placeholder: 'invertase/react-native-firebase',
-      validate: validateUpstreamInput,
-    });
+    const response = await promptText(
+      {
+        message: 'Upstream repository URL or owner/repo?',
+        flag: 'the <upstream> argument',
+        placeholder: 'invertase/react-native-firebase',
+        validate: validateUpstreamInput,
+      },
+      options.prompt
+    );
 
     if (isCancel(response)) {
       p.cancel('Operation cancelled');
@@ -171,16 +182,20 @@ export async function setupCommand(
   // Prompt for private mirror name only if not provided
   if (!finalPrivateMirrorName) {
     const defaultName = `${parseRepoName(finalUpstreamUrl)}-private`;
-    const response = await promptText({
-      message: 'Private mirror repo name?',
-      placeholder: defaultName,
-      defaultValue: defaultName,
-      validate: (value) => {
-        if (!value) return 'Private mirror repo name is required';
-        if (!/^[a-zA-Z0-9-_]+$/.test(value))
-          return 'Name can only contain letters, numbers, hyphens, and underscores';
+    const response = await promptText(
+      {
+        message: 'Private mirror repo name?',
+        flag: 'the [name] argument',
+        placeholder: defaultName,
+        defaultValue: defaultName,
+        validate: (value) => {
+          if (!value) return 'Private mirror repo name is required';
+          if (!/^[a-zA-Z0-9-_]+$/.test(value))
+            return 'Name can only contain letters, numbers, hyphens, and underscores';
+        },
       },
-    });
+      options.prompt
+    );
 
     if (isCancel(response)) {
       p.cancel('Operation cancelled');
@@ -222,10 +237,13 @@ export async function setupCommand(
       `Repos will be created under your personal account (username: ${username})`
     );
 
-    const confirmed = await promptConfirm({
-      message: 'Continue with personal account?',
-      initialValue: false,
-    });
+    const confirmed = await promptConfirm(
+      {
+        message: 'Continue with personal account?',
+        initialValue: false,
+      },
+      options.prompt
+    );
 
     if (isCancel(confirmed)) {
       p.outro('❌ Setup cancelled');

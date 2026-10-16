@@ -1,12 +1,21 @@
 import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
-import { CommandExitError, RemoteNotFoundError } from '../errors.js';
+import {
+  CommandExitError,
+  MissingInputError,
+  RemoteNotFoundError,
+} from '../errors.js';
 import { parsePositiveInt } from '../shared/args.js';
 import {
   assertNoMirrorReference,
   mirrorDenyList,
 } from '../shared/deny-list.js';
-import { confirmOrAutoYes, isCancel } from '../shared/prompt.js';
+import {
+  assertCanConfirm,
+  isCancel,
+  type PromptContext,
+  promptConfirm,
+} from '../shared/prompt.js';
 import {
   translateInternalBody,
   translateInternalTitle,
@@ -118,7 +127,7 @@ function issueUsage(action: 'stage' | 'pull' | undefined): string {
 export async function issueCommand(
   action: 'stage' | 'pull' | undefined,
   target: string | undefined,
-  options: { title?: string } = {}
+  options: { title?: string; prompt?: PromptContext } = {}
 ): Promise<void> {
   p.intro('🐛 Venfork Issue');
 
@@ -164,6 +173,8 @@ export async function issueCommand(
         target,
         mirrorRepoPath
       );
+      const question = `Open the issue on ${upstreamRepoPath}?`;
+      assertCanConfirm(question, options.prompt);
 
       s.start(`Reading internal issue #${internalNumber}`);
       const internal = await readIssue(mirrorRepoPath, internalNumber, repoDir);
@@ -196,11 +207,13 @@ export async function issueCommand(
       );
       p.note(translatedBody || '(empty)', 'Upstream issue body preview');
 
-      const ok = await confirmOrAutoYes({
-        message: `Open the issue on ${upstreamRepoPath}?`,
-        initialValue: false,
-        allowNonInteractive: true,
-      });
+      const ok = await promptConfirm(
+        {
+          message: question,
+          initialValue: false,
+        },
+        options.prompt
+      );
       if (isCancel(ok) || !ok) {
         p.outro('Stage cancelled');
         throw new CommandExitError(isCancel(ok) ? 130 : 0);
@@ -242,6 +255,8 @@ export async function issueCommand(
       target,
       upstreamRepoPath
     );
+    const question = `Open the issue on ${mirrorRepoPath}?`;
+    assertCanConfirm(question, options.prompt);
 
     s.start(`Reading upstream issue #${upstreamNumber}`);
     const upstream = await readIssue(upstreamRepoPath, upstreamNumber, repoDir);
@@ -265,11 +280,13 @@ export async function issueCommand(
     );
     p.note(internalBody, 'Internal issue body preview');
 
-    const ok = await confirmOrAutoYes({
-      message: `Open the issue on ${mirrorRepoPath}?`,
-      initialValue: false,
-      allowNonInteractive: true,
-    });
+    const ok = await promptConfirm(
+      {
+        message: question,
+        initialValue: false,
+      },
+      options.prompt
+    );
     if (isCancel(ok) || !ok) {
       p.outro('Pull cancelled');
       throw new CommandExitError(isCancel(ok) ? 130 : 0);
@@ -304,6 +321,7 @@ export async function issueCommand(
     p.outro(`✨ Issue pulled: ${created.url}`);
   } catch (error) {
     if (error instanceof CommandExitError) throw error;
+    if (error instanceof MissingInputError) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Issue command failed');

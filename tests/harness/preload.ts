@@ -11,18 +11,26 @@ const exitStub = mock((code?: number | string | null) => {
 
 process.exit = exitStub as unknown as typeof process.exit;
 
-/**
- * Pins src/shared/ui.ts to rich mode, so command output reaches the mocked
- * `@clack/prompts` instead of the real stderr whatever runs the tests.
- */
-function pinRichUi(): void {
-  Object.defineProperty(process.stderr, 'isTTY', {
+function pinTty(stream: NodeJS.ReadStream | NodeJS.WriteStream): void {
+  Object.defineProperty(stream, 'isTTY', {
     value: true,
     configurable: true,
     writable: true,
   });
+}
+
+/**
+ * Pins src/shared/ui.ts to rich mode and src/shared/prompt.ts to "may
+ * prompt", so output and prompts reach the mocked `@clack/prompts`
+ * whatever runs the tests, CI included.
+ */
+function pinRichUi(): void {
+  pinTty(process.stderr);
+  pinTty(process.stdin);
   delete process.env.NO_COLOR;
   if (process.env.TERM === 'dumb') delete process.env.TERM;
+  delete process.env.CI;
+  delete process.env.VENFORK_NONINTERACTIVE;
 }
 
 pinRichUi();

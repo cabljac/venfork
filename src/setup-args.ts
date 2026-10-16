@@ -1,4 +1,10 @@
-import { consumeValue, scanArgs, unexpectedArgument } from './shared/args.js';
+import {
+  consumeValue,
+  parsePromptFlags,
+  scanArgs,
+  unexpectedArgument,
+} from './shared/args.js';
+import type { PromptContext } from './shared/prompt.js';
 
 export type ParsedSetupArgs = {
   upstreamUrl?: string;
@@ -6,10 +12,12 @@ export type ParsedSetupArgs = {
   organization?: string;
   publicForkRepoName?: string;
   noPublic: boolean;
+  /** `--yes` / `--no-input`. */
+  prompt: PromptContext;
 };
 
 const USAGE =
-  'venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public]';
+  'venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public] [--yes] [--no-input]';
 
 /**
  * Parse `venfork setup ...` argv after the `setup` token.
@@ -18,8 +26,10 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
   let organization: string | undefined;
   let publicForkRepoName: string | undefined;
   let noPublic = false;
+  const promptFlags = parsePromptFlags({ allowYes: true });
 
   const positional = scanArgs(setupArgs, USAGE, (a, i) => {
+    if (promptFlags.onOption(a) !== undefined) return 0;
     if (a === '--org' || a.startsWith('--org=')) {
       const { value, consumed } = consumeValue('--org', setupArgs, i);
       organization = value;
@@ -51,5 +61,6 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
     organization: organization ?? process.env.VENFORK_ORG,
     publicForkRepoName: trimmedForkName,
     noPublic,
+    prompt: promptFlags.prompt,
   };
 }

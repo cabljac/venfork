@@ -14,7 +14,8 @@ tests:
 ## What exists
 
 - Needs gh auth first (`AuthenticationError`: "GitHub CLI is not authenticated. Please run: gh auth login").
-- Prompts for the upstream when it is missing and for the mirror name when it is missing (default `<repo>-private`). With no `--org` and no `VENFORK_ORG`, asks "Continue with personal account?". `VENFORK_NONINTERACTIVE` never answers that prompt.
+- Prompts for the upstream when it is missing and for the mirror name when it is missing (default `<repo>-private`). With no `--org` and no `VENFORK_ORG`, asks "Continue with personal account?"; `--yes` answers it.
+- Never prompts without a TTY on stdin, with `CI` set (not `false`/`0`), with `VENFORK_NONINTERACTIVE=1` or with `--no-input`. Then a missing mirror name becomes `<repo>-private` (logged on stderr), a missing upstream exits 2 naming "the <upstream> argument", and the personal-account confirm without `--yes` exits 2 naming `--yes` (`MissingInputError`). stdout stays empty.
 - Standard mode: `gh repo fork` (public fork), `gh repo create --private` (mirror), seeds a new mirror from a temp clone of upstream in chunks (`VENFORK_SEED_CHUNK`, `VENFORK_SEED_RETRY_MS`), `gh repo clone`s the mirror into `./<name>`, `gh repo set-default`.
 - Writes the orphan `venfork-config` branch. Never overwrites one: an existing config that agrees is kept, one that disagrees is a `ConfigError` ("The existing venfork-config disagrees with this setup").
 - Sets remotes: `origin`, `public` (not with `--no-public`; a stale `public` is removed), `upstream` with push URL `DISABLE`. URLs follow `gh config get git_protocol`.
@@ -23,7 +24,7 @@ tests:
 
 ## How a user reaches it
 
-`venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public]`. `<upstream>` is a GitHub URL or `owner/repo`.
+`venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public] [--yes] [--no-input]`. `<upstream>` is a GitHub URL or `owner/repo`.
 
 ## How to drive it
 
@@ -31,7 +32,9 @@ The success and recovery paths need real GitHub (e2e tier 1, opt-in). On the fix
 
 ```bash
 cd "$VF_ROOT"
-venfork setup </dev/null 2>&1; echo $?                                 # 130, "Cancelled: input ended at a prompt"
+venfork setup </dev/null 2>&1; echo $?                                 # 2, "Pass the <upstream> argument."
+venfork setup a/b b-private </dev/null 2>&1; echo $?                   # 2, "Continue with personal account?" ... "Pass --yes."
+venfork setup a/b --org c </dev/null 2>&1 | grep -o "Private mirror repo name? b-private.*"   # default used, then exit 1 at gh
 venfork setup a/b --no-public --fork-name x </dev/null 2>&1; echo $?   # 1, "--no-public cannot be combined with --fork-name"
 venfork setup a/b m --fork-name "bad name" --org c </dev/null 2>&1 | grep -o "Invalid --fork-name"
 venfork setup a/b m --org c </dev/null 2>&1 | grep "gh stub"           # exit 1 at the first gh call
@@ -54,3 +57,4 @@ mv "$VF_ROOT/gh.ok" "$VF_ROOT/bin/gh"
 - `tests/unit/commands.test.ts` answers every `gh` call with a string. A green setup test does not show that GitHub accepted a fork, a create or a push.
 - The fixture already contains what setup would build. It does not exercise setup.
 - Exit 0 after "Continue with personal account?" answered no is a cancel, not a success.
+- `VENFORK_NONINTERACTIVE=1` does not confirm. Only `--yes` does; without it the confirm exits 2.

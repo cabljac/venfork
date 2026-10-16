@@ -17,20 +17,22 @@ tests:
 - After fetch: refuses upstream's default branch and a branch with no history in common with upstream.
 - Rebuilds the branch linearly on `upstream/<default>` by cherry-pick with hooks off. Managed commits are dropped. Merge commits are dropped; a merge with a manual conflict resolution is refused.
 - Gates every rebuilt commit (see `leak-invariants.md`): `StageLeakError` for mirror-only paths or content, `MirrorReferenceError` for mirror terms in author, committer, message, file content or file name, refusal of bot-authored commits.
-- Shows commits and files, then asks "Push to public fork?" (no-public: "Push to upstream?"). `VENFORK_NONINTERACTIVE=1` answers yes only with `--pr`.
+- Shows commits and files, then asks "Push to public fork?" (no-public: "Push to upstream?"). `--yes` answers it. Without a TTY on stdin, with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`, the confirm without `--yes` exits 2 naming `--yes` (`MissingInputError`) before it fetches, and nothing is pushed; stdout stays empty.
 - Pushes `<head>:refs/heads/<branch>` with `--force-with-lease=<ref>:<tip from ls-remote>` and `--no-follow-tags`. No-public pushes to the upstream URL directly (the remote's push URL stays `DISABLE`).
 - `--pr`/`--draft`: finds the internal PR on the mirror, redacts it (`stripInternalBlocks`, `RedactionError`), runs `gh pr create`, updates an existing PR body unless `--no-update-existing`, writes `shippedBranches[branch]`.
 
 ## How a user reaches it
 
-`venfork stage <branch>`, `venfork stage branch <name>` (for a branch named `issue` or `branch`), plus `--pr`, `--draft`, `--title <t>`, `--base <b>`, `--internal-pr <n>`, `--no-update-existing`. `stage issue` is in `issue.md`.
+`venfork stage <branch>`, `venfork stage branch <name>` (for a branch named `issue` or `branch`), plus `--pr`, `--draft`, `--title <t>`, `--base <b>`, `--internal-pr <n>`, `--no-update-existing`, `--yes`/`-y`, `--no-input`. `stage issue` is in `issue.md`.
 
 ## How to drive it
 
 ```bash
 git checkout -q -b feat upstream/main && echo f > src/feat.txt && git add . && git commit -qm "feat: add feat"
-venfork stage feat </dev/null 2>&1; echo $?                    # 130, "Cancelled: input ended at a prompt"
-vf_yes stage feat >/dev/null 2>&1; echo $?                      # 0
+venfork stage feat </dev/null 2>&1; echo $?                    # 2, "Pass --yes."; nothing on $VF_PUBLIC
+VENFORK_NONINTERACTIVE=1 venfork stage feat </dev/null 2>&1; echo $?   # 2 as well: it does not confirm
+venfork stage feat --yes </dev/null >/dev/null 2>&1; echo $?    # 0
+vf_yes stage feat >/dev/null 2>&1; echo $?                      # 0 (answers the confirm through a pseudo-TTY)
 A=$(vf_tip "$VF_PUBLIC" feat); vf_yes stage feat >/dev/null 2>&1; vf_tip "$VF_PUBLIC" feat   # differs from $A
 git checkout -q -b leak upstream/main && mkdir -p .github/workflows && echo x > .github/workflows/venfork-sync.yml && git add . && git commit -qm "ci: wf"
 venfork stage leak </dev/null 2>&1 | grep -o "Refusing to stage.*"   # StageLeakError, exit 1
@@ -53,6 +55,6 @@ venfork stage feat --pr </dev/null 2>&1 | grep -o "Cannot open an upstream PR.*"
 ## What usually lies
 
 - Every stage rebuilds, so each run pushes a new SHA (`vf_pushes "$VF_PUBLIC" feat` grows by 1). Compare trees, not SHAs.
-- A piped `printf y` does not confirm. The command still exits 130.
+- A piped `printf y` does not confirm. Without a TTY the command exits 2 before reading stdin.
 - The fixture deny-list has the origin path and `venfork` only. `owner/name` and repo-name terms need a GitHub URL: see `tests/integration/stage-gate-content.test.ts`.
 - `--pr` cannot succeed on the fixture. The redaction and PR payload are proven by `tests/unit/redaction.test.ts` and e2e tier 3 only.

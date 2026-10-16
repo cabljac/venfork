@@ -1,5 +1,5 @@
 import type { ScheduleAuth } from './config.js';
-import { scanArgs, unexpectedArgument } from './shared/args.js';
+import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
 
 /** Parsed `venfork schedule ...` arguments. */
 export type ParsedScheduleArgs = {
@@ -21,6 +21,7 @@ export const SCHEDULE_USAGE =
 export function parseScheduleCliArgs(args: string[]): ParsedScheduleArgs {
   const authFlags: string[] = [];
   const [action = 'status', ...rest] = scanArgs(args, SCHEDULE_USAGE, (arg) => {
+    if (arg === NO_INPUT_FLAG) return 0;
     if (arg !== '--app' && arg !== '--token') return undefined;
     authFlags.push(arg);
     return 0;

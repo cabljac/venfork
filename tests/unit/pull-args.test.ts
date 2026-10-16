@@ -67,6 +67,7 @@ describe('parsePullCliArgs issue', () => {
       kind: 'issue',
       ref: '1234',
       title: undefined,
+      prompt: { yes: false, noInput: false },
     });
   });
 
@@ -173,5 +174,26 @@ describe('parsePullCliArgs strictness', () => {
   test('--flag=value form works for both', () => {
     expect(parsePr(['5', '--branch-name=b']).branchName).toBe('b');
     expect(parseIssue(['5', '--title=T']).title).toBe('T');
+  });
+});
+
+describe('parsePullCliArgs prompt flags', () => {
+  test('pull issue reads --yes, -y and --no-input', () => {
+    expect(parseIssue(['7', '--yes']).prompt).toEqual({
+      yes: true,
+      noInput: false,
+    });
+    expect(parseIssue(['-y', '7', '--no-input']).prompt).toEqual({
+      yes: true,
+      noInput: true,
+    });
+  });
+
+  test('pull pr rejects --yes and -y: it has no confirm', () => {
+    for (const flag of ['--yes', '-y']) {
+      expect(() => parsePullCliArgs(['pr', '5', flag])).toThrow(
+        `Unknown option '${flag}'. Usage: venfork pull pr`
+      );
+    }
   });
 });

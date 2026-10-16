@@ -312,7 +312,11 @@ import {
   workflowsCommand,
 } from '../../src/commands.js';
 import { setupSyncMirror } from '../../src/dispatch.js';
-import { CommandExitError, SyncDivergenceError } from '../../src/errors.js';
+import {
+  CommandExitError,
+  MissingInputError,
+  SyncDivergenceError,
+} from '../../src/errors.js';
 
 /** Calls setupCommand with the quiet sync that src/index.ts wires in, unless a test passes its own. */
 function setupCommand(
@@ -323,6 +327,7 @@ function setupCommand(
   options: {
     noPublic?: boolean;
     syncMirror?: (cwd: string) => Promise<void>;
+    prompt?: { yes: boolean; noInput: boolean };
   } = {}
 ): Promise<void> {
   return runSetupCommand(
@@ -2512,12 +2517,7 @@ describe('stageCommand', () => {
     expect(execaCalls.some((cmd) => cmd.includes('gh pr edit'))).toBe(false);
   });
 
-  test('--pr with VENFORK_NONINTERACTIVE=1 skips the confirm prompt', async () => {
-    process.env.VENFORK_NONINTERACTIVE = '1';
-    // Default confirmResponse=true would also let the test pass even if the
-    // prompt fired; flip it to false so a successful flow PROVES the prompt
-    // was bypassed.
-    confirmResponse = false;
+  function stageStandardPrMocks(): void {
     mockResponses.set('git remote get-url origin', {
       exitCode: 0,
       stdout: 'git@github.com:owner/repo-private.git',
@@ -2556,16 +2556,34 @@ describe('stageCommand', () => {
       stdout: 'https://github.com/up/repo/pull/400\n',
       stderr: '',
     });
+  }
 
-    try {
-      await stageCommand('feature-branch', { createPr: true });
-    } finally {
-      delete process.env.VENFORK_NONINTERACTIVE;
-    }
+  test('--pr with --yes skips the confirm prompt', async () => {
+    // A "no" from the prompt would cancel, so reaching gh pr create proves
+    // the prompt was bypassed.
+    confirmResponse = false;
+    stageStandardPrMocks();
 
-    // The prompt was bypassed, so we reached the push + gh pr create path
-    // even though confirmResponse=false would have cancelled it.
+    await stageCommand('feature-branch', {
+      createPr: true,
+      prompt: { yes: true, noInput: false },
+    });
+
     expect(execaCalls.some((cmd) => cmd.includes('gh pr create'))).toBe(true);
+  });
+
+  test('VENFORK_NONINTERACTIVE=1 no longer confirms: it throws naming --yes and pushes nothing', async () => {
+    process.env.VENFORK_NONINTERACTIVE = '1';
+    stageStandardPrMocks();
+
+    const err = await stageCommand('feature-branch', { createPr: true }).catch(
+      (e: unknown) => e
+    );
+
+    expect(err).toBeInstanceOf(MissingInputError);
+    expect((err as MissingInputError).flag).toBe('--yes');
+    expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
+    expect(execaCalls.some((cmd) => cmd.includes('gh pr create'))).toBe(false);
   });
 });
 
@@ -3312,6 +3330,77 @@ describe('setupCommand - VENFORK_ORG environment variable', () => {
     expect(cloneCalls.some((cmd) => cmd.includes('testuser/test-vendor'))).toBe(
       true
     );
+  });
+
+  test('without a TTY the personal-account confirm throws naming --yes and creates nothing', async () => {
+    delete process.env.VENFORK_ORG;
+    process.stdin.isTTY = false;
+
+    const err = await setupCommand(
+      'git@github.com:test/repo.git',
+      'test-vendor'
+    ).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(MissingInputError);
+    expect((err as MissingInputError).flag).toBe('--yes');
+    expect(execaCalls.some((cmd) => cmd.includes('gh repo create'))).toBe(
+      false
+    );
+  });
+
+  test('--yes answers the personal-account confirm without a TTY', async () => {
+    delete process.env.VENFORK_ORG;
+    process.stdin.isTTY = false;
+    confirmResponse = false;
+
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        undefined,
+        undefined,
+        { prompt: { yes: true, noInput: false } }
+      );
+    } catch {
+      // Expected
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh repo clone') && cmd.includes('testuser/test-vendor')
+      )
+    ).toBe(true);
+  });
+
+  test('--no-input uses the default mirror name <repo>-private', async () => {
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        undefined,
+        'acme',
+        undefined,
+        { prompt: { yes: false, noInput: true } }
+      );
+    } catch {
+      // Expected
+    }
+
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh repo clone') && cmd.includes('acme/repo-private')
+      )
+    ).toBe(true);
+  });
+
+  test('--no-input without an upstream throws naming the <upstream> argument', async () => {
+    const err = await setupCommand(undefined, undefined, 'acme', undefined, {
+      prompt: { yes: false, noInput: true },
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(MissingInputError);
+    expect((err as MissingInputError).flag).toBe('the <upstream> argument');
   });
 
   test('exits when user declines personal account confirmation', async () => {
@@ -4577,6 +4666,81 @@ describe('issueCommand', () => {
     ).toBe(true);
   });
 
+  test('stage and pull: --yes opens the issue without asking', async () => {
+    setupCommonRemotes();
+    confirmResponse = false;
+    mockResponses.set('gh issue view 7 --repo owner/mirror', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 7,
+        url: 'https://github.com/owner/mirror/issues/7',
+        title: 'Bug',
+        body: 'Body.',
+        state: 'OPEN',
+        author: { login: 'me' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set('gh issue view 1234 --repo up/repo', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 1234,
+        url: 'https://github.com/up/repo/issues/1234',
+        title: 'Feature',
+        body: 'Body.',
+        state: 'OPEN',
+        author: { login: 'reporter' },
+      }),
+      stderr: '',
+    });
+    mockResponses.set('gh issue create', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/issues/99\n',
+      stderr: '',
+    });
+    const yes = { prompt: { yes: true, noInput: false } };
+
+    for (const [action, ref, repo] of [
+      ['stage', '7', 'up/repo'],
+      ['pull', '1234', 'owner/mirror'],
+    ] as const) {
+      execaCalls.length = 0;
+      try {
+        await issueCommand(action, ref, yes);
+      } catch {
+        // config-write fallout under mocks
+      }
+      expect(
+        execaCalls.some((cmd) => cmd.includes(`gh issue create --repo ${repo}`))
+      ).toBe(true);
+    }
+  });
+
+  test('pull: without a TTY and without --yes it throws naming --yes and opens nothing', async () => {
+    setupCommonRemotes();
+    process.stdin.isTTY = false;
+    mockResponses.set('gh issue view 1234 --repo up/repo', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 1234,
+        url: 'https://github.com/up/repo/issues/1234',
+        title: 'Feature',
+        body: 'Body.',
+        state: 'OPEN',
+        author: { login: 'reporter' },
+      }),
+      stderr: '',
+    });
+
+    const err = await issueCommand('pull', '1234').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(MissingInputError);
+    expect((err as MissingInputError).flag).toBe('--yes');
+    expect(execaCalls.some((cmd) => cmd.includes('gh issue create'))).toBe(
+      false
+    );
+  });
+
   test('renderPulledComments: empty/undefined yields no section', () => {
     expect(renderPulledComments(undefined)).toBe('');
     expect(renderPulledComments([])).toBe('');
@@ -4956,6 +5120,17 @@ describe('no-public mode', () => {
       expect(
         execaCalls.some((c) => c.includes('git remote add upstream'))
       ).toBe(true);
+    });
+
+    test('--no-input without --upstream throws naming --upstream and adds no remotes', async () => {
+      const err = await cloneCommand('git@github.com:acme/legacy-private.git', {
+        noPublic: true,
+        prompt: { yes: false, noInput: true },
+      }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(MissingInputError);
+      expect((err as MissingInputError).flag).toBe('--upstream <url>');
+      expect(execaCalls.some((c) => c.includes('git remote add'))).toBe(false);
     });
   });
 });

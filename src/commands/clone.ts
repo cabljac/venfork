@@ -1,8 +1,9 @@
+import { rm } from 'node:fs/promises';
 import { $ } from 'execa';
 import { fetchVenforkConfig } from '../config.js';
-import { CommandExitError } from '../errors.js';
+import { CommandExitError, MissingInputError } from '../errors.js';
 import { ghGitProtocol } from '../git.js';
-import { isCancel, promptText } from '../shared/prompt.js';
+import { isCancel, type PromptContext, promptText } from '../shared/prompt.js';
 import * as p from '../shared/ui.js';
 import {
   githubUrlForProtocol,
@@ -12,12 +13,30 @@ import {
   parseRepoPath,
 } from '../utils.js';
 
+/** Removes the directory a failed or cancelled clone created, so a rerun can clone again. */
+async function removePartialClone(dir: string): Promise<void> {
+  try {
+    await rm(dir, { recursive: true, force: true });
+    p.log.info(`Removed the partial clone '${dir}'`);
+  } catch (err) {
+    p.log.warn(
+      `Could not remove the partial clone '${dir}': ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
 /**
- * Clone command: Clone vendor repository and configure all remotes
+ * Clone command: Clone vendor repository and configure all remotes. A run
+ * that fails or is cancelled after cloning removes the clone.
  */
 export async function cloneCommand(
   vendorRepoUrl?: string,
-  options: { noPublic?: boolean; upstreamUrl?: string } = {}
+  options: {
+    noPublic?: boolean;
+    upstreamUrl?: string;
+    /** `--no-input`. */
+    prompt?: PromptContext;
+  } = {}
 ): Promise<void> {
   p.intro('🔧 Venfork Clone');
 
@@ -38,6 +57,7 @@ export async function cloneCommand(
   }
 
   const s = p.spinner();
+  let clonedDir: string | undefined;
 
   try {
     // Parse vendor repo details
@@ -62,6 +82,7 @@ export async function cloneCommand(
     const vendorGhPath = parseRepoPath(vendorCloneUrl);
     s.start('Cloning vendor repository');
     await $`gh repo clone ${vendorGhPath} ${vendorRepoName}`;
+    clonedDir = vendorRepoName;
     s.stop('Vendor repository cloned');
 
     // Step 3: Try to fetch venfork config
@@ -126,11 +147,15 @@ export async function cloneCommand(
         if (options.upstreamUrl) {
           upstreamUrl = options.upstreamUrl;
         } else {
-          const response = await promptText({
-            message:
-              'Upstream URL? (no venfork-config branch was found, so it cannot be auto-detected)',
-            placeholder: 'git@github.com:owner/repo.git',
-          });
+          const response = await promptText(
+            {
+              message:
+                'Upstream URL? (no venfork-config branch was found, so it cannot be auto-detected)',
+              flag: '--upstream <url>',
+              placeholder: 'git@github.com:owner/repo.git',
+            },
+            options.prompt
+          );
           if (isCancel(response) || !response.trim()) {
             p.outro('❌ Clone cancelled');
             throw new CommandExitError(1);
@@ -161,10 +186,14 @@ export async function cloneCommand(
             'Detection Failed'
           );
 
-          const response = await promptText({
-            message: 'Please provide the public fork URL:',
-            placeholder: 'git@github.com:owner/repo.git',
-          });
+          const response = await promptText(
+            {
+              message: 'Please provide the public fork URL:',
+              flag: '--no-public --upstream <url> (when the mirror has no public fork)',
+              placeholder: 'git@github.com:owner/repo.git',
+            },
+            options.prompt
+          );
 
           if (isCancel(response)) {
             p.outro('❌ Clone cancelled');
@@ -199,10 +228,14 @@ export async function cloneCommand(
 
             p.log.warn('⚠️  Public fork has no parent repository.');
 
-            const response = await promptText({
-              message: 'Please provide the upstream URL:',
-              placeholder: 'git@github.com:original/repo.git',
-            });
+            const response = await promptText(
+              {
+                message: 'Please provide the upstream URL:',
+                flag: '--upstream <url>',
+                placeholder: 'git@github.com:original/repo.git',
+              },
+              options.prompt
+            );
 
             if (isCancel(response)) {
               p.outro('❌ Clone cancelled');
@@ -261,7 +294,9 @@ export async function cloneCommand(
   venfork stage feature-branch`
     );
   } catch (error) {
+    if (clonedDir) await removePartialClone(clonedDir);
     if (error instanceof CommandExitError) throw error;
+    if (error instanceof MissingInputError) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Clone failed');

@@ -1,4 +1,4 @@
-import { scanArgs, unexpectedArgument } from './shared/args.js';
+import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
 
 export type ParsedPreserveArgs = {
   action: 'list' | 'add' | 'remove' | 'clear';
@@ -18,10 +18,8 @@ const USAGE = 'venfork preserve <list|add|remove|clear> [path ...]';
 export function parsePreserveCliArgs(
   preserveArgs: string[]
 ): ParsedPreserveArgs {
-  const [actionRaw = 'list', ...rest] = scanArgs(
-    preserveArgs,
-    USAGE,
-    () => undefined
+  const [actionRaw = 'list', ...rest] = scanArgs(preserveArgs, USAGE, (arg) =>
+    arg === NO_INPUT_FLAG ? 0 : undefined
   );
 
   if (actionRaw === 'list' || actionRaw === 'clear') {

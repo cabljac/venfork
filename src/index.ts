@@ -17,12 +17,13 @@ import {
 } from './commands.js';
 import { requiresGhAuth, setupSyncMirror } from './dispatch.js';
 import { parseDoctorCliArgs } from './doctor-args.js';
-import { CommandExitError } from './errors.js';
+import { CommandExitError, MissingInputError } from './errors.js';
 import { ensureGhAuth } from './git.js';
 import { parsePreserveCliArgs } from './preserve-args.js';
 import { parsePullCliArgs } from './pull-args.js';
 import { parseScheduleCliArgs } from './schedule-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
+import { closedOutputExitCode } from './shared/closed-output.js';
 import { parseStageCliArgs } from './stage-args.js';
 import { parseSyncCliArgs } from './sync-args.js';
 import { VENFORK_VERSION } from './version.js';
@@ -85,6 +86,7 @@ async function main(): Promise<void> {
         {
           noPublic: parsed.noPublic,
           syncMirror: setupSyncMirror(),
+          prompt: parsed.prompt,
         }
       );
       break;
@@ -94,6 +96,7 @@ async function main(): Promise<void> {
       await cloneCommand(parsed.vendorRepoUrl, {
         noPublic: parsed.noPublic,
         upstreamUrl: parsed.upstreamUrl,
+        prompt: parsed.prompt,
       });
       break;
     }
@@ -110,7 +113,10 @@ async function main(): Promise<void> {
     case 'stage': {
       const parsed = parseStageCliArgs(args.slice(1));
       if (parsed.kind === 'issue') {
-        await issueCommand('stage', parsed.ref, { title: parsed.title });
+        await issueCommand('stage', parsed.ref, {
+          title: parsed.title,
+          prompt: parsed.prompt,
+        });
         break;
       }
       await stageCommand(parsed.branch, {
@@ -120,6 +126,7 @@ async function main(): Promise<void> {
         base: parsed.base,
         internalPrNumber: parsed.internalPrNumber,
         noUpdateExisting: parsed.noUpdateExisting,
+        prompt: parsed.prompt,
       });
       break;
     }
@@ -148,7 +155,10 @@ async function main(): Promise<void> {
           push: parsed.push,
         });
       } else {
-        await issueCommand('pull', parsed.ref, { title: parsed.title });
+        await issueCommand('pull', parsed.ref, {
+          title: parsed.title,
+          prompt: parsed.prompt,
+        });
       }
       break;
     }
@@ -170,14 +180,15 @@ function exitOnAbandonedPrompt(): void {
   process.exit(130);
 }
 
-// A reader that stopped early (`venfork help | head -1`) is not a failure.
-function exitQuietlyOnClosedPipe(error: NodeJS.ErrnoException): void {
-  if (error.code !== 'EPIPE') throw error;
-  process.exit();
+function exitOnClosedOutput(error: NodeJS.ErrnoException): void {
+  const code = closedOutputExitCode(error, process.exitCode);
+  if (code === null) throw error;
+  process.exit(code);
 }
 
-process.stdout.on('error', exitQuietlyOnClosedPipe);
-process.stderr.on('error', exitQuietlyOnClosedPipe);
+process.stdout.on('error', exitOnClosedOutput);
+process.stderr.on('error', exitOnClosedOutput);
+process.stdin.on('error', exitOnClosedOutput);
 process.on('beforeExit', exitOnAbandonedPrompt);
 main()
   .finally(() => {
@@ -185,6 +196,10 @@ main()
   })
   .catch((error) => {
     if (error instanceof CommandExitError) process.exit(error.exitCode);
+    if (error instanceof MissingInputError) {
+      console.error(`Error: ${error.message}`);
+      process.exit(2);
+    }
     console.error(
       `Error: ${error instanceof Error ? error.message : String(error)}`
     );
