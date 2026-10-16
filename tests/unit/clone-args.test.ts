@@ -122,3 +122,54 @@ describe('parseCloneCliArgs prompt flags', () => {
     );
   });
 });
+
+describe('parseCloneCliArgs --public-fork', () => {
+  test('value form', () => {
+    expect(
+      parseCloneCliArgs(['a/b-private', '--public-fork', 'acme/b'])
+        .publicForkUrl
+    ).toBe('acme/b');
+  });
+
+  test('= form, trimmed', () => {
+    expect(
+      parseCloneCliArgs([
+        'a/b-private',
+        '--public-fork= git@github.com:acme/b.git ',
+      ]).publicForkUrl
+    ).toBe('git@github.com:acme/b.git');
+  });
+
+  test('absent leaves it undefined', () => {
+    expect(parseCloneCliArgs(['a/b-private']).publicForkUrl).toBeUndefined();
+  });
+
+  test('combines with --upstream', () => {
+    expect(
+      parseCloneCliArgs([
+        '--public-fork=acme/b',
+        '--upstream',
+        'up/b',
+        'a/b-private',
+      ])
+    ).toEqual({
+      vendorRepoUrl: 'a/b-private',
+      noPublic: false,
+      upstreamUrl: 'up/b',
+      publicForkUrl: 'acme/b',
+      prompt: { yes: false, noInput: false },
+    });
+  });
+
+  test('throws when the value is missing or empty', () => {
+    expect(() => parseCloneCliArgs(['a/b', '--public-fork'])).toThrow(
+      '--public-fork requires a value'
+    );
+    expect(() =>
+      parseCloneCliArgs(['a/b', '--public-fork', '--no-input'])
+    ).toThrow('--public-fork requires a value');
+    expect(() => parseCloneCliArgs(['a/b', '--public-fork='])).toThrow(
+      '--public-fork requires a value'
+    );
+  });
+});

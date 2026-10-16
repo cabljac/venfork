@@ -28,3 +28,6 @@ After `bun run check`, re-read a file before editing by string match.
 
 ## Subagents must not run gh stack
 Stack metadata is shared in `.git` across worktrees. Only the main checkout drives a stack.
+
+## execa `$` does not parse quotes
+In a `$` template, literal text is split on spaces and quotes are kept: `--jq '.parent.url'` passes `'.parent.url'` with the quotes to gh. Interpolate a value (`--jq ${expr}`) or write an unquoted single word.

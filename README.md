@@ -130,7 +130,7 @@ Creates the complete vendor workflow setup:
 - `--org <organization>` - (Optional) Create repos under organization instead of personal account
 - `--fork-name <repo>` - (Optional) Public fork repo name under that org/user (default: same basename as upstream)
 - `--no-public` - (Optional) Skip the public-fork hop; stage pushes directly to upstream
-- `--yes`, `-y` - (Optional) Answer the personal-account confirm with yes
+- `--yes`, `-y` - (Optional) Answer the personal-account confirm with yes. `--org <your username>` (compared with your gh login ignoring case) also counts as consent: the repos go under your personal account with no confirm. `VENFORK_ORG` set to your username does not: it is ambient, so the confirm still runs (and needs `--yes` without a terminal).
 - `--no-input` - (Optional) Never prompt. A missing `name` defaults to `{repo}-private` (the choice is logged on stderr). A missing `upstream`, or a personal account without `--yes`, exits 2. See [Non-interactive use](#non-interactive-use).
 
 **Examples:**
@@ -174,7 +174,7 @@ venfork setup my-org/foo my-foo-private --org my-org --no-public
 
 Pure failures (for example name taken by a **different** repo) still abort setup. If recovery sync stops due to divergent default branches, fix or move those commits, then run **`venfork sync`** again from inside the private mirror.
 
-### `venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--no-input]`
+### `venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--no-input]`
 
 Clone an existing vendor setup and automatically configure all remotes.
 
@@ -186,12 +186,13 @@ Clone an existing vendor setup and automatically configure all remotes.
 - Falls back to auto-detection when the config branch is absent:
   - Public fork (by stripping `-private` suffix)
   - Upstream repository (from public fork's parent)
-- Configures the appropriate remotes (origin/upstream — plus public in standard mode)
+- Configures the appropriate remotes (origin/upstream, plus public in standard mode)
 - Disables push to upstream (read-only)
 
-**Options** (only meaningful for **legacy mirrors** without a `venfork-config` branch — when config is present it's authoritative and the flags will error on conflict):
+**Options** (only meaningful for **legacy mirrors** without a `venfork-config` branch. When config is present it is authoritative: a flag that names the recorded value is accepted, and a flag that contradicts it is an error):
 - `--no-public` - Declare a no-public layout (origin + upstream only). Use when the original setup was created with `venfork setup --no-public` but the config branch is missing.
 - `--upstream <url>` - Provide the upstream URL explicitly. Useful with `--no-public` (no public fork to derive it from) or to skip the auto-detect prompt.
+- `--public-fork <url>` - Provide the public fork (GitHub URL or `owner/repo`) explicitly. Skips the public-fork detection and prompt; upstream is still read from the fork's parent unless `--upstream` is given. Cannot be combined with `--no-public`.
 
 `--no-input` never prompts: a URL that clone would ask for exits 2 and names the flag that supplies it. `clone` has no confirm, so it does not take `--yes`. A clone that fails or is cancelled after the repository was cloned removes the cloned directory, so you can rerun it with the named flag.
 
@@ -220,7 +221,8 @@ venfork clone git@github.com:acme-corp/awesome-project-private.git
 **Interactive prompts:**
 - If public fork cannot be auto-detected, you'll be prompted for the URL
 - If upstream cannot be auto-detected (no parent), you'll be prompted for the URL
-- Without a terminal (see [Non-interactive use](#non-interactive-use)) these prompts exit 2 instead: pass `--upstream <url>`, or `--no-public --upstream <url>` when the mirror has no public fork
+- An empty answer is rejected and the prompt asks again; cancelling a prompt (Ctrl-C) exits 130
+- Without a terminal (see [Non-interactive use](#non-interactive-use)) these prompts exit 2 instead and name the flag: `--public-fork <url>` for the public fork, `--upstream <url>` for upstream. Use `--no-public --upstream <url>` when the mirror has no public fork
 
 ### `venfork sync [branch] [--report-issues]`
 

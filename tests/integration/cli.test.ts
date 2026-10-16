@@ -228,6 +228,13 @@ async function hasBranch(repo: string, branch: string): Promise<boolean> {
   return result.exitCode === 0;
 }
 
+async function pathExists(file: string): Promise<boolean> {
+  return stat(file).then(
+    () => true,
+    () => false
+  );
+}
+
 describe('no TTY: fail fast instead of prompting', () => {
   test('setup without an upstream exits 2 naming the <upstream> argument', async () => {
     const result = await runCliWithoutTty(tmp, ['setup', '--org', 'acme']);
@@ -396,20 +403,16 @@ describe('no TTY: fail fast instead of prompting', () => {
       );
       expect(refused.timedOut).toBe(false);
       expect(refused.exitCode).toBe(2);
-      expect(refused.stderr).toContain('--upstream <url>');
-      expect(
-        await stat(path.join(work, 'proj-private')).then(
-          () => true,
-          () => false
-        )
-      ).toBe(false);
+      expect(refused.stderr).toContain('Pass --public-fork <url>.');
+      expect(await pathExists(path.join(work, 'proj-private'))).toBe(false);
 
       const cloned = await runCliWithoutTty(
         work,
         [
           'clone',
           'acme/proj-private',
-          '--no-public',
+          '--public-fork',
+          'acme/proj',
           '--upstream',
           'git@github.com:client/proj.git',
         ],
@@ -470,6 +473,99 @@ describe('no TTY: fail fast instead of prompting', () => {
       expect(result.stdout).toBe('');
       expect(result.stderr).toContain('Pass --yes.');
       expect(await hasBranch(fx.publicFork ?? '', 'feature')).toBe(false);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+});
+
+describe('clone on a legacy mirror without venfork-config', () => {
+  /**
+   * Strips the fixture's config branch and returns a PATH whose gh clones
+   * the fixture origin, reports the fixture upstream as every fork's parent
+   * and finds no other repository. Each gh call is appended to `ghLog`.
+   */
+  async function legacyMirror(
+    fx: MirrorFixture
+  ): Promise<{ path: string; ghLog: string }> {
+    await fx.git(fx.origin, 'branch', '-D', 'venfork-config');
+    const bin = path.join(fx.root, 'gh-bin');
+    const ghLog = path.join(fx.root, 'gh.log');
+    await mkdir(bin);
+    await writeFile(
+      path.join(bin, 'gh'),
+      [
+        '#!/bin/sh',
+        `echo "$*" >> '${ghLog}'`,
+        'case "$1 $2" in',
+        '  "auth status"|"repo set-default") exit 0 ;;',
+        '  "config get") echo ssh; exit 0 ;;',
+        '  "repo clone")',
+        '    dir="$4"; shift 4; [ "$1" = "--" ] && shift',
+        `    exec git clone --quiet "$@" '${fx.origin}' "$dir" ;;`,
+        '  "repo view")',
+        `    case "$*" in *"--json parent"*) echo '${fx.upstream}'; exit 0 ;; esac ;;`,
+        'esac',
+        'exit 1',
+        '',
+      ].join('\n')
+    );
+    await chmod(path.join(bin, 'gh'), 0o755);
+    return { path: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, ghLog };
+  }
+
+  test('--public-fork wires public and upstream from that fork, with no prompt', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const { path: ghPath, ghLog } = await legacyMirror(fx);
+
+      const result = await runCliWithoutTty(
+        fx.root,
+        ['clone', 'acme/legacy-private', '--public-fork', 'other-org/legacy'],
+        { PATH: ghPath }
+      );
+
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+      const clone = path.join(fx.root, 'legacy-private');
+      expect(await fx.git(clone, 'remote', 'get-url', 'public')).toBe(
+        'git@github.com:other-org/legacy.git'
+      );
+      expect(await fx.git(clone, 'remote', 'get-url', 'upstream')).toBe(
+        fx.upstream
+      );
+      expect(
+        await fx.git(clone, 'remote', 'get-url', '--push', 'upstream')
+      ).toBe('DISABLE');
+      const calls = (await readFile(ghLog, 'utf8')).trim().split('\n');
+      expect(calls.filter((c) => c.startsWith('repo view'))).toEqual([
+        'repo view other-org/legacy --json parent --jq .parent.url',
+      ]);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('without --public-fork, an undetected fork exits 2 naming --public-fork <url>', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const { path: ghPath } = await legacyMirror(fx);
+
+      const result = await runCliWithoutTty(
+        fx.root,
+        ['clone', 'acme/legacy-private'],
+        { PATH: ghPath }
+      );
+
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('Please provide the public fork URL:');
+      expect(result.stderr).toContain('Pass --public-fork <url>.');
+      expect(await pathExists(path.join(fx.root, 'legacy-private'))).toBe(
+        false
+      );
     } finally {
       await fx.cleanup();
     }

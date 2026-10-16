@@ -10,24 +10,26 @@ export type ParsedCloneArgs = {
   vendorRepoUrl?: string;
   noPublic: boolean;
   upstreamUrl?: string;
+  publicForkUrl?: string;
   /** `--no-input`; clone has no confirm, so `yes` is always false. */
   prompt: PromptContext;
 };
 
 const USAGE =
-  'venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--no-input]';
+  'venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--no-input]';
 
 /**
  * Parse `venfork clone ...` argv after the `clone` token.
  *
- * `--no-public` and `--upstream` are escape hatches for **legacy mirrors**
+ * `--no-public`, `--upstream` and `--public-fork` are escape hatches for **legacy mirrors**
  * that pre-date the `venfork-config` branch. When the config branch is
  * present, the layout is read from there and these flags are unnecessary
- * (and will conflict with the recorded `mode` if set inconsistently).
+ * (clone refuses any that contradict the recorded layout).
  */
 export function parseCloneCliArgs(args: string[]): ParsedCloneArgs {
   let noPublic = false;
   let upstreamUrl: string | undefined;
+  let publicForkUrl: string | undefined;
   const promptFlags = parsePromptFlags({ allowYes: false });
 
   const positional = scanArgs(args, USAGE, (a, i) => {
@@ -41,6 +43,11 @@ export function parseCloneCliArgs(args: string[]): ParsedCloneArgs {
       upstreamUrl = value;
       return consumed;
     }
+    if (a === '--public-fork' || a.startsWith('--public-fork=')) {
+      const { value, consumed } = consumeValue('--public-fork', args, i);
+      publicForkUrl = value;
+      return consumed;
+    }
     return undefined;
   });
   if (positional.length > 1) throw unexpectedArgument(positional[1], USAGE);
@@ -49,6 +56,7 @@ export function parseCloneCliArgs(args: string[]): ParsedCloneArgs {
     vendorRepoUrl: positional[0],
     noPublic,
     upstreamUrl: upstreamUrl?.trim() || undefined,
+    publicForkUrl: publicForkUrl?.trim() || undefined,
     prompt: promptFlags.prompt,
   };
 }

@@ -14,7 +14,7 @@ tests:
 ## What exists
 
 - Needs gh auth first (`AuthenticationError`: "GitHub CLI is not authenticated. Please run: gh auth login").
-- Prompts for the upstream when it is missing and for the mirror name when it is missing (default `<repo>-private`). With no `--org` and no `VENFORK_ORG`, asks "Continue with personal account?"; `--yes` answers it.
+- Prompts for the upstream when it is missing and for the mirror name when it is missing (default `<repo>-private`). With no `--org` and no `VENFORK_ORG`, asks "Continue with personal account?"; `--yes` answers it. `--org` set to your own gh username (any case) is consent: the repos go under the personal account (no `gh repo fork --org`) and the confirm is skipped, with or without a TTY. `VENFORK_ORG` set to your username is not consent: the repos still go under the personal account, but the confirm runs (exit 2 naming `--yes` without a TTY).
 - Never prompts without a TTY on stdin, with `CI` set (not `false`/`0`), with `VENFORK_NONINTERACTIVE=1` or with `--no-input`. Then a missing mirror name becomes `<repo>-private` (logged on stderr), a missing upstream exits 2 naming "the <upstream> argument", and the personal-account confirm without `--yes` exits 2 naming `--yes` (`MissingInputError`). stdout stays empty.
 - Standard mode: `gh repo fork` (public fork), `gh repo create --private` (mirror), seeds a new mirror from a temp clone of upstream in chunks (`VENFORK_SEED_CHUNK`, `VENFORK_SEED_RETRY_MS`), `gh repo clone`s the mirror into `./<name>`, `gh repo set-default`.
 - Writes the orphan `venfork-config` branch. Never overwrites one: an existing config that agrees is kept, one that disagrees is a `ConfigError` ("The existing venfork-config disagrees with this setup").

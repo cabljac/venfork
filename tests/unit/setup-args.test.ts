@@ -78,6 +78,7 @@ describe('parseSetupCliArgs', () => {
       upstreamUrl: 'a/b',
       privateMirrorName: undefined,
       organization: 'from-env',
+      organizationFromEnv: true,
       publicForkRepoName: undefined,
       noPublic: false,
       prompt: { yes: false, noInput: false },
