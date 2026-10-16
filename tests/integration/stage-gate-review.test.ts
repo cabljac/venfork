@@ -600,3 +600,98 @@ describe('stage refuses invalid preserve entries', () => {
     );
   });
 });
+
+describe('every publish refusal of stage has code stage-leak', () => {
+  async function stageCause(): Promise<unknown> {
+    const err = await stageCommand('feature', {
+      prompt: { yes: true, noInput: false },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CommandExitError);
+    return (err as CommandExitError).cause;
+  }
+
+  test('a branch commit that changes a preserved file', async () => {
+    await fx.commitOnOrigin({ 'keep/a.txt': 'kept\n' });
+    await seedPreserve(fx, ['keep/a.txt']);
+    await sync();
+    await featureFrom('refs/remotes/origin/main');
+    await commitFile('keep/a.txt', 'changed\n', 'feat: tweak the kept file');
+
+    const cause = await stageCause();
+
+    expect((cause as { code?: string }).code).toBe('stage-leak');
+    expect(await published()).toBe(false);
+  });
+
+  test('a mirror-history scan over the reflog cap', async () => {
+    await fx.commitOnOrigin({ 'keep/a.txt': 'kept\n' });
+    await seedPreserve(fx, ['keep/a.txt']);
+    await sync();
+    await git('fetch', '--quiet', 'origin');
+    await growReflog('refs/remotes/origin/main', 10);
+
+    const err = await collectMirrorBlobs(
+      ['refs/remotes/origin/main'],
+      ['keep/a.txt'],
+      'upstream/main',
+      fx.work,
+      { historyCap: 3 }
+    ).catch((e: unknown) => e);
+
+    expect((err as { code?: string }).code).toBe('stage-leak');
+  });
+
+  test('a mirror-history scan over the commit cap', async () => {
+    let commit = await git('rev-parse', 'upstream/main');
+    const tree = await git('rev-parse', `${commit}^{tree}`);
+    for (let i = 0; i < 4; i++) {
+      commit = await git('commit-tree', tree, '-p', commit, '-m', `m${i}`);
+    }
+
+    const err = await collectMirrorBlobs(
+      [commit],
+      [],
+      'upstream/main',
+      fx.work,
+      {
+        historyCap: 3,
+      }
+    ).catch((e: unknown) => e);
+
+    expect((err as { code?: string }).code).toBe('stage-leak');
+  });
+
+  test('a directory where venfork writes a file in the mirror history', async () => {
+    await featureFrom('upstream/main');
+    await commitFile(
+      '.github/workflows/venfork-sync.yml/inner.yml',
+      'name: x\n',
+      'ci: a directory at the workflow path'
+    );
+
+    const err = await collectMirrorBlobs(
+      ['refs/heads/feature'],
+      [],
+      'upstream/main',
+      fx.work
+    ).catch((e: unknown) => e);
+
+    expect((err as { code?: string }).code).toBe('stage-leak');
+    expect((err as Error).message).toContain('is a directory');
+  });
+
+  test('a blob too large to check', async () => {
+    await featureFrom('upstream/main');
+    await commitFile(
+      'data/big.txt',
+      Buffer.alloc(110_000_000, 0x61),
+      'data: big'
+    );
+
+    const cause = await stageCause();
+
+    expect((cause as { code?: string }).code).toBe('stage-leak');
+    expect((cause as Error).message).toContain('too large to check');
+    expect(await published()).toBe(false);
+  });
+});

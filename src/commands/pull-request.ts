@@ -2,7 +2,10 @@ import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
 import {
   CommandExitError,
+  GitError,
+  GitHubError,
   isEntryReported,
+  PreconditionError,
   RemoteNotFoundError,
   UsageError,
 } from '../errors.js';
@@ -19,6 +22,17 @@ export interface PullRequestOptions {
   push?: boolean;
 }
 
+/** `--json` result of `venfork pull pr`. */
+export interface PullPrResult {
+  /** The local branch holding the PR head. */
+  branch: string;
+  head: string;
+  prNumber: number;
+  prUrl: string;
+  /** False with `--no-push` or when the push to origin failed. */
+  pushed: boolean;
+}
+
 /**
  * Resolves a `<pr>` argument (bare number or PR URL) to a numeric PR id.
  * A URL must point at `upstreamRepoPath`.
@@ -30,7 +44,7 @@ export function resolvePullRequestArg(
   const { number, repoPath } = parseGitHubRef(pr, 'pull');
   if (repoPath === undefined) return { number };
   if (repoPath.toLowerCase() !== upstreamRepoPath.toLowerCase()) {
-    throw new Error(
+    throw new PreconditionError(
       `Refused to use PR URL ${pr}: it points to ${repoPath}, but the upstream remote is ${upstreamRepoPath}. If this is intentional, pass the PR number directly (\`venfork pull pr ${number}\`).`
     );
   }
@@ -61,7 +75,7 @@ async function fetchUpstreamPrMeta(
     reject: false,
   })`gh pr view ${prNumber} --repo ${upstreamRepoPath} --json ${fields}`;
   if (result.exitCode !== 0) {
-    throw new Error(
+    throw new GitHubError(
       `Failed to read upstream PR #${prNumber} from ${upstreamRepoPath}: ${result.stderr.trim() || `exit ${result.exitCode}`}`
     );
   }
@@ -74,11 +88,12 @@ async function fetchUpstreamPrMeta(
  * local branch (default `upstream-pr/<n>`), pushes to origin so the team can
  * see it, and records a `pulledPrs` entry so `venfork sync <branch>` can
  * later refresh it.
+ * @returns The pulled branch, for `--json`.
  */
 export async function pullRequestCommand(
   pr: string | undefined,
   options: PullRequestOptions = {}
-): Promise<void> {
+): Promise<PullPrResult> {
   if (!pr) {
     throw new UsageError(`Missing PR number or URL. Usage: ${PULL_PR_USAGE}`);
   }
@@ -99,7 +114,7 @@ export async function pullRequestCommand(
     }
     const upstreamRepoPath = parseRepoPath(upstreamUrlResult.stdout.trim());
     if (!upstreamRepoPath) {
-      throw new Error(
+      throw new PreconditionError(
         `Could not parse upstream remote URL: ${upstreamUrlResult.stdout.trim()}`
       );
     }
@@ -120,7 +135,7 @@ export async function pullRequestCommand(
       reject: false,
     })`git rev-parse --verify ${localBranch}`;
     if (existing.exitCode === 0 && !options.branchName) {
-      throw new Error(
+      throw new PreconditionError(
         `Local branch '${localBranch}' already exists. Pass --branch-name <override> to use a different name, or delete the existing branch first.`
       );
     }
@@ -132,8 +147,9 @@ export async function pullRequestCommand(
       reject: false,
     })`git fetch upstream ${fetchRefspec}`;
     if (fetchResult.exitCode !== 0) {
-      throw new Error(
-        `git fetch upstream ${fetchRefspec} failed. This can happen if the PR's source branch was deleted, or if the local branch already exists at a different commit (try deleting or renaming it first). Stderr:\n${fetchResult.stderr.trim()}`
+      throw new GitError(
+        `git fetch upstream ${fetchRefspec} failed. This can happen if the PR's source branch was deleted, or if the local branch already exists at a different commit (try deleting or renaming it first). Stderr:\n${fetchResult.stderr.trim()}`,
+        'git fetch upstream'
       );
     }
     const headSha = (
@@ -142,6 +158,13 @@ export async function pullRequestCommand(
     s.stop(`Fetched ${headSha.slice(0, 9)} → ${localBranch}`);
 
     let pushedToMirror = false;
+    const result = (): PullPrResult => ({
+      branch: localBranch,
+      head: headSha,
+      prNumber,
+      prUrl: meta.url,
+      pushed: pushedToMirror,
+    });
     if (push) {
       s.start(`Pushing ${localBranch} to origin`);
       const pushResult = await netExec(repoDir, {
@@ -175,7 +198,7 @@ export async function pullRequestCommand(
         ? 'mirror push failed'
         : '--no-push set, branch is local-only';
       p.outro(`✨ Pull request fetched locally (${reason})`);
-      return;
+      return result();
     }
 
     try {
@@ -227,11 +250,12 @@ export async function pullRequestCommand(
     );
 
     p.outro('✨ Pull request imported!');
+    return result();
   } catch (error) {
     if (isEntryReported(error)) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Pull request import failed');
-    throw new CommandExitError(1);
+    throw new CommandExitError(1, error);
   }
 }

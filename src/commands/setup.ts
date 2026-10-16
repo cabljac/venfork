@@ -13,6 +13,7 @@ import {
 } from '../git.js';
 import { checkSetupInputs } from '../setup-args.js';
 import { pathExists } from '../shared/fs.js';
+import { claimInterrupts } from '../shared/interrupt.js';
 import { netExec, runNetOp, seedMirrorInChunks } from '../shared/net.js';
 import {
   isCancel,
@@ -275,6 +276,7 @@ export async function setupCommand(
 
   process.on('SIGINT', signalHandler);
   process.on('SIGTERM', signalHandler);
+  const releaseInterrupts = claimInterrupts();
 
   const steps = async () => {
     const upstreamRepoPath = parseRepoPath(config.upstreamUrl);
@@ -525,5 +527,6 @@ Upstream: ${config.upstreamUrl} (read-only)`,
     await cleanup();
     process.off('SIGINT', signalHandler);
     process.off('SIGTERM', signalHandler);
+    releaseInterrupts();
   }
 }

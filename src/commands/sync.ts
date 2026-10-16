@@ -8,7 +8,9 @@ import {
 import {
   CommandExitError,
   ConfigError,
+  GitError,
   isEntryReported,
+  PreconditionError,
   SyncDivergenceError,
 } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
@@ -55,12 +57,37 @@ function resolvePulledPr(
   return null;
 }
 
+/** `--json` result of a default-branch sync. */
+export interface DefaultBranchSyncResult {
+  kind: 'default-branch';
+  /** `pushed` when origin or public moved, else `up-to-date`. */
+  status: 'pushed' | 'up-to-date';
+  branch: string;
+  upstreamTip: string;
+  origin: { tip: string; pushed: boolean };
+  /** Absent in no-public mode. */
+  public?: { tip: string; pushed: boolean };
+}
+
+/** `--json` result of `venfork sync <branch>` on a pulled upstream PR. */
+export interface PulledPrSyncResult {
+  kind: 'pulled-pr';
+  /** `push-failed` when the local branch moved but origin could not. */
+  status: 'pushed' | 'up-to-date' | 'push-failed';
+  branch: string;
+  prNumber: number;
+  head: string;
+}
+
+/** What `venfork sync` did, reported as the `--json` result. */
+export type SyncResult = DefaultBranchSyncResult | PulledPrSyncResult;
+
 async function syncPulledPr(
   branch: string,
   prNumber: number,
   cwd: string,
   s: ReturnType<typeof p.spinner>
-): Promise<void> {
+): Promise<PulledPrSyncResult> {
   s.start(`Fetching pull/${prNumber}/head from upstream`);
   const fetchResult = await netExec(cwd, {
     bufferOutput: true,
@@ -72,8 +99,9 @@ async function syncPulledPr(
       bufferOutput: true,
     })`git fetch upstream +pull/${prNumber}/head:${branch}`;
     if (forceResult.exitCode !== 0) {
-      throw new Error(
-        `git fetch upstream pull/${prNumber}/head failed: ${netFailureReason(forceResult)}`
+      throw new GitError(
+        `git fetch upstream pull/${prNumber}/head failed: ${netFailureReason(forceResult)}`,
+        'git fetch upstream'
       );
     }
   }
@@ -81,14 +109,22 @@ async function syncPulledPr(
   s.stop(`Fetched ${headSha.slice(0, 9)} → ${branch}`);
 
   s.start(`Pushing ${branch} to origin`);
+  const result: PulledPrSyncResult = {
+    kind: 'pulled-pr',
+    status: 'up-to-date',
+    branch,
+    prNumber,
+    head: headSha,
+  };
   try {
-    await pushBranchWithLease({
+    const pushed = await pushBranchWithLease({
       remote: 'origin',
       branch,
       target: headSha,
       expected: await resolveCommit(`refs/remotes/origin/${branch}`, cwd),
       cwd,
     });
+    if (pushed) result.status = 'pushed';
   } catch (err) {
     s.stop('Push failed');
     p.log.warn(
@@ -97,7 +133,7 @@ async function syncPulledPr(
     p.log.warn(
       'Local branch is updated; the mirror copy was not. Skipping pulledPrs config update — the recorded head/lastSyncedAt would not match the mirror.'
     );
-    return;
+    return { ...result, status: 'push-failed' };
   }
   s.stop(`Pushed ${branch} to origin`);
 
@@ -123,6 +159,7 @@ async function syncPulledPr(
     const msg = err instanceof Error ? err.message : String(err);
     p.log.warn(`Could not update pulledPrs entry: ${msg}`);
   }
+  return result;
 }
 
 /**
@@ -157,11 +194,12 @@ function warnWeakManaged(commits: DroppedManagedCommit[]): void {
  * With `reportIssues` (set by the generated workflow), a divergence opens or
  * refreshes a `venfork-sync-blocked` issue on the mirror, and a successful
  * sync closes it.
+ * @returns What sync did, for `--json`.
  */
 export async function syncCommand(
   targetBranch?: string,
   options?: { cwd?: string; quiet?: boolean; reportIssues?: boolean }
-): Promise<void> {
+): Promise<SyncResult> {
   const quiet = options?.quiet ?? false;
 
   if (!quiet) {
@@ -180,13 +218,18 @@ export async function syncCommand(
       const initialConfig = await readVenforkConfigFromRepo(repoDir);
       const pulledPr = resolvePulledPr(targetBranch, initialConfig);
       if (pulledPr) {
-        await syncPulledPr(targetBranch, pulledPr.prNumber, repoDir, s);
+        const result = await syncPulledPr(
+          targetBranch,
+          pulledPr.prNumber,
+          repoDir,
+          s
+        );
         if (!quiet) {
           p.outro(
             `✨ ${targetBranch} synced with upstream PR #${pulledPr.prNumber}`
           );
         }
-        return;
+        return result;
       }
     }
 
@@ -213,7 +256,7 @@ export async function syncCommand(
       options?.cwd
     );
     if (!upstreamTip) {
-      throw new Error(
+      throw new PreconditionError(
         `upstream/${defaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
       );
     }
@@ -237,7 +280,7 @@ export async function syncCommand(
         ((await hasManagedTrailer(previousMirrorTip, options?.cwd)) ||
           (await isManagedCommit(previousMirrorTip, options?.cwd)))
       ) {
-        throw new Error(
+        throw new PreconditionError(
           `The venfork-config branch is missing but origin/${defaultBranch} carries venfork state (a managed commit). Restore the venfork-config branch, or run \`venfork setup\` only on a fresh mirror.`
         );
       }
@@ -306,7 +349,7 @@ export async function syncCommand(
     ]);
 
     s.start(`Syncing ${defaultBranch} to origin`);
-    const { pushed: originPushed } = await updateOriginTip({
+    const { tip: originTip, pushed: originPushed } = await updateOriginTip({
       config,
       defaultBranch,
       upstreamTip,
@@ -319,6 +362,7 @@ export async function syncCommand(
         : `origin/${defaultBranch} already up to date`
     );
 
+    let publicResult: DefaultBranchSyncResult['public'];
     if (!noPublic) {
       s.start(`Syncing ${defaultBranch} to public`);
       const publicPushed = await pushBranchWithLease({
@@ -333,6 +377,7 @@ export async function syncCommand(
           ? `Updated public/${defaultBranch}`
           : `public/${defaultBranch} already up to date`
       );
+      publicResult = { tip: upstreamTip, pushed: publicPushed };
     }
 
     if (options?.reportIssues) {
@@ -346,6 +391,14 @@ export async function syncCommand(
           : `✨ Sync complete! origin/${defaultBranch} and public/${defaultBranch} are now up to date with upstream/${defaultBranch}`
       );
     }
+    return {
+      kind: 'default-branch',
+      status: originPushed || publicResult?.pushed ? 'pushed' : 'up-to-date',
+      branch: defaultBranch,
+      upstreamTip,
+      origin: { tip: originTip, pushed: originPushed },
+      ...(publicResult ? { public: publicResult } : {}),
+    };
   } catch (error) {
     if (isEntryReported(error)) throw error;
     if (error instanceof SyncDivergenceError || error instanceof ConfigError) {
@@ -357,6 +410,6 @@ export async function syncCommand(
     if (!quiet) {
       p.outro('❌ Sync failed');
     }
-    throw new CommandExitError(1);
+    throw new CommandExitError(1, error);
   }
 }

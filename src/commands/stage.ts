@@ -10,8 +10,10 @@ import {
   GitError,
   isEntryReported,
   MissingInputError,
+  PreconditionError,
   RemoteNotFoundError,
   UsageError,
+  VenforkError,
 } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { WORKFLOWS_DIR } from '../shared/constants.js';
@@ -77,7 +79,10 @@ async function mergeCommitEvilFiles(
   if (result.exitCode !== 0) {
     const gitError =
       result.stderr.trim() || result.stdout.trim() || 'git diff-tree failed';
-    throw new Error(`Failed to inspect merge commit ${ref}: ${gitError}`);
+    throw new GitError(
+      `Failed to inspect merge commit ${ref}: ${gitError}`,
+      'git show'
+    );
   }
   return result.stdout
     .split('\n')
@@ -107,7 +112,7 @@ async function assertNoEvilMerges(
     );
     if (hasNonWorkflowEvil) {
       const shortRef = mergeRef.slice(0, 9);
-      throw new Error(
+      throw new PreconditionError(
         `Failed to stage '${branch}': merge commit ${shortRef} contains manual conflict resolutions (${evilFiles.join(', ')}) that would be lost when linearizing history for the public fork. Rebase '${branch}' onto upstream/${defaultBranch} (dropping merges) and retry.`
       );
     }
@@ -186,16 +191,18 @@ async function rebuildLinearHead(
             (file) => preserve.includes(file)
           );
           if (touched.length > 0) {
-            throw new Error(
-              `Failed to stage '${branch}': commit ${commit.slice(0, 9)} changes preserved mirror-only path(s) ${touched.join(', ')}, which do not exist on upstream/${defaultBranch}. Move those changes to the mirror default branch (they cannot go upstream), drop them from '${branch}', and retry.`
+            throw new VenforkError(
+              `Failed to stage '${branch}': commit ${commit.slice(0, 9)} changes preserved mirror-only path(s) ${touched.join(', ')}, which do not exist on upstream/${defaultBranch}. Move those changes to the mirror default branch (they cannot go upstream), drop them from '${branch}', and retry.`,
+              'stage-leak'
             );
           }
           const reason =
             pickResult.stderr.trim() ||
             pickResult.stdout.trim() ||
             `exit ${pickResult.exitCode}`;
-          throw new Error(
-            `Failed to stage '${branch}': cherry-picking ${commit} onto upstream/${defaultBranch} failed:\n${reason}\nRebase '${branch}' on upstream/${defaultBranch} and retry.`
+          throw new GitError(
+            `Failed to stage '${branch}': cherry-picking ${commit} onto upstream/${defaultBranch} failed:\n${reason}\nRebase '${branch}' on upstream/${defaultBranch} and retry.`,
+            'git cherry-pick'
           );
         }
         const picked = (
@@ -276,7 +283,7 @@ async function planStaging(
 ): Promise<StagingPlan> {
   const branch = requested.replace(/^refs\/heads\//, '');
   if (branch.replace(/^origin\//, '') === CONFIG_BRANCH) {
-    throw new Error(
+    throw new PreconditionError(
       `Refusing to stage '${branch}': it holds venfork's private configuration, not upstream work.`
     );
   }
@@ -291,7 +298,7 @@ async function planStaging(
       reject: false,
     })`git rev-parse --verify --quiet ${branch}`;
     if (anyRef.exitCode === 0) {
-      throw new Error(
+      throw new PreconditionError(
         `Refusing to stage '${branch}': it is not a local branch. Tags and remote-tracking refs cannot be staged; check out a branch and stage that.`
       );
     }
@@ -345,12 +352,12 @@ async function planStaging(
     cwd
   );
   if (!upstreamTip) {
-    throw new Error(
+    throw new PreconditionError(
       `upstream/${upstreamDefaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
     );
   }
   if (branch === upstreamDefaultBranch) {
-    throw new Error(
+    throw new PreconditionError(
       `Refusing to stage '${branch}': it is upstream's default branch, and staging it would overwrite ${branch} on ${noPublic ? 'upstream' : 'the public fork'}. Stage a feature branch instead.`
     );
   }
@@ -367,7 +374,7 @@ async function planStaging(
     reject: false,
   })`git merge-base ${upstreamTip} ${`refs/heads/${branch}`}`;
   if (mergeBase.exitCode === 1) {
-    throw new Error(
+    throw new PreconditionError(
       `Refusing to stage '${branch}': it has no history in common with upstream/${upstreamDefaultBranch}.`
     );
   }
@@ -559,6 +566,27 @@ export interface StageOptions {
   prompt?: PromptContext;
 }
 
+/** `--json` result of `venfork stage <branch>`. */
+export interface StageResult {
+  branch: string;
+  /** The rebuilt commit pushed as the branch. */
+  head: string;
+  /** The remote the branch was pushed to. */
+  target: 'public' | 'upstream';
+  /** GitHub compare URL for opening the PR by hand. */
+  compareUrl: string;
+  /**
+   * Only with `--pr`: `created`, `updated` (an open PR's body was
+   * refreshed), `unchanged` (an open PR was left as is) or `failed`
+   * (the push succeeded, the PR could not be opened).
+   */
+  prAction?: 'created' | 'updated' | 'unchanged' | 'failed';
+  /** The upstream PR, when `--pr` opened or found one. */
+  prUrl?: string;
+  /** The internal review PR the upstream body came from. */
+  internalPrUrl?: string;
+}
+
 /**
  * Synthetic upstream PR body for when no internal review PR was found: one
  * bullet per published commit subject, with `#N` references dropped (they
@@ -615,11 +643,12 @@ function buildUpstreamPrPayload(
  * internal-review PR's body as a starting point (with `<!-- venfork:internal
  * -->...<!-- /venfork:internal -->` blocks stripped) and records the
  * internal/upstream PR linkage in `venfork-config.shippedBranches`.
+ * @returns What was staged, for `--json`.
  */
 export async function stageCommand(
   branch: string | undefined,
   options: StageOptions = {}
-): Promise<void> {
+): Promise<StageResult> {
   if (!branch) {
     throw new UsageError(`Missing branch name. Usage: ${STAGE_USAGE}`);
   }
@@ -639,12 +668,12 @@ export async function stageCommand(
     s.stop('Branch verified');
     if (createPr) {
       if (!plan.upstreamRepoPath) {
-        throw new Error(
+        throw new PreconditionError(
           `Cannot open an upstream PR: the upstream remote '${plan.upstreamUrl}' is not a GitHub repository.`
         );
       }
       if (!plan.pushRepoPath) {
-        throw new Error(
+        throw new PreconditionError(
           `Cannot open an upstream PR: the ${plan.pushRemote} remote '${plan.pushUrl}' is not a GitHub repository.`
         );
       }
@@ -767,7 +796,9 @@ export async function stageCommand(
 
     let upstreamPrUrl: string | undefined;
     let alreadyExisted = false;
+    let prAction: StageResult['prAction'];
     if (createPr) {
+      prAction = 'failed';
       s.start('Opening upstream pull request');
       try {
         const result = await createUpstreamPr({
@@ -784,6 +815,7 @@ export async function stageCommand(
         });
         upstreamPrUrl = result.url;
         alreadyExisted = result.alreadyExists;
+        prAction = alreadyExisted ? 'unchanged' : 'created';
         s.stop(
           alreadyExisted
             ? `Upstream PR already exists: ${upstreamPrUrl}`
@@ -810,6 +842,7 @@ export async function stageCommand(
           cwd: repoDir,
         });
         if (editResult.exitCode === 0) {
+          prAction = 'updated';
           s.stop('Updated upstream PR body');
         } else {
           s.stop('Could not update upstream PR body');
@@ -862,6 +895,15 @@ export async function stageCommand(
     }
 
     p.outro('✨ Stage complete!');
+    return {
+      branch: plan.branch,
+      head: stagedHead,
+      target: plan.pushRemote,
+      compareUrl: prUrl,
+      ...(prAction ? { prAction } : {}),
+      ...(upstreamPrUrl ? { prUrl: upstreamPrUrl } : {}),
+      ...(internalPr ? { internalPrUrl: internalPr.url } : {}),
+    };
   } catch (error) {
     if (error instanceof MissingInputError) {
       s.cancel('Not staged: the push confirm needs --yes');
@@ -871,6 +913,6 @@ export async function stageCommand(
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Stage failed');
-    throw new CommandExitError(1);
+    throw new CommandExitError(1, error);
   }
 }

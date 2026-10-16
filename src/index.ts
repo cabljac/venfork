@@ -5,6 +5,7 @@ import { commandHelp } from './commands/help.js';
 import {
   cloneCommand,
   doctorCommand,
+  isHealthy,
   issueCommand,
   preserveCommand,
   pullRequestCommand,
@@ -15,15 +16,32 @@ import {
   syncCommand,
   workflowsCommand,
 } from './commands.js';
-import { requiresGhAuth, setupSyncMirror } from './dispatch.js';
+import {
+  outsideRepositoryError,
+  requiresGhAuth,
+  setupSyncMirror,
+} from './dispatch.js';
 import { parseDoctorCliArgs } from './doctor-args.js';
-import { CommandExitError, MissingInputError, UsageError } from './errors.js';
-import { ensureGhAuth } from './git.js';
+import {
+  CommandExitError,
+  exitCodeFor,
+  UsageError,
+  VenforkError,
+} from './errors.js';
+import { ensureGhAuth, isGitRepository } from './git.js';
 import { parsePreserveCliArgs } from './preserve-args.js';
 import { parsePullCliArgs } from './pull-args.js';
 import { parseScheduleCliArgs } from './schedule-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
 import { closedOutputExitCode } from './shared/closed-output.js';
+import { interruptsClaimed } from './shared/interrupt.js';
+import {
+  errorEnvelope,
+  JSON_FLAG,
+  jsonRequested,
+  successEnvelope,
+  writeEnvelope,
+} from './shared/json-output.js';
 import { stderrUi } from './shared/ui.js';
 import { parseStageCliArgs } from './stage-args.js';
 import { parseSyncCliArgs } from './sync-args.js';
@@ -38,16 +56,31 @@ const RENAMED: Record<string, string> = {
   status: '`venfork status` is now `venfork doctor`.',
 };
 
+/** What one command run produced: its `--json` result and exit code. */
+interface CommandOutcome {
+  result: unknown;
+  exitCode: number;
+}
+
+const resultOf =
+  (run: () => Promise<unknown>) => async (): Promise<CommandOutcome> => ({
+    result: await run(),
+    exitCode: 0,
+  });
+
 /**
  * Parses `args` for `command` and returns the call that runs it. Throws
  * {@link UsageError} before anything runs, so a usage error never waits on
  * gh auth.
  */
-function parseCommand(command: string, args: string[]): () => Promise<void> {
+function parseCommand(
+  command: string,
+  args: string[]
+): () => Promise<CommandOutcome> {
   switch (command) {
     case 'setup': {
       const parsed = parseSetupCliArgs(args);
-      return () =>
+      return resultOf(() =>
         setupCommand(
           parsed.upstreamUrl,
           parsed.privateMirrorName,
@@ -59,38 +92,43 @@ function parseCommand(command: string, args: string[]): () => Promise<void> {
             prompt: parsed.prompt,
             organizationFromEnv: parsed.organizationFromEnv,
           }
-        );
+        )
+      );
     }
     case 'clone': {
       const parsed = parseCloneCliArgs(args);
-      return () =>
+      return resultOf(() =>
         cloneCommand(parsed.vendorRepoUrl, {
           noPublic: parsed.noPublic,
           upstreamUrl: parsed.upstreamUrl,
           publicForkUrl: parsed.publicForkUrl,
           prompt: parsed.prompt,
-        });
+        })
+      );
     }
     case 'sync': {
       const parsed = parseSyncCliArgs(args);
-      return () =>
-        syncCommand(parsed.branch, { reportIssues: parsed.reportIssues });
+      return resultOf(() =>
+        syncCommand(parsed.branch, { reportIssues: parsed.reportIssues })
+      );
     }
     case 'schedule': {
       const parsed = parseScheduleCliArgs(args);
-      return () =>
-        scheduleCommand(parsed.action, parsed.cron, { auth: parsed.auth });
+      return resultOf(() =>
+        scheduleCommand(parsed.action, parsed.cron, { auth: parsed.auth })
+      );
     }
     case 'stage': {
       const parsed = parseStageCliArgs(args);
       if (parsed.kind === 'issue') {
-        return () =>
+        return resultOf(() =>
           issueCommand('stage', parsed.ref, {
             title: parsed.title,
             prompt: parsed.prompt,
-          });
+          })
+        );
       }
-      return () =>
+      return resultOf(() =>
         stageCommand(parsed.branch, {
           createPr: parsed.createPr,
           draft: parsed.draft,
@@ -99,38 +137,40 @@ function parseCommand(command: string, args: string[]): () => Promise<void> {
           internalPrNumber: parsed.internalPrNumber,
           noUpdateExisting: parsed.noUpdateExisting,
           prompt: parsed.prompt,
-        });
+        })
+      );
     }
     case 'doctor': {
-      const parsed = parseDoctorCliArgs(args);
+      parseDoctorCliArgs(args);
       return async () => {
-        if (!(await doctorCommand({ json: parsed.json }))) {
-          process.exitCode = 1;
-        }
+        const result = await doctorCommand();
+        return { result, exitCode: isHealthy(result) ? 0 : 1 };
       };
     }
     case 'workflows': {
       const parsed = parseWorkflowsCliArgs(args);
-      return () => workflowsCommand(parsed.action, parsed.workflows);
+      return resultOf(() => workflowsCommand(parsed.action, parsed.workflows));
     }
     case 'preserve': {
       const parsed = parsePreserveCliArgs(args);
-      return () => preserveCommand(parsed.action, parsed.paths);
+      return resultOf(() => preserveCommand(parsed.action, parsed.paths));
     }
     case 'pull': {
       const parsed = parsePullCliArgs(args);
       if (parsed.kind === 'pr') {
-        return () =>
+        return resultOf(() =>
           pullRequestCommand(parsed.ref, {
             branchName: parsed.branchName,
             push: parsed.push,
-          });
+          })
+        );
       }
-      return () =>
+      return resultOf(() =>
         issueCommand('pull', parsed.ref, {
           title: parsed.title,
           prompt: parsed.prompt,
-        });
+        })
+      );
     }
     default:
       throw new UsageError(
@@ -139,17 +179,43 @@ function parseCommand(command: string, args: string[]): () => Promise<void> {
   }
 }
 
+const argv = process.argv.slice(2);
+const json = jsonRequested(argv[0] ?? '', argv.slice(1));
+
+/**
+ * Throws {@link UsageError} for a `--json` run that would print text on
+ * stdout (help, `--version`) or that puts `--json` before the command.
+ */
+function refuseTextOutput(command: string, rest: string[]): void {
+  if (command === JSON_FLAG) {
+    throw new UsageError(
+      'Put --json after the command, for example `venfork sync --json`.'
+    );
+  }
+  const textWords = ['help', '--help', '-h', '--version', '-v', 'version'];
+  if (
+    textWords.includes(command) ||
+    rest.some((arg) => arg === '-h' || arg === '--help')
+  ) {
+    throw new UsageError(
+      '--json cannot be combined with help or --version, which print text. Run them without --json.'
+    );
+  }
+}
+
 /**
  * Main CLI entry point
  */
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+async function main(args: string[]): Promise<void> {
   const command = args[0];
 
   if (!command) {
     showHelp(stderrUi);
     throw new CommandExitError(2);
   }
+
+  const rest = args.slice(1);
+  if (json) refuseTextOutput(command, rest);
 
   if (command === 'help' || command === '--help' || command === '-h') {
     const [target, ...targetRest] = args.slice(1);
@@ -167,7 +233,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  const rest = args.slice(1);
   const usage = commandHelp(command, rest);
   if (usage && rest.some((arg) => arg === '-h' || arg === '--help')) {
     console.log(usage);
@@ -178,7 +243,11 @@ async function main(): Promise<void> {
   if (requiresGhAuth(command, rest)) {
     await ensureGhAuth();
   }
-  await run();
+  const { result, exitCode } = await run().catch(async (error: unknown) => {
+    throw await outsideRepositoryError(command, error, isGitRepository);
+  });
+  if (json) await writeEnvelope(successEnvelope(result));
+  if (exitCode !== 0) process.exitCode = exitCode;
 }
 
 // A clack prompt whose stdin hits EOF never resolves; the loop then drains
@@ -195,22 +264,39 @@ function exitOnClosedOutput(error: NodeJS.ErrnoException): void {
   process.exit(code);
 }
 
+/**
+ * With `--json`, a SIGINT or SIGTERM still ends with the `cancelled`
+ * envelope. A command that claimed the signal (setup cleans up first)
+ * reports through its own rejection instead.
+ */
+function envelopeOnSignal(signal: 'SIGINT' | 'SIGTERM', exitCode: number) {
+  process.on(signal, async () => {
+    if (interruptsClaimed()) return;
+    await writeEnvelope(
+      errorEnvelope(new VenforkError(`Interrupted by ${signal}`, 'cancelled'))
+    );
+    process.exit(exitCode);
+  });
+}
+
+if (json) {
+  envelopeOnSignal('SIGINT', 130);
+  envelopeOnSignal('SIGTERM', 143);
+}
 process.stdout.on('error', exitOnClosedOutput);
 process.stderr.on('error', exitOnClosedOutput);
 process.stdin.on('error', exitOnClosedOutput);
 process.on('beforeExit', exitOnAbandonedPrompt);
-main()
+main(argv)
   .finally(() => {
     process.off('beforeExit', exitOnAbandonedPrompt);
   })
-  .catch((error) => {
-    if (error instanceof CommandExitError) process.exit(error.exitCode);
-    if (error instanceof UsageError || error instanceof MissingInputError) {
-      console.error(`Error: ${error.message}`);
-      process.exit(2);
+  .catch(async (error) => {
+    if (json) await writeEnvelope(errorEnvelope(error));
+    if (!(error instanceof CommandExitError)) {
+      console.error(
+        `Error: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
-    console.error(
-      `Error: ${error instanceof Error ? error.message : String(error)}`
-    );
-    process.exit(1);
+    process.exit(exitCodeFor(error));
   });

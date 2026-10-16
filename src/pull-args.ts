@@ -8,6 +8,7 @@ import {
   unexpectedArgument,
   unknownOption,
 } from './shared/args.js';
+import { JSON_FLAG } from './shared/json-output.js';
 import type { PromptContext } from './shared/prompt.js';
 
 /** Parsed `venfork pull pr ...` arguments. */
@@ -17,6 +18,8 @@ export type ParsedPullPrArgs = {
   ref: string;
   branchName?: string;
   push: boolean;
+  /** Print the `--json` envelope on stdout. */
+  json: boolean;
 };
 
 /** Parsed `venfork pull issue ...` arguments. */
@@ -27,6 +30,8 @@ export type ParsedPullIssueArgs = {
   title?: string;
   /** `--yes` / `--no-input`. */
   prompt: PromptContext;
+  /** Print the `--json` envelope on stdout. */
+  json: boolean;
 };
 
 export type ParsedPullArgs = ParsedPullPrArgs | ParsedPullIssueArgs;
@@ -34,15 +39,16 @@ export type ParsedPullArgs = ParsedPullPrArgs | ParsedPullIssueArgs;
 const PULL_USAGE = 'venfork pull <pr|issue> <number-or-url>';
 /** Usage line for `venfork pull pr`. */
 export const PULL_PR_USAGE =
-  'venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push]';
+  'venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push] [--json]';
 /** Usage line for `venfork pull issue`. */
 export const PULL_ISSUE_USAGE =
-  'venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input]';
+  'venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]';
 
 /**
  * Parse `venfork pull ...` argv after the `pull` token.
  * Layout: `venfork pull pr <n-or-url> [--branch-name <b>] [--no-push]` or
- * `venfork pull issue <n-or-url> [--title <t>]`. Flags may appear anywhere.
+ * `venfork pull issue <n-or-url> [--title <t>]`, each with `--json`. Flags
+ * may appear anywhere.
  */
 export function parsePullCliArgs(args: string[]): ParsedPullArgs {
   let branchName: string | undefined;
@@ -51,7 +57,7 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
   let branchNameFlag: string | undefined;
   let titleFlag: string | undefined;
   let promptFlag: string | undefined;
-  const promptFlags = parsePromptFlags({ allowYes: true });
+  const promptFlags = parsePromptFlags({ allowYes: true, allowJson: true });
 
   const targetUsage = args.includes('pr')
     ? PULL_PR_USAGE
@@ -60,7 +66,7 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
       : PULL_USAGE;
   const [sub, ...rest] = scanArgs(args, targetUsage, (a, i) => {
     if (promptFlags.onOption(a) !== undefined) {
-      if (a !== NO_INPUT_FLAG) promptFlag ??= a;
+      if (a !== NO_INPUT_FLAG && a !== JSON_FLAG) promptFlag ??= a;
       return 0;
     }
     if (a === '--no-push') {
@@ -90,7 +96,13 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
       throw new UsageError(`Missing PR number or URL. Usage: ${PULL_PR_USAGE}`);
     }
     parseGitHubRef(rest[0], 'pull');
-    return { kind: 'pr', ref: rest[0], branchName, push: noPush === undefined };
+    return {
+      kind: 'pr',
+      ref: rest[0],
+      branchName,
+      push: noPush === undefined,
+      json: promptFlags.json,
+    };
   }
   if (sub === 'issue') {
     const stray = noPush ?? branchNameFlag;
@@ -102,7 +114,13 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
       );
     }
     parseGitHubRef(rest[0], 'issues');
-    return { kind: 'issue', ref: rest[0], title, prompt: promptFlags.prompt };
+    return {
+      kind: 'issue',
+      ref: rest[0],
+      title,
+      prompt: promptFlags.prompt,
+      json: promptFlags.json,
+    };
   }
   if (sub === undefined) {
     throw new UsageError(`Missing pull target. Usage: ${PULL_USAGE}`);

@@ -22,7 +22,7 @@ On a fixture made with the default seed, the managed SHA after step 2 is the sam
 3. `vf_yes stage feat; echo $?` - 0. `git -C "$VF_PUBLIC" rev-parse feat^{tree}` equals `git rev-parse feat^{tree}`.
 4. Open the "upstream PR": `git -C "$VF_PUBLIC" push -q "$VF_UPSTREAM" feat:refs/pull/1/head`.
 5. `venfork sync upstream-pr/1 </dev/null 2>&1 | grep "synced with upstream PR #1"` - one line. `vf_tip "$VF_ORIGIN" upstream-pr/1` equals `vf_tip "$VF_PUBLIC" feat`.
-6. `git -C "$VF_ORIGIN" show venfork-config:.venfork/config.json` has `pulledPrs["upstream-pr/1"].head` at that SHA. `venfork doctor --json | jq .links.pulledPrs` shows it.
+6. `git -C "$VF_ORIGIN" show venfork-config:.venfork/config.json` has `pulledPrs["upstream-pr/1"].head` at that SHA. `venfork doctor --json | jq .result.links.pulledPrs` shows it.
 7. `venfork sync upstream-pr/1` again - `vf_pushes "$VF_ORIGIN" upstream-pr/1` does not change.
 
 ## 3. Preserve, sync, upstream adopts the file, sync to +0

@@ -880,22 +880,31 @@ export function formatLinks(links: DoctorLinks): string {
   return blocks.join('\n\n');
 }
 
+/** `--json` result of `venfork doctor`. */
+export interface DoctorResult {
+  checks: DoctorCheck[];
+  /** Null when the config is missing or unreadable. */
+  links: DoctorLinks | null;
+  /** {@link isHealthy} of `checks`: no check failed. */
+  healthy: boolean;
+}
+
+/** True when no check of `result` failed; skipped checks do not count. */
+export function isHealthy(result: Pick<DoctorResult, 'checks'>): boolean {
+  return result.checks.every((check) => check.ok !== false);
+}
+
 /**
- * Doctor command: prints the health checks as a table, then the link maps
- * (or JSON `{ checks, links }` with `json`; `links` is null when the config
- * is unreadable). Returns false when any check failed so the caller can
- * exit 1.
+ * Doctor command: prints the health checks as a table on stderr, then the
+ * link maps. The caller exits 1 when {@link isHealthy} is false.
+ * @returns The checks and links, for `--json`.
  */
 export async function doctorCommand(
-  options: { json?: boolean; cwd?: string } = {}
-): Promise<boolean> {
+  options: { cwd?: string } = {}
+): Promise<DoctorResult> {
   const { checks, config } = await runDoctor({ cwd: options.cwd });
-  const healthy = checks.every((check) => check.ok !== false);
   const links = config ? doctorLinks(config) : null;
-  if (options.json) {
-    console.log(JSON.stringify({ checks, links }, null, 2));
-    return healthy;
-  }
+  const healthy = isHealthy({ checks });
 
   p.intro('🩺 Venfork Doctor');
   const width = Math.max(...checks.map((check) => check.id.length));
@@ -910,7 +919,7 @@ export async function doctorCommand(
   const linkText = links ? formatLinks(links) : '';
   if (linkText) p.note(linkText, 'Links');
   p.outro(`${healthy ? '✨' : '❌'} ${doctorSummary(checks)}`);
-  return healthy;
+  return { checks, links, healthy };
 }
 
 /**

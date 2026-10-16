@@ -247,7 +247,8 @@ async function mirrorTrees(
       reflog.exitCode === 0 ? reflog.stdout.split('\n').filter(Boolean) : [];
     if (entries.length > cap) {
       throw new VenforkError(
-        `Refusing to publish: ${ref} has more than ${cap} reflog entries, and venfork checks at most ${cap}, so older mirror-only history cannot be checked. ${OVER_CAP_REMEDY}`
+        `Refusing to publish: ${ref} has more than ${cap} reflog entries, and venfork checks at most ${cap}, so older mirror-only history cannot be checked. ${OVER_CAP_REMEDY}`,
+        'stage-leak'
       );
     }
     for (const entry of entries) starts.add(entry);
@@ -267,7 +268,8 @@ async function mirrorTrees(
   const trees = log.stdout.split('\n').filter(Boolean);
   if (trees.length > cap) {
     throw new VenforkError(
-      `Refusing to publish: the mirror holds more than ${cap} commits that ${base} does not, and venfork checks at most ${cap}, so older mirror-only history cannot be checked. ${OVER_CAP_REMEDY}`
+      `Refusing to publish: the mirror holds more than ${cap} commits that ${base} does not, and venfork checks at most ${cap}, so older mirror-only history cannot be checked. ${OVER_CAP_REMEDY}`,
+      'stage-leak'
     );
   }
   return [...new Set(trees)];
@@ -297,7 +299,8 @@ async function blobsInTrees(
     if (info?.type === 'tree') {
       if (preserve.includes(entry)) throw invalidPreserveError([entry]);
       throw new VenforkError(
-        `Refusing to publish: ${entry} is a directory in the mirror history, where venfork only ever writes a file. Remove it from the mirror history and retry.`
+        `Refusing to publish: ${entry} is a directory in the mirror history, where venfork only ever writes a file. Remove it from the mirror history and retry.`,
+        'stage-leak'
       );
     }
   }
@@ -682,7 +685,8 @@ async function bytesOf(
   } catch (err) {
     if (isMaxBufferError(err)) {
       throw new VenforkError(
-        `Refusing to publish: ${where} is too large to check for mirror references (over 100 MB). Remove it from the branch and retry.`
+        `Refusing to publish: ${where} is too large to check for mirror references (over 100 MB). Remove it from the branch and retry.`,
+        'stage-leak'
       );
     }
     throw err;

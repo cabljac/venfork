@@ -76,7 +76,7 @@ afterEach(async () => {
   active = undefined;
 });
 
-function sync(cwd = fx.work): Promise<void> {
+function sync(cwd = fx.work): Promise<unknown> {
   return syncCommand(undefined, { cwd, quiet: true });
 }
 
@@ -139,7 +139,7 @@ describe('sync works from one snapshot of origin', () => {
       'only copy of q\n'
     );
     expect(await fx.fileAt(fx.origin, 'main', 'tools/p.txt')).toBe('p\n');
-    await expect(sync()).resolves.toBeUndefined();
+    await expect(sync()).resolves.toMatchObject({ kind: 'default-branch' });
   });
 });
 
@@ -173,7 +173,7 @@ describe('a preserved path upstream also has belongs to upstream', () => {
     await fx.commitOnOrigin({ 'docs/runbook.md': 'mirror v2\n' });
     await fx.commitOnOrigin({ 'docs/runbook.md': 'upstream v1\n' });
 
-    await expect(sync()).resolves.toBeUndefined();
+    await expect(sync()).resolves.toMatchObject({ kind: 'default-branch' });
 
     expect(await fx.fileAt(fx.origin, 'main', 'docs/runbook.md')).toBe(
       'upstream v1\n'

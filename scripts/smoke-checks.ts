@@ -144,21 +144,30 @@ export const EXPECTED_DOCTOR_IDS = [
 
 /**
  * Validates `doctor --json` output from the smoke run. Returns a problem
- * description, or null when the exit code, ids and results are as expected.
+ * description, or null when the exit code, envelope, ids and results are
+ * as expected.
  */
 export function verifyDoctorOutput(
   exitCode: number | undefined,
   stdout: string
 ): string | null {
-  let checks: Array<{ id?: string; ok?: unknown }>;
+  let envelope: {
+    schemaVersion?: unknown;
+    ok?: unknown;
+    result?: { checks?: Array<{ id?: string; ok?: unknown }> };
+  };
   try {
-    checks = JSON.parse(stdout)?.checks;
+    envelope = JSON.parse(stdout);
   } catch {
     return `doctor --json did not print JSON:\n${stdout}`;
   }
   if (exitCode !== 0) return `doctor exited with exit code ${exitCode}`;
+  if (envelope?.schemaVersion !== 1 || envelope.ok !== true) {
+    return `doctor --json did not print a schemaVersion 1 success envelope: ${stdout}`;
+  }
+  const checks = envelope.result?.checks;
   if (!Array.isArray(checks))
-    return `doctor output has no checks array: ${stdout}`;
+    return `doctor output has no result.checks array: ${stdout}`;
   const ids = checks.map((c) => c.id);
   if (JSON.stringify(ids) !== JSON.stringify(EXPECTED_DOCTOR_IDS)) {
     return `unexpected check ids: ${ids.join(',')}; want ${EXPECTED_DOCTOR_IDS.join(',')}`;

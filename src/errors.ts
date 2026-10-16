@@ -1,10 +1,40 @@
 /**
+ * Stable machine-readable error codes, reported as `error.code` in the
+ * `--json` envelope. A non-venfork error reports `internal`.
+ */
+export type ErrorCode =
+  | 'runtime'
+  | 'internal'
+  | 'auth'
+  | 'git'
+  | 'github'
+  | 'precondition'
+  | 'remote-not-found'
+  | 'not-in-repository'
+  | 'branch-not-found'
+  | 'sync-divergence'
+  | 'config'
+  | 'redaction'
+  | 'mirror-reference'
+  | 'stage-leak'
+  | 'pin-downgrade'
+  | 'unmigrated-mirror'
+  | 'cancelled'
+  | 'command-failed'
+  | 'missing-input'
+  | 'usage';
+
+/**
  * Base error class for all Venfork errors
  */
 export class VenforkError extends Error {
-  constructor(message: string) {
+  /** The stable code `--json` reports for this error. */
+  readonly code: ErrorCode;
+
+  constructor(message: string, code: ErrorCode = 'runtime') {
     super(message);
     this.name = 'VenforkError';
+    this.code = code;
     // Maintains proper stack trace for where our error was thrown (only available on V8)
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, this.constructor);
@@ -13,11 +43,17 @@ export class VenforkError extends Error {
 }
 
 /**
- * Thrown when GitHub CLI is not authenticated
+ * Thrown when the GitHub CLI is not authenticated, or with `missing` when
+ * no `gh` is on PATH at all.
  */
 export class AuthenticationError extends VenforkError {
-  constructor() {
-    super('GitHub CLI is not authenticated. Please run: gh auth login');
+  constructor(reason: 'unauthenticated' | 'missing' = 'unauthenticated') {
+    super(
+      reason === 'missing'
+        ? 'GitHub CLI (gh) is not installed or not on PATH. Install it from https://cli.github.com, then run: gh auth login'
+        : 'GitHub CLI is not authenticated. Please run: gh auth login',
+      'auth'
+    );
     this.name = 'AuthenticationError';
   }
 }
@@ -30,7 +66,7 @@ export class GitError extends VenforkError {
     message: string,
     public readonly operation: string
   ) {
-    super(`Git operation failed: ${message}`);
+    super(`Git operation failed: ${message}`, 'git');
     this.name = 'GitError';
   }
 }
@@ -40,7 +76,10 @@ export class GitError extends VenforkError {
  */
 export class RemoteNotFoundError extends VenforkError {
   constructor(public readonly remoteName: string) {
-    super(`Remote '${remoteName}' not found. Did you run venfork setup?`);
+    super(
+      `Remote '${remoteName}' not found. Did you run venfork setup?`,
+      'remote-not-found'
+    );
     this.name = 'RemoteNotFoundError';
   }
 }
@@ -51,9 +90,33 @@ export class RemoteNotFoundError extends VenforkError {
 export class NotInRepositoryError extends VenforkError {
   constructor() {
     super(
-      'Not in a git repository. Run this command from inside a git repository.'
+      'Not in a git repository. Run this command from inside a git repository.',
+      'not-in-repository'
     );
     this.name = 'NotInRepositoryError';
+  }
+}
+
+/**
+ * Thrown when a `gh` call fails; the message is gh's own error output.
+ */
+export class GitHubError extends VenforkError {
+  constructor(message: string) {
+    super(message, 'github');
+    this.name = 'GitHubError';
+  }
+}
+
+/**
+ * Thrown when the state on GitHub, on disk or in `venfork-config` does not
+ * allow the requested action, for example an existing directory or repo
+ * that is not the expected one, or a flag that contradicts the recorded
+ * layout.
+ */
+export class PreconditionError extends VenforkError {
+  constructor(message: string) {
+    super(message, 'precondition');
+    this.name = 'PreconditionError';
   }
 }
 
@@ -62,7 +125,7 @@ export class NotInRepositoryError extends VenforkError {
  */
 export class BranchNotFoundError extends VenforkError {
   constructor(public readonly branchName: string) {
-    super(`Branch '${branchName}' does not exist`);
+    super(`Branch '${branchName}' does not exist`, 'branch-not-found');
     this.name = 'BranchNotFoundError';
   }
 }
@@ -91,7 +154,8 @@ export class SyncDivergenceError extends VenforkError {
       parts.push(`public/${defaultBranch} has ${publicFork.count}`);
     }
     super(
-      `Sync aborted to prevent data loss: ${parts.join(', ')} commit(s) not in upstream/${defaultBranch}`
+      `Sync aborted to prevent data loss: ${parts.join(', ')} commit(s) not in upstream/${defaultBranch}`,
+      'sync-divergence'
     );
     this.name = 'SyncDivergenceError';
   }
@@ -117,7 +181,7 @@ export class ConfigError extends VenforkError {
     message: string,
     options?: { cause?: unknown; reason?: ConfigErrorReason }
   ) {
-    super(message);
+    super(message, 'config');
     this.name = 'ConfigError';
     this.reason = options?.reason ?? 'invalid';
     if (options?.cause !== undefined) this.cause = options.cause;
@@ -132,7 +196,8 @@ export class ConfigError extends VenforkError {
 export class RedactionError extends VenforkError {
   constructor(public readonly snippet: string) {
     super(
-      `Refusing to publish: '${snippet}' mentions venfork outside a well-formed <!-- venfork:internal --> ... <!-- /venfork:internal --> block. Fix the markers or remove the mention and retry.`
+      `Refusing to publish: '${snippet}' mentions venfork outside a well-formed <!-- venfork:internal --> ... <!-- /venfork:internal --> block. Fix the markers or remove the mention and retry.`,
+      'redaction'
     );
     this.name = 'RedactionError';
   }
@@ -150,7 +215,8 @@ export class MirrorReferenceError extends VenforkError {
     remedy: string
   ) {
     super(
-      `Refusing to publish: ${where} contains '${matched}', which points back at the private mirror. ${remedy}`
+      `Refusing to publish: ${where} contains '${matched}', which points back at the private mirror. ${remedy}`,
+      'mirror-reference'
     );
     this.name = 'MirrorReferenceError';
   }
@@ -172,7 +238,8 @@ export class StageLeakError extends VenforkError {
     super(
       leak === 'content'
         ? `Refusing to stage '${branch}': ${who} would publish content of a mirror-only file: ${paths.join(', ')}. Rewrite the branch so no commit copies mirror-only content (it belongs on the mirror default branch only) and retry.`
-        : `Refusing to stage '${branch}': ${who} would publish mirror-only path(s) ${paths.join(', ')}. Rewrite the branch so no commit adds or changes them (they belong on the mirror default branch only) and retry.`
+        : `Refusing to stage '${branch}': ${who} would publish mirror-only path(s) ${paths.join(', ')}. Rewrite the branch so no commit adds or changes them (they belong on the mirror default branch only) and retry.`,
+      'stage-leak'
     );
     this.name = 'StageLeakError';
   }
@@ -188,7 +255,8 @@ export class PinDowngradeError extends VenforkError {
     public readonly running: string
   ) {
     super(
-      `origin pins venfork ${pinned}, you are running ${running}; upgrade the CLI or set VENFORK_INSTALL_SPEC`
+      `origin pins venfork ${pinned}, you are running ${running}; upgrade the CLI or set VENFORK_INSTALL_SPEC`,
+      'pin-downgrade'
     );
     this.name = 'PinDowngradeError';
   }
@@ -205,7 +273,8 @@ export const UNMIGRATED_MIRROR_STEPS =
 export class UnmigratedMirrorError extends VenforkError {
   constructor() {
     super(
-      `This mirror's sync workflow is not pinned to a venfork version, so it predates venfork 0.11. ${UNMIGRATED_MIRROR_STEPS}`
+      `This mirror's sync workflow is not pinned to a venfork version, so it predates venfork 0.11. ${UNMIGRATED_MIRROR_STEPS}`,
+      'unmigrated-mirror'
     );
     this.name = 'UnmigratedMirrorError';
   }
@@ -213,12 +282,20 @@ export class UnmigratedMirrorError extends VenforkError {
 
 /**
  * Thrown by a command that has already printed its outcome. `src/index.ts`
- * exits with `exitCode` and prints nothing more.
+ * exits with `exitCode` and prints nothing more; with `--json` the error
+ * envelope describes `cause` when it is set.
  */
 export class CommandExitError extends VenforkError {
-  constructor(public readonly exitCode: number) {
-    super(`Command exited with code ${exitCode}`);
+  constructor(
+    public readonly exitCode: number,
+    cause?: unknown
+  ) {
+    super(
+      `Command exited with code ${exitCode}`,
+      exitCode === 130 || exitCode === 143 ? 'cancelled' : 'command-failed'
+    );
     this.name = 'CommandExitError';
+    if (cause !== undefined) this.cause = cause;
   }
 }
 
@@ -234,7 +311,8 @@ export class MissingInputError extends VenforkError {
     public readonly question: string
   ) {
     super(
-      `Cannot ask "${question}": venfork does not prompt without a TTY on stdin, in CI, with --no-input or with VENFORK_NONINTERACTIVE=1. Pass ${flag}.`
+      `Cannot ask "${question}": venfork does not prompt without a TTY on stdin, in CI, with --no-input or with VENFORK_NONINTERACTIVE=1. Pass ${flag}.`,
+      'missing-input'
     );
     this.name = 'MissingInputError';
   }
@@ -247,7 +325,7 @@ export class MissingInputError extends VenforkError {
  */
 export class UsageError extends VenforkError {
   constructor(message: string) {
-    super(message);
+    super(message, 'usage');
     this.name = 'UsageError';
   }
 }
@@ -263,4 +341,13 @@ export function isEntryReported(error: unknown): boolean {
     error instanceof UsageError ||
     error instanceof MissingInputError
   );
+}
+
+/** The process exit code for an error that reached `src/index.ts`. */
+export function exitCodeFor(error: unknown): number {
+  if (error instanceof CommandExitError) return error.exitCode;
+  if (error instanceof UsageError || error instanceof MissingInputError) {
+    return 2;
+  }
+  return 1;
 }

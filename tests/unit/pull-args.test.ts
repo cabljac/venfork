@@ -68,6 +68,7 @@ describe('parsePullCliArgs issue', () => {
       ref: '1234',
       title: undefined,
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 

@@ -2093,11 +2093,18 @@ describe('stageCommand', () => {
       stderr: '',
     });
 
-    try {
-      await stageCommand('feature-branch', { createPr: true });
-    } catch {
-      // updateVenforkConfig may fail on writeFile mock — fine for this test.
-    }
+    const result = await stageCommand('feature-branch', { createPr: true });
+
+    expect(result).toEqual({
+      branch: 'feature-branch',
+      head: expect.any(String),
+      target: 'public',
+      compareUrl:
+        'https://github.com/up/repo/compare/main...owner:feature-branch?expand=1',
+      prAction: 'created',
+      prUrl: 'https://github.com/up/repo/pull/123',
+      internalPrUrl: 'https://github.com/owner/repo-private/pull/7',
+    });
 
     // Internal PR lookup happened via gh.
     expect(
@@ -2452,11 +2459,11 @@ describe('stageCommand', () => {
       stderr: '',
     });
 
-    try {
-      await stageCommand('feature-branch', { createPr: true });
-    } catch {
-      // ignore
-    }
+    const result = await stageCommand('feature-branch', { createPr: true });
+    expect(result).toMatchObject({
+      prAction: 'updated',
+      prUrl: 'https://github.com/up/repo/pull/77',
+    });
 
     expect(
       execaCalls.some(
@@ -2509,14 +2516,14 @@ describe('stageCommand', () => {
         'a pull request for branch "feature-branch" into branch "main" already exists: https://github.com/up/repo/pull/77',
     });
 
-    try {
-      await stageCommand('feature-branch', {
-        createPr: true,
-        noUpdateExisting: true,
-      });
-    } catch {
-      // ignore
-    }
+    const result = await stageCommand('feature-branch', {
+      createPr: true,
+      noUpdateExisting: true,
+    });
+    expect(result).toMatchObject({
+      prAction: 'unchanged',
+      prUrl: 'https://github.com/up/repo/pull/77',
+    });
 
     expect(execaCalls.some((cmd) => cmd.includes('gh pr edit'))).toBe(false);
   });
@@ -4492,11 +4499,15 @@ describe('pullRequestCommand', () => {
   test('happy path: integer arg → fetch pull/N/head + push to origin + record entry', async () => {
     setupPrCommonMocks();
 
-    try {
-      await pullRequestCommand('42');
-    } catch {
-      // ignore — config writeback may fail in mocked env
-    }
+    const result = await pullRequestCommand('42');
+
+    expect(result).toEqual({
+      branch: 'upstream-pr/42',
+      head: 'aaaaaaaaaaaaaaaa',
+      prNumber: 42,
+      prUrl: 'https://github.com/up/repo/pull/42',
+      pushed: true,
+    });
 
     expect(
       execaCalls.some(
@@ -4532,11 +4543,8 @@ describe('pullRequestCommand', () => {
     // the branch, so a later `venfork sync <branch>` shouldn't push it
     // (which it would do if a pulledPrs entry were recorded).
     setupPrCommonMocks();
-    try {
-      await pullRequestCommand('42', { push: false });
-    } catch {
-      // ignore
-    }
+    const result = await pullRequestCommand('42', { push: false });
+    expect(result.pushed).toBe(false);
     expect(execaCalls.some((cmd) => cmd.includes('git push origin'))).toBe(
       false
     );
@@ -4659,12 +4667,15 @@ describe('syncCommand - pulled PR branches', () => {
       }
     );
 
-    try {
-      await syncCommand('upstream-pr/7');
-    } catch {
-      // updateVenforkConfig may fail under mocks
-    }
+    const result = await syncCommand('upstream-pr/7');
 
+    expect(result).toEqual({
+      kind: 'pulled-pr',
+      status: 'pushed',
+      branch: 'upstream-pr/7',
+      prNumber: 7,
+      head: 'newsha',
+    });
     expect(execaCalls).toContain(
       'git push origin newsha:refs/heads/upstream-pr/7 --force-with-lease=refs/heads/upstream-pr/7:mirrorsha --no-follow-tags'
     );
@@ -4833,11 +4844,8 @@ describe('syncCommand - pulled PR branches', () => {
       }
     );
 
-    try {
-      await syncCommand('upstream-pr/42');
-    } catch {
-      // ignore
-    }
+    const result = await syncCommand('upstream-pr/42');
+    expect(result).toMatchObject({ kind: 'pulled-pr', status: 'push-failed' });
 
     // No new write to venfork-config branch.
     expect(
@@ -4890,11 +4898,13 @@ describe('issueCommand', () => {
       stderr: '',
     });
 
-    try {
-      await issueCommand('stage', '7');
-    } catch {
-      // venfork-config write may fail under mocks
-    }
+    const result = await issueCommand('stage', '7');
+
+    expect(result).toEqual({
+      number: 99,
+      url: 'https://github.com/up/repo/issues/99',
+      source: { number: 7, url: 'https://github.com/owner/mirror/issues/7' },
+    });
 
     expect(
       execaCalls.some(
@@ -4971,11 +4981,13 @@ describe('issueCommand', () => {
       stderr: '',
     });
 
-    try {
-      await issueCommand('pull', '1234');
-    } catch {
-      // ignore config-write fallout
-    }
+    const result = await issueCommand('pull', '1234');
+
+    expect(result).toEqual({
+      number: 12,
+      url: 'https://github.com/owner/mirror/issues/12',
+      source: { number: 1234, url: 'https://github.com/up/repo/issues/1234' },
+    });
 
     expect(
       execaCalls.some(

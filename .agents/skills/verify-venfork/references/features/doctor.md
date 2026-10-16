@@ -1,12 +1,12 @@
 ---
 command: doctor
 entry: src/commands/doctor.ts
-shared: [constants, cron, divergence, managed-commit, mirror-commit, net, push-token, semver]
+shared: [constants, cron, divergence, json-output, managed-commit, mirror-commit, net, push-token, semver]
 config:
   read: [mode, upstreamUrl, publicForkUrl, schedule, preserve, invalidPreserve, shippedBranches, pulledPrs, shippedIssues, pulledIssues]
   written: []
 tests:
-  unit: [tests/unit/doctor.test.ts, tests/unit/doctor-args.test.ts, tests/unit/node-smoke.test.ts]
+  unit: [tests/unit/doctor.test.ts, tests/unit/doctor-args.test.ts, tests/unit/node-smoke.test.ts, tests/unit/json-output.test.ts]
   integration: [tests/integration/doctor.test.ts, tests/integration/cli.test.ts, tests/integration/integrity.test.ts]
   e2e: [tests/e2e/sync-flow.test.ts]
 ---
@@ -16,7 +16,8 @@ tests:
 Pending #85 stack: the GitHub App secret check; update this file when it lands.
 
 - Ten checks, always in this order: `repo`, `remotes`, `mode`, `invariant`, `divergence`, `preserve`, `workflow`, `token`, `last-run`, `cron-age`. Each is `{ id, ok: true | false | 'skipped', detail, fix? }`.
-- `--json` prints only `{ "checks": [...], "links": {...} }` on stdout. Without `--json` the human report goes to stderr and stdout stays empty. `links` holds the four link maps, or `null` when the config is unreadable.
+- `--json` prints one line on stdout: `{ "schemaVersion": 1, "ok": true, "result": { "checks": [...], "links": {...}, "healthy": true } }`; `healthy` is false when any check is `false`. The human report still goes to stderr. Without `--json` stdout stays empty. `links` holds the four link maps, or `null` when the config is unreadable.
+- A doctor that ran is `ok: true` even when a check is `false`; it still exits 1. A usage error (`doctor --json extra`) is `ok: false` with `error.code` `usage`, exit 2.
 - Exit 1 when any check is `false`. `skipped` does not fail.
 - It only reads, apart from `git fetch --multiple origin upstream [public]` and fetching `venfork-config`.
 - `repo` false for a non-repo or a missing, invalid or unfetchable config marks every later check `skipped`. An invalid cron also fails `repo`, but the git checks still run. A failed remote fetch fails `remotes` and skips `invariant` to `workflow`.
@@ -35,11 +36,11 @@ Pending #85 stack: the GitHub App secret check; update this file when it lands.
 ```bash
 venfork doctor --json > "$T/d0.json"; echo $?                                 # 0
 venfork schedule set "0 * * * *" </dev/null >/dev/null 2>&1
-venfork doctor --json | grep -A2 '"invariant"\|"workflow"\|"token"'          # +1 managed, up to date, skipped
+venfork doctor --json | jq '.result.checks[] | select(.id == "invariant" or .id == "workflow" or .id == "token")'   # +1 managed, up to date, skipped
 venfork doctor --json > "$T/d1.json"; venfork doctor --json | diff - "$T/d1.json"   # stable: no output
-vf_origin_commit src/hot.txt x; venfork doctor --json | grep -B1 '"ok": false'; echo $?   # invariant, divergence; 1
-(cd "$VF_ROOT" && venfork doctor --json | head -8)                          # repo false: not a git repository
-git remote set-url --push upstream "$VF_UPSTREAM"; venfork doctor --json | grep -A3 '"remotes"'   # push URL not DISABLE
+vf_origin_commit src/hot.txt x; venfork doctor --json | jq -c '[.ok, [.result.checks[] | select(.ok == false) | .id]]'; echo $?   # [true,["invariant","divergence"]]; 1
+(cd "$VF_ROOT" && venfork doctor --json | jq '.result.checks[0]')            # repo false: not a git repository
+git remote set-url --push upstream "$VF_UPSTREAM"; venfork doctor --json | jq '.result.checks[1]'   # remotes: push URL not DISABLE
 git remote set-url --push upstream DISABLE
 ```
 
@@ -48,8 +49,8 @@ git remote set-url --push upstream DISABLE
 
 ## What proves it
 
-- Exit code plus `jq '[.checks[] | select(.ok == false) | .id]'` on the JSON.
-- `jq '.checks | length'` is 10 in every state.
+- Exit code plus `jq '[.result.checks[] | select(.ok == false) | .id]'` on the JSON.
+- `jq '.result.checks | length'` is 10 in every state, and stdout is one line.
 - After a doctor run, `vf_pushes "$VF_ORIGIN"` and `vf_tip "$VF_ORIGIN" venfork-config` are unchanged.
 
 ## What usually lies

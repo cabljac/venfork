@@ -41,8 +41,12 @@ test('the engines.node floor covers every runtime dependency floor', async () =>
 
 const mk = (ids: string[], okAt = -1) =>
   JSON.stringify({
-    checks: ids.map((id, i) => ({ id, ok: i !== okAt, detail: 'x' })),
-    links: null,
+    schemaVersion: 1,
+    ok: true,
+    result: {
+      checks: ids.map((id, i) => ({ id, ok: i !== okAt, detail: 'x' })),
+      links: null,
+    },
   });
 
 test('accepts exit 0 with every expected check passing in order', () => {
@@ -72,4 +76,17 @@ test('rejects a missing, extra or reordered id', () => {
 
 test('rejects non-JSON output', () => {
   expect(verifyDoctorOutput(0, 'boom')).toContain('did not print JSON');
+});
+
+test('rejects output that is not a success envelope', () => {
+  const checks = EXPECTED_DOCTOR_IDS.map((id) => ({ id, ok: true }));
+  expect(verifyDoctorOutput(0, JSON.stringify({ checks }))).toContain(
+    'envelope'
+  );
+  expect(
+    verifyDoctorOutput(
+      0,
+      JSON.stringify({ schemaVersion: 1, ok: false, error: {} })
+    )
+  ).toContain('envelope');
 });

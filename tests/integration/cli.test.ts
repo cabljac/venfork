@@ -774,6 +774,24 @@ describe('usage errors exit 2 with the error on stderr', () => {
   });
 });
 
+/** Parses stdout that must be exactly one line holding one JSON envelope. */
+function parseEnvelope(stdout: string): Record<string, unknown> {
+  expect(stdout.split('\n')).toHaveLength(1);
+  return JSON.parse(stdout) as Record<string, unknown>;
+}
+
+function doctorResult(stdout: string): {
+  checks: Array<{ id: string; ok: unknown }>;
+  healthy?: unknown;
+} {
+  const envelope = parseEnvelope(stdout);
+  expect(envelope).toMatchObject({ schemaVersion: 1, ok: true });
+  return envelope.result as {
+    checks: Array<{ id: string; ok: unknown }>;
+    healthy?: unknown;
+  };
+}
+
 describe('doctor --json output', () => {
   test('stays pure JSON in every state, including an invalid cron', async () => {
     const fx = await createMirrorFixture();
@@ -798,17 +816,13 @@ describe('doctor --json output', () => {
       expect(invalidCron.exitCode).toBe(1);
 
       for (const stdout of outputs) {
-        const { checks } = JSON.parse(stdout) as {
-          checks: Array<{ id: string; ok: unknown }>;
-        };
+        const { checks } = doctorResult(stdout);
         expect(checks[0].id).toBe('repo');
         expect(checks).toHaveLength(10);
       }
-      const cronAge = (
-        JSON.parse(invalidCron.stdout) as {
-          checks: Array<{ id: string; ok: unknown }>;
-        }
-      ).checks.find((check) => check.id === 'cron-age');
+      const cronAge = doctorResult(invalidCron.stdout).checks.find(
+        (check) => check.id === 'cron-age'
+      );
       expect(cronAge?.ok).toBe('skipped');
     } finally {
       await fx.cleanup();
@@ -859,10 +873,404 @@ describe('output streams', () => {
     try {
       const result = await runCliIn(fx.work, 'doctor', '--json');
 
-      expect(() => JSON.parse(result.stdout)).not.toThrow();
+      expect(doctorResult(result.stdout).checks).toHaveLength(10);
+      expect(doctorResult(result.stdout).healthy).toBe(true);
       expect(result.stderr).not.toContain('\x1b');
     } finally {
       await fx.cleanup();
     }
+  });
+});
+
+describe('--json envelope on stdout, no TTY', () => {
+  test('sync: pushed, then up-to-date, with progress still on stderr', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const upstreamTip = await fx.commitOnUpstream({ 'src/new.txt': 'new\n' });
+
+      const first = await runCliWithoutTty(fx.work, ['sync', '--json']);
+      expect(first.exitCode).toBe(0);
+      expect(first.stderr).toContain('step: Fetching from upstream');
+      expect(parseEnvelope(first.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: true,
+        result: {
+          kind: 'default-branch',
+          status: 'pushed',
+          branch: 'main',
+          upstreamTip,
+          origin: { tip: upstreamTip, pushed: true },
+          public: { tip: upstreamTip, pushed: true },
+        },
+      });
+
+      const second = await runCliWithoutTty(fx.work, ['sync', '--json']);
+      expect(second.exitCode).toBe(0);
+      expect(parseEnvelope(second.stdout)).toMatchObject({
+        ok: true,
+        result: {
+          status: 'up-to-date',
+          origin: { tip: upstreamTip, pushed: false },
+          public: { tip: upstreamTip, pushed: false },
+        },
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('sync: divergence is a sync-divergence error, exit 1', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.commitOnOrigin({ 'src/hotfix.ts': 'export {};\n' });
+
+      const result = await runCliWithoutTty(fx.work, ['sync', '--json']);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('Divergent commits detected');
+      expect(parseEnvelope(result.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: {
+          code: 'sync-divergence',
+          message: expect.stringContaining('Sync aborted to prevent data loss'),
+        },
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('stage: --json never prompts; without --yes it is missing-input, exit 2', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await cutFeatureBranch(fx);
+      const publicFork = fx.publicFork ?? '';
+
+      const refused = await runCliWithoutTty(fx.work, [
+        'stage',
+        'feature',
+        '--json',
+      ]);
+      expect(refused.timedOut).toBe(false);
+      expect(refused.exitCode).toBe(2);
+      expect(parseEnvelope(refused.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: {
+          code: 'missing-input',
+          message: expect.stringContaining('Push to public fork?'),
+          flag: '--yes',
+        },
+      });
+      expect(await hasBranch(publicFork, 'feature')).toBe(false);
+
+      const staged = await runCliWithoutTty(fx.work, [
+        'stage',
+        'feature',
+        '--json',
+        '--yes',
+      ]);
+      expect(staged.exitCode).toBe(0);
+      expect(parseEnvelope(staged.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: true,
+        result: {
+          branch: 'feature',
+          head: await fx.sha(publicFork, 'feature'),
+          target: 'public',
+          compareUrl: expect.stringContaining('feature?expand=1'),
+        },
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('doctor: unhealthy checks are ok: true with exit 1', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.commitOnOrigin({ 'src/hotfix.ts': 'export {};\n' });
+
+      const result = await runCliWithoutTty(fx.work, ['doctor', '--json']);
+
+      expect(result.exitCode).toBe(1);
+      const envelope = parseEnvelope(result.stdout);
+      expect(Object.keys(envelope).sort()).toEqual([
+        'ok',
+        'result',
+        'schemaVersion',
+      ]);
+      const { checks, links, healthy } = envelope.result as {
+        checks: Array<{ id: string; ok: unknown }>;
+        links: unknown;
+        healthy: unknown;
+      };
+      expect(healthy).toBe(false);
+      expect(checks.find((check) => check.id === 'divergence')?.ok).toBe(false);
+      expect(links).toEqual({
+        shippedBranches: {},
+        pulledPrs: {},
+        shippedIssues: {},
+        pulledIssues: {},
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  for (const args of [
+    ['sync', '--json', '--bogus'],
+    ['stage', '--json'],
+    ['pull', 'nope', '--json'],
+    ['doctor', '--json', 'extra'],
+  ]) {
+    test(`usage error: venfork ${args.join(' ')} prints the usage envelope, exit 2`, async () => {
+      const result = await runCliWithoutTty(tmp, args);
+
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain('Error: ');
+      expect(parseEnvelope(result.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: { code: 'usage', message: expect.any(String) },
+      });
+    });
+  }
+
+  for (const args of [
+    ['pull', 'pr', '12', '--json'],
+    ['sync', '--json'],
+    ['stage', 'feature', '--yes', '--json'],
+  ]) {
+    test(`outside a git repository, venfork ${args.join(' ')} is not-in-repository, exit 1`, async () => {
+      const result = await runCliWithoutTty(tmp, args);
+
+      expect(result.exitCode).toBe(1);
+      expect(parseEnvelope(result.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: { code: 'not-in-repository', message: expect.any(String) },
+      });
+    });
+  }
+
+  test('a command without --json support prints the usage envelope, exit 2', async () => {
+    const result = await runCliWithoutTty(tmp, ['setup', '--json']);
+
+    expect(result.exitCode).toBe(2);
+    expect(parseEnvelope(result.stdout)).toEqual({
+      schemaVersion: 1,
+      ok: false,
+      error: { code: 'usage', message: expect.stringContaining('--json') },
+    });
+  });
+
+  for (const args of [
+    ['frob', '--json'],
+    ['pull-request', '5', '--json'],
+    ['--json', 'sync'],
+    ['sync', '--json', '--help'],
+    ['help', 'sync', '--json'],
+    ['--version', '--json'],
+  ]) {
+    test(`venfork ${args.join(' ')} prints the usage envelope, exit 2`, async () => {
+      const result = await runCliWithoutTty(tmp, args);
+
+      expect(result.exitCode).toBe(2);
+      expect(parseEnvelope(result.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: { code: 'usage', message: expect.any(String) },
+      });
+    });
+  }
+
+  test('sync --json killed with SIGINT prints a cancelled envelope', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.git(
+        fx.work,
+        'remote',
+        'set-url',
+        'upstream',
+        'ssh://git@example.invalid/client/project.git'
+      );
+      const childEnv: Record<string, string | undefined> = {
+        ...process.env,
+        PATH: authedPath,
+        GIT_SSH_COMMAND: 'sleep 5 #',
+      };
+      delete childEnv.CI;
+      delete childEnv.VENFORK_NONINTERACTIVE;
+      const child = $({
+        cwd: fx.work,
+        reject: false,
+        stdin: 'pipe',
+        timeout: 20000,
+        env: childEnv,
+        extendEnv: false,
+      })`node ${entry} sync --json`;
+      await new Promise<void>((resolve) => {
+        let seen = '';
+        child.stderr?.on('data', (chunk: Buffer) => {
+          seen += chunk.toString();
+          if (seen.includes('Fetching from upstream')) resolve();
+        });
+      });
+      child.kill('SIGINT');
+      const result = await child;
+
+      expect(result.exitCode).toBe(130);
+      expect(parseEnvelope(result.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: { code: 'cancelled', message: 'Interrupted by SIGINT' },
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('stage --yes --json of the default branch is a precondition envelope', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'main',
+        '--yes',
+        '--json',
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(parseEnvelope(result.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: {
+          code: 'precondition',
+          message: expect.stringContaining("it is upstream's default branch"),
+        },
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('stage --yes --json on a branch adding a preserved path is a stage-leak envelope, exit 1, public unchanged', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.commitOnOrigin(
+        { '.venfork/config.json': '{}\n' },
+        'chore: mirror-only file'
+      );
+      await fx.git(fx.work, 'checkout', '--quiet', '-b', 'leaky');
+      await writeFile(path.join(fx.work, 'notes.md'), 'internal\n');
+      await mkdir(path.join(fx.work, '.venfork'), { recursive: true });
+      await writeFile(path.join(fx.work, '.venfork', 'leak.txt'), 'leak\n');
+      await fx.git(fx.work, 'add', '.');
+      await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: leaky change');
+      const publicFork = fx.publicFork ?? '';
+      const before = await fx.git(publicFork, 'for-each-ref');
+
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'leaky',
+        '--yes',
+        '--json',
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(parseEnvelope(result.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: { code: 'stage-leak', message: expect.any(String) },
+      });
+      expect(await fx.git(publicFork, 'for-each-ref')).toBe(before);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('stage --yes --json of a commit naming the mirror is a mirror-reference envelope, exit 1, public unchanged', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.git(fx.work, 'checkout', '--quiet', '-b', 'named');
+      await writeFile(path.join(fx.work, 'named.txt'), 'x\n');
+      await fx.git(fx.work, 'add', 'named.txt');
+      await fx.git(
+        fx.work,
+        'commit',
+        '--quiet',
+        '-m',
+        'feat: port the venfork mirror tweak'
+      );
+      const publicFork = fx.publicFork ?? '';
+      const before = await fx.git(publicFork, 'for-each-ref');
+
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'named',
+        '--yes',
+        '--json',
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(parseEnvelope(result.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: { code: 'mirror-reference', message: expect.any(String) },
+      });
+      expect(await fx.git(publicFork, 'for-each-ref')).toBe(before);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('sync --json without a public remote is remote-not-found', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.git(fx.work, 'remote', 'remove', 'public');
+
+      const result = await runCliWithoutTty(fx.work, ['sync', '--json']);
+
+      expect(result.exitCode).toBe(1);
+      expect(parseEnvelope(result.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: {
+          code: 'remote-not-found',
+          message: expect.stringContaining("'public'"),
+        },
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('without gh on PATH, the error says gh is not installed', async () => {
+    const bin = await mkdtemp(path.join(tmp, 'no-gh-'));
+    for (const tool of ['node', 'git']) {
+      await writeFile(
+        path.join(bin, tool),
+        `#!/bin/sh\nexec ${JSON.stringify(Bun.which(tool) ?? tool)} "$@"\n`
+      );
+      await chmod(path.join(bin, tool), 0o755);
+    }
+    const result = await $({
+      cwd: tmp,
+      reject: false,
+      env: { PATH: bin },
+      extendEnv: false,
+    })`${path.join(bin, 'node')} ${entry} pull pr 12 --json`;
+
+    expect(result.exitCode).toBe(1);
+    expect(parseEnvelope(result.stdout)).toEqual({
+      schemaVersion: 1,
+      ok: false,
+      error: {
+        code: 'auth',
+        message: expect.stringContaining('gh) is not installed'),
+      },
+    });
   });
 });
