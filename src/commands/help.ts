@@ -1,5 +1,5 @@
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
-import { stdoutUi } from '../shared/ui.js';
+import { stdoutUi, type Ui } from '../shared/ui.js';
 
 const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   [
@@ -177,19 +177,18 @@ export function commandHelp(
 }
 
 /**
- * Show help information
+ * Show help information on `ui`: stdout when help was asked for, stderr
+ * when it stands in for a usage error.
  */
-export function showHelp(): void {
-  stdoutUi.intro(
-    '🔧 Venfork - Private Repository Mirrors for Vendor Development'
-  );
+export function showHelp(ui: Ui = stdoutUi): void {
+  ui.intro('🔧 Venfork - Private Repository Mirrors for Vendor Development');
 
-  stdoutUi.note(
+  ui.note(
     COMMAND_HELP.map(([, text]) => text).join('\n\n'),
     'Available Commands'
   );
 
-  stdoutUi.note(
+  ui.note(
     `# One-time setup
 venfork setup git@github.com:awesome/project.git
 # or shorthand:
@@ -219,7 +218,7 @@ venfork pull pr 1234
     'Example Workflow'
   );
 
-  stdoutUi.note(
+  ui.note(
     `VENFORK_ORG - Default organization for repo creation
   Priority: --org flag, then VENFORK_ORG, then your personal account (after a prompt)
   Example: export VENFORK_ORG=my-company
@@ -241,5 +240,13 @@ GITHUB_REPOSITORY - Set by GitHub Actions. With --report-issues, sync files the
     'Environment Variables'
   );
 
-  stdoutUi.outro('Built for teams who need private vendor workflows');
+  ui.note(
+    `0    Success, or "no" at a confirm in a terminal
+1    Runtime failure, or doctor found a failing check
+2    Usage error, or missing input or consent with no prompt
+130  Cancelled at a prompt`,
+    'Exit Codes'
+  );
+
+  ui.outro('Built for teams who need private vendor workflows');
 }

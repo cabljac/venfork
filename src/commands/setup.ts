@@ -4,13 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { $ } from 'execa';
 import { createConfigBranch, readVenforkConfigFromRepo } from '../config.js';
-import { CommandExitError, ConfigError } from '../errors.js';
+import { CommandExitError, ConfigError, isEntryReported } from '../errors.js';
 import {
   getGitHubUsername,
   ghGitProtocol,
   ghRepoExists,
   ghRepoIsForkOf,
 } from '../git.js';
+import { checkSetupInputs } from '../setup-args.js';
 import { pathExists } from '../shared/fs.js';
 import { netExec, runNetOp, seedMirrorInChunks } from '../shared/net.js';
 import {
@@ -128,11 +129,7 @@ export async function setupCommand(
   }
 ): Promise<void> {
   const noPublic = options.noPublic === true;
-  if (noPublic && publicForkRepoName?.trim()) {
-    throw new Error(
-      '--no-public cannot be combined with a public fork name: --no-public skips creating a public fork.'
-    );
-  }
+  checkSetupInputs({ upstreamUrl, publicForkRepoName, noPublic });
   p.intro('🔧 Venfork Setup');
 
   // Get configuration from user or use provided arguments
@@ -173,14 +170,6 @@ export async function setupCommand(
     finalUpstreamUrl = normalizeGitHubRepoInput(finalUpstreamUrl);
   }
 
-  if (!parseRepoPath(finalUpstreamUrl)) {
-    p.log.error(
-      'Invalid upstream repository. Pass a GitHub URL or owner/repo.'
-    );
-    p.outro('❌ Setup failed');
-    throw new CommandExitError(1);
-  }
-
   // Prompt for private mirror name only if not provided
   if (!finalPrivateMirrorName) {
     const defaultName = `${parseRepoName(finalUpstreamUrl)}-private`;
@@ -214,13 +203,6 @@ export async function setupCommand(
 
   const upstreamRepoBaseName = parseRepoName(config.upstreamUrl);
   const forkNameFromCli = publicForkRepoName?.trim();
-  if (forkNameFromCli && !/^[a-zA-Z0-9._-]+$/.test(forkNameFromCli)) {
-    p.log.error(
-      'Invalid --fork-name: use only letters, numbers, periods, hyphens, and underscores.'
-    );
-    p.outro('❌ Setup failed');
-    throw new CommandExitError(1);
-  }
   const resolvedPublicForkName = forkNameFromCli || upstreamRepoBaseName;
   const useForkNameFlag = resolvedPublicForkName !== upstreamRepoBaseName;
 
@@ -532,7 +514,7 @@ Upstream: ${config.upstreamUrl} (read-only)`,
   try {
     await Promise.race([interrupted, steps()]);
   } catch (error) {
-    if (error instanceof CommandExitError) throw error;
+    if (isEntryReported(error)) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Setup failed');

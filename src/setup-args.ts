@@ -1,3 +1,4 @@
+import { UsageError } from './errors.js';
 import {
   consumeValue,
   parsePromptFlags,
@@ -5,6 +6,7 @@ import {
   unexpectedArgument,
 } from './shared/args.js';
 import type { PromptContext } from './shared/prompt.js';
+import { normalizeGitHubRepoInput, parseRepoPath } from './utils.js';
 
 export type ParsedSetupArgs = {
   upstreamUrl?: string;
@@ -51,11 +53,11 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
   if (positional.length > 2) throw unexpectedArgument(positional[2], USAGE);
 
   const trimmedForkName = publicForkRepoName?.trim() || undefined;
-  if (noPublic && trimmedForkName) {
-    throw new Error(
-      '--no-public cannot be combined with --fork-name: --no-public skips creating a public fork entirely.'
-    );
-  }
+  checkSetupInputs({
+    upstreamUrl: positional[0],
+    publicForkRepoName: trimmedForkName,
+    noPublic,
+  });
 
   return {
     upstreamUrl: positional[0],
@@ -68,4 +70,35 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
     noPublic,
     prompt: promptFlags.prompt,
   };
+}
+
+/**
+ * Throws {@link UsageError} when the setup inputs are not valid in form: a
+ * malformed `<upstream>` or `--fork-name`, or `--fork-name` with
+ * `--no-public`.
+ */
+export function checkSetupInputs(inputs: {
+  upstreamUrl?: string;
+  publicForkRepoName?: string;
+  noPublic?: boolean;
+}): void {
+  const forkName = inputs.publicForkRepoName?.trim();
+  if (inputs.noPublic && forkName) {
+    throw new UsageError(
+      '--no-public cannot be combined with --fork-name: --no-public skips creating a public fork entirely.'
+    );
+  }
+  if (
+    inputs.upstreamUrl &&
+    !parseRepoPath(normalizeGitHubRepoInput(inputs.upstreamUrl))
+  ) {
+    throw new UsageError(
+      'Invalid upstream repository. Pass a GitHub URL or owner/repo.'
+    );
+  }
+  if (forkName && !/^[a-zA-Z0-9._-]+$/.test(forkName)) {
+    throw new UsageError(
+      'Invalid --fork-name: use only letters, numbers, periods, hyphens, and underscores.'
+    );
+  }
 }

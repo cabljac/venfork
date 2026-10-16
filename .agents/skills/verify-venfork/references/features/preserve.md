@@ -17,7 +17,7 @@ tests:
 - `add <path>...` normalizes each path, then checks it is a file (regular, executable or symlink) on `origin/<default>`. It writes only the config. The next `sync` puts the file into the managed commit.
 - `remove <path>...` and `clear` drop entries. When origin's tip managed commit carries a dropped file, origin is re-stamped in the same step. When user commits sit on top of that managed commit, only the config is written and a warning says sync drops the file later.
 - `add`, and a `remove`/`clear` with no re-stamp, write the config as a delta with a leased push and up to 3 attempts (2 retries), so two crossing adds keep both entries. A `remove`/`clear` that re-stamps origin writes the config once with a lease and no retry.
-- Errors: "Invalid preserve path" (leading `/` or `-`, `..`, `.`, backslash, whitespace, glob `* ? [ ]`, the sync workflow, `.venfork/`), "Cannot preserve '<p>': it does not exist on origin/main", "it is a directory", "Not in the preserve list" (remove of an unknown entry; nothing is written), `SyncDivergenceError` and `GitError` from the re-stamp.
+- Usage errors (exit 2): "Invalid preserve path" (leading `/` or `-`, `..`, `.`, backslash, whitespace, glob `* ? [ ]`, the sync workflow, `.venfork/`), an unknown action, `add`/`remove` with no path. Runtime errors (exit 1): "Cannot preserve '<p>': it does not exist on origin/main", "it is a directory", "Not in the preserve list" (remove of an unknown entry; nothing is written), `SyncDivergenceError` and `GitError` from the re-stamp.
 - Sync rules that preserve sets up: upstream wins when it adds the same path; an entry that is a directory or glob makes sync and stage refuse (`ConfigError`).
 
 ## How a user reaches it

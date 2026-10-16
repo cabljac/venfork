@@ -17,13 +17,14 @@ import {
 } from './commands.js';
 import { requiresGhAuth, setupSyncMirror } from './dispatch.js';
 import { parseDoctorCliArgs } from './doctor-args.js';
-import { CommandExitError, MissingInputError } from './errors.js';
+import { CommandExitError, MissingInputError, UsageError } from './errors.js';
 import { ensureGhAuth } from './git.js';
 import { parsePreserveCliArgs } from './preserve-args.js';
 import { parsePullCliArgs } from './pull-args.js';
 import { parseScheduleCliArgs } from './schedule-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
 import { closedOutputExitCode } from './shared/closed-output.js';
+import { stderrUi } from './shared/ui.js';
 import { parseStageCliArgs } from './stage-args.js';
 import { parseSyncCliArgs } from './sync-args.js';
 import { VENFORK_VERSION } from './version.js';
@@ -38,18 +39,119 @@ const RENAMED: Record<string, string> = {
 };
 
 /**
+ * Parses `args` for `command` and returns the call that runs it. Throws
+ * {@link UsageError} before anything runs, so a usage error never waits on
+ * gh auth.
+ */
+function parseCommand(command: string, args: string[]): () => Promise<void> {
+  switch (command) {
+    case 'setup': {
+      const parsed = parseSetupCliArgs(args);
+      return () =>
+        setupCommand(
+          parsed.upstreamUrl,
+          parsed.privateMirrorName,
+          parsed.organization,
+          parsed.publicForkRepoName,
+          {
+            noPublic: parsed.noPublic,
+            syncMirror: setupSyncMirror(),
+            prompt: parsed.prompt,
+            organizationFromEnv: parsed.organizationFromEnv,
+          }
+        );
+    }
+    case 'clone': {
+      const parsed = parseCloneCliArgs(args);
+      return () =>
+        cloneCommand(parsed.vendorRepoUrl, {
+          noPublic: parsed.noPublic,
+          upstreamUrl: parsed.upstreamUrl,
+          publicForkUrl: parsed.publicForkUrl,
+          prompt: parsed.prompt,
+        });
+    }
+    case 'sync': {
+      const parsed = parseSyncCliArgs(args);
+      return () =>
+        syncCommand(parsed.branch, { reportIssues: parsed.reportIssues });
+    }
+    case 'schedule': {
+      const parsed = parseScheduleCliArgs(args);
+      return () =>
+        scheduleCommand(parsed.action, parsed.cron, { auth: parsed.auth });
+    }
+    case 'stage': {
+      const parsed = parseStageCliArgs(args);
+      if (parsed.kind === 'issue') {
+        return () =>
+          issueCommand('stage', parsed.ref, {
+            title: parsed.title,
+            prompt: parsed.prompt,
+          });
+      }
+      return () =>
+        stageCommand(parsed.branch, {
+          createPr: parsed.createPr,
+          draft: parsed.draft,
+          title: parsed.title,
+          base: parsed.base,
+          internalPrNumber: parsed.internalPrNumber,
+          noUpdateExisting: parsed.noUpdateExisting,
+          prompt: parsed.prompt,
+        });
+    }
+    case 'doctor': {
+      const parsed = parseDoctorCliArgs(args);
+      return async () => {
+        if (!(await doctorCommand({ json: parsed.json }))) {
+          process.exitCode = 1;
+        }
+      };
+    }
+    case 'workflows': {
+      const parsed = parseWorkflowsCliArgs(args);
+      return () => workflowsCommand(parsed.action, parsed.workflows);
+    }
+    case 'preserve': {
+      const parsed = parsePreserveCliArgs(args);
+      return () => preserveCommand(parsed.action, parsed.paths);
+    }
+    case 'pull': {
+      const parsed = parsePullCliArgs(args);
+      if (parsed.kind === 'pr') {
+        return () =>
+          pullRequestCommand(parsed.ref, {
+            branchName: parsed.branchName,
+            push: parsed.push,
+          });
+      }
+      return () =>
+        issueCommand('pull', parsed.ref, {
+          title: parsed.title,
+          prompt: parsed.prompt,
+        });
+    }
+    default:
+      throw new UsageError(
+        RENAMED[command] ?? `Unknown command: ${command}. Run \`venfork help\`.`
+      );
+  }
+}
+
+/**
  * Main CLI entry point
  */
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0];
 
-  if (
-    !command ||
-    command === 'help' ||
-    command === '--help' ||
-    command === '-h'
-  ) {
+  if (!command) {
+    showHelp(stderrUi);
+    throw new CommandExitError(2);
+  }
+
+  if (command === 'help' || command === '--help' || command === '-h') {
     const [target, ...targetRest] = args.slice(1);
     const usage = target ? commandHelp(target, targetRest) : null;
     if (usage) {
@@ -65,113 +167,18 @@ async function main(): Promise<void> {
     return;
   }
 
-  const usage = commandHelp(command, args.slice(1));
-  if (usage && args.slice(1).some((arg) => arg === '-h' || arg === '--help')) {
+  const rest = args.slice(1);
+  const usage = commandHelp(command, rest);
+  if (usage && rest.some((arg) => arg === '-h' || arg === '--help')) {
     console.log(usage);
     return;
   }
 
-  if (requiresGhAuth(command, args.slice(1))) {
+  const run = parseCommand(command, rest);
+  if (requiresGhAuth(command, rest)) {
     await ensureGhAuth();
   }
-
-  switch (command) {
-    case 'setup': {
-      const parsed = parseSetupCliArgs(args.slice(1));
-      await setupCommand(
-        parsed.upstreamUrl,
-        parsed.privateMirrorName,
-        parsed.organization,
-        parsed.publicForkRepoName,
-        {
-          noPublic: parsed.noPublic,
-          syncMirror: setupSyncMirror(),
-          prompt: parsed.prompt,
-          organizationFromEnv: parsed.organizationFromEnv,
-        }
-      );
-      break;
-    }
-    case 'clone': {
-      const parsed = parseCloneCliArgs(args.slice(1));
-      await cloneCommand(parsed.vendorRepoUrl, {
-        noPublic: parsed.noPublic,
-        upstreamUrl: parsed.upstreamUrl,
-        publicForkUrl: parsed.publicForkUrl,
-        prompt: parsed.prompt,
-      });
-      break;
-    }
-    case 'sync': {
-      const parsed = parseSyncCliArgs(args.slice(1));
-      await syncCommand(parsed.branch, { reportIssues: parsed.reportIssues });
-      break;
-    }
-    case 'schedule': {
-      const parsed = parseScheduleCliArgs(args.slice(1));
-      await scheduleCommand(parsed.action, parsed.cron, { auth: parsed.auth });
-      break;
-    }
-    case 'stage': {
-      const parsed = parseStageCliArgs(args.slice(1));
-      if (parsed.kind === 'issue') {
-        await issueCommand('stage', parsed.ref, {
-          title: parsed.title,
-          prompt: parsed.prompt,
-        });
-        break;
-      }
-      await stageCommand(parsed.branch, {
-        createPr: parsed.createPr,
-        draft: parsed.draft,
-        title: parsed.title,
-        base: parsed.base,
-        internalPrNumber: parsed.internalPrNumber,
-        noUpdateExisting: parsed.noUpdateExisting,
-        prompt: parsed.prompt,
-      });
-      break;
-    }
-    case 'doctor': {
-      const parsed = parseDoctorCliArgs(args.slice(1));
-      if (!(await doctorCommand({ json: parsed.json }))) {
-        process.exitCode = 1;
-      }
-      break;
-    }
-    case 'workflows': {
-      const parsed = parseWorkflowsCliArgs(args.slice(1));
-      await workflowsCommand(parsed.action, parsed.workflows);
-      break;
-    }
-    case 'preserve': {
-      const parsed = parsePreserveCliArgs(args.slice(1));
-      await preserveCommand(parsed.action, parsed.paths);
-      break;
-    }
-    case 'pull': {
-      const parsed = parsePullCliArgs(args.slice(1));
-      if (parsed.kind === 'pr') {
-        await pullRequestCommand(parsed.ref, {
-          branchName: parsed.branchName,
-          push: parsed.push,
-        });
-      } else {
-        await issueCommand('pull', parsed.ref, {
-          title: parsed.title,
-          prompt: parsed.prompt,
-        });
-      }
-      break;
-    }
-    default: {
-      const renamed = RENAMED[command];
-      console.error(
-        renamed ?? `Unknown command: ${command}. Run \`venfork help\`.`
-      );
-      process.exit(1);
-    }
-  }
+  await run();
 }
 
 // A clack prompt whose stdin hits EOF never resolves; the loop then drains
@@ -198,7 +205,7 @@ main()
   })
   .catch((error) => {
     if (error instanceof CommandExitError) process.exit(error.exitCode);
-    if (error instanceof MissingInputError) {
+    if (error instanceof UsageError || error instanceof MissingInputError) {
       console.error(`Error: ${error.message}`);
       process.exit(2);
     }

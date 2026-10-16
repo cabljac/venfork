@@ -19,7 +19,7 @@ tests:
 - `pull issue <upstream-#>`: reads the upstream issue and its comments, builds `[upstream #N] <title>` and a body with an "Upstream comments" section, confirm, `gh issue create` on the mirror, write `pulledIssues[<new internal-#>]`.
 - `--yes` answers both confirms. Without a TTY on stdin, with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`, a confirm without `--yes` exits 2 naming `--yes` (`MissingInputError`) before it reads the issue, and opens nothing. At a TTY a "no" exits 0; a cancel or EOF exits 130.
 - One-shot: no later comment or state sync. A failed config write only warns.
-- `stage issue` with a branch-only flag (`--pr`, `--draft`, `--base`, `--internal-pr`, `--no-update-existing`) is a parser error. Bare `stage issue` points at `venfork stage branch issue`. The old `venfork issue ...` exits 1 and names both new forms.
+- `stage issue` with a branch-only flag (`--pr`, `--draft`, `--base`, `--internal-pr`, `--no-update-existing`) is a usage error (exit 2). Bare `stage issue` points at `venfork stage branch issue` (exit 2). A malformed `<number-or-url>` exits 2; a URL to another repo exits 1. The old `venfork issue ...` exits 2 and names both new forms.
 
 ## How a user reaches it
 
@@ -34,7 +34,7 @@ venfork stage issue 1 </dev/null 2>&1 | grep -o "Could not parse upstream remote
 venfork pull issue 1 </dev/null 2>&1 | grep -o "Could not parse upstream remote URL"    # exit 1
 venfork stage issue </dev/null 2>&1                                                    # names `venfork stage branch issue`
 venfork stage issue 1 --pr </dev/null 2>&1                                             # "--pr only applies to stage branch"
-venfork issue stage 1 </dev/null 2>&1                                                  # rename hint, exit 1
+venfork issue stage 1 </dev/null 2>&1                                                  # rename hint, exit 2
 ```
 
 - Redaction without GitHub: `(cd "$(dirname "$VF_CLI")/.." && bun -e "import { stripInternalBlocks } from './src/shared/redaction.ts'; console.log(stripInternalBlocks('pub <!-- venfork:internal -->secret<!-- /venfork:internal --> end'))")` prints `pub  end`. A body with `<!-- venfork:intenral -->` throws `RedactionError`.

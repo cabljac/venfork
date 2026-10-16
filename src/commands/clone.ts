@@ -1,13 +1,13 @@
 import { rm } from 'node:fs/promises';
 import { $ } from 'execa';
+import { checkCloneInputs, githubRepoInput } from '../clone-args.js';
 import { fetchVenforkConfig } from '../config.js';
-import { CommandExitError, MissingInputError } from '../errors.js';
+import { CommandExitError, isEntryReported } from '../errors.js';
 import { ghGitProtocol } from '../git.js';
 import { isCancel, type PromptContext, promptText } from '../shared/prompt.js';
 import * as p from '../shared/ui.js';
 import {
   githubUrlForProtocol,
-  normalizeGitHubRepoInput,
   parseOwner,
   parseRepoName,
   parseRepoPath,
@@ -33,22 +33,20 @@ function sameRepo(a: string, b: string): boolean {
   return a.trim() === b.trim();
 }
 
-/** Canonical URL of a GitHub public fork given as a URL or owner/repo, or ''. */
-function publicForkInput(value: string): string {
-  const url = normalizeGitHubRepoInput(value);
-  return parseRepoPath(url) ? url : '';
-}
-
 function validatePublicFork(value: string): string | undefined {
   if (!value.trim()) return 'Public fork URL is required';
-  if (!publicForkInput(value)) {
+  if (!githubRepoInput(value)) {
     return 'Use a GitHub URL or owner/repo (e.g. acme/project)';
   }
   return undefined;
 }
 
 function validateUpstream(value: string): string | undefined {
-  return value.trim() ? undefined : 'Upstream URL is required';
+  if (!value.trim()) return 'Upstream URL is required';
+  if (!githubRepoInput(value)) {
+    return 'Use a GitHub URL or owner/repo (e.g. client/project)';
+  }
+  return undefined;
 }
 
 /**
@@ -70,39 +68,16 @@ export async function cloneCommand(
     prompt?: PromptContext;
   } = {}
 ): Promise<void> {
+  const {
+    vendorCloneUrl,
+    upstreamUrl: upstreamFlag,
+    publicForkUrl: publicForkFlag,
+  } = checkCloneInputs({
+    vendorRepoUrl,
+    ...options,
+  });
+
   p.intro('🔧 Venfork Clone');
-
-  // Validate vendor repo URL provided
-  if (!vendorRepoUrl?.trim()) {
-    p.log.error('Vendor repository URL is required');
-    p.outro('❌ Clone failed');
-    throw new CommandExitError(1);
-  }
-
-  const vendorCloneUrl = normalizeGitHubRepoInput(vendorRepoUrl);
-  if (!parseRepoPath(vendorCloneUrl)) {
-    p.log.error(
-      'Invalid vendor repository. Use a GitHub URL or owner/repo (e.g. invertase/project-private).'
-    );
-    p.outro('❌ Clone failed');
-    throw new CommandExitError(1);
-  }
-
-  if (options.noPublic && options.publicForkUrl) {
-    throw new Error(
-      '--public-fork cannot be combined with --no-public: --no-public means the mirror has no public fork.'
-    );
-  }
-  const publicForkFlag = options.publicForkUrl
-    ? publicForkInput(options.publicForkUrl)
-    : undefined;
-  if (publicForkFlag === '') {
-    p.log.error(
-      'Invalid --public-fork. Use a GitHub URL or owner/repo (e.g. acme/project).'
-    );
-    p.outro('❌ Clone failed');
-    throw new CommandExitError(1);
-  }
 
   const s = p.spinner();
   let clonedDir: string | undefined;
@@ -164,10 +139,7 @@ export async function cloneCommand(
           `Refusing to override venfork-config: --public-fork='${options.publicForkUrl}' but config records publicForkUrl='${config.publicForkUrl ?? '(missing)'}'.`
         );
       }
-      if (
-        options.upstreamUrl &&
-        !sameRepo(options.upstreamUrl, config.upstreamUrl)
-      ) {
+      if (upstreamFlag && !sameRepo(upstreamFlag, config.upstreamUrl)) {
         throw new Error(
           `Refusing to override venfork-config: --upstream='${options.upstreamUrl}' but config records upstreamUrl='${config.upstreamUrl}'.`
         );
@@ -207,8 +179,8 @@ export async function cloneCommand(
       if (noPublic) {
         // No public fork to look up; only resolve upstream.
         publicForkUrl = undefined;
-        if (options.upstreamUrl) {
-          upstreamUrl = options.upstreamUrl;
+        if (upstreamFlag) {
+          upstreamUrl = upstreamFlag;
         } else {
           const response = await promptText(
             {
@@ -224,7 +196,7 @@ export async function cloneCommand(
             p.outro('❌ Clone cancelled');
             throw new CommandExitError(130);
           }
-          upstreamUrl = response.trim();
+          upstreamUrl = githubRepoInput(response);
         }
       } else {
         if (publicForkFlag) {
@@ -243,8 +215,8 @@ export async function cloneCommand(
         // Upstream is the public fork's parent unless --upstream names it.
         s.start('Detecting upstream repository');
 
-        if (options.upstreamUrl) {
-          upstreamUrl = options.upstreamUrl;
+        if (upstreamFlag) {
+          upstreamUrl = upstreamFlag;
           s.stop(`Using --upstream: ${parseRepoPath(upstreamUrl)}`);
         } else {
           try {
@@ -278,7 +250,7 @@ export async function cloneCommand(
               throw new CommandExitError(130);
             }
 
-            upstreamUrl = response.trim();
+            upstreamUrl = githubRepoInput(response);
           }
         }
       }
@@ -331,8 +303,7 @@ export async function cloneCommand(
     );
   } catch (error) {
     if (clonedDir) await removePartialClone(clonedDir);
-    if (error instanceof CommandExitError) throw error;
-    if (error instanceof MissingInputError) throw error;
+    if (isEntryReported(error)) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Clone failed');
@@ -381,5 +352,5 @@ async function detectPublicFork(
     p.outro('❌ Clone cancelled');
     throw new CommandExitError(130);
   }
-  return publicForkInput(response);
+  return githubRepoInput(response);
 }

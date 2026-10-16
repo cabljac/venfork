@@ -1,6 +1,8 @@
+import { UsageError } from './errors.js';
 import {
   consumeValue,
   NO_INPUT_FLAG,
+  parseGitHubRef,
   parsePromptFlags,
   scanArgs,
   unexpectedArgument,
@@ -30,9 +32,11 @@ export type ParsedPullIssueArgs = {
 export type ParsedPullArgs = ParsedPullPrArgs | ParsedPullIssueArgs;
 
 const PULL_USAGE = 'venfork pull <pr|issue> <number-or-url>';
-const PR_USAGE =
+/** Usage line for `venfork pull pr`. */
+export const PULL_PR_USAGE =
   'venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push]';
-const ISSUE_USAGE =
+/** Usage line for `venfork pull issue`. */
+export const PULL_ISSUE_USAGE =
   'venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input]';
 
 /**
@@ -50,9 +54,9 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
   const promptFlags = parsePromptFlags({ allowYes: true });
 
   const targetUsage = args.includes('pr')
-    ? PR_USAGE
+    ? PULL_PR_USAGE
     : args.includes('issue')
-      ? ISSUE_USAGE
+      ? PULL_ISSUE_USAGE
       : PULL_USAGE;
   const [sub, ...rest] = scanArgs(args, targetUsage, (a, i) => {
     if (promptFlags.onOption(a) !== undefined) {
@@ -80,24 +84,30 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
 
   if (sub === 'pr') {
     const stray = titleFlag ?? promptFlag;
-    if (stray) throw unknownOption(stray, PR_USAGE);
-    if (rest.length > 1) throw unexpectedArgument(rest[1], PR_USAGE);
+    if (stray) throw unknownOption(stray, PULL_PR_USAGE);
+    if (rest.length > 1) throw unexpectedArgument(rest[1], PULL_PR_USAGE);
     if (rest.length === 0) {
-      throw new Error(`Missing PR number or URL. Usage: ${PR_USAGE}`);
+      throw new UsageError(`Missing PR number or URL. Usage: ${PULL_PR_USAGE}`);
     }
+    parseGitHubRef(rest[0], 'pull');
     return { kind: 'pr', ref: rest[0], branchName, push: noPush === undefined };
   }
   if (sub === 'issue') {
     const stray = noPush ?? branchNameFlag;
-    if (stray) throw unknownOption(stray, ISSUE_USAGE);
-    if (rest.length > 1) throw unexpectedArgument(rest[1], ISSUE_USAGE);
+    if (stray) throw unknownOption(stray, PULL_ISSUE_USAGE);
+    if (rest.length > 1) throw unexpectedArgument(rest[1], PULL_ISSUE_USAGE);
     if (rest.length === 0) {
-      throw new Error(`Missing issue number or URL. Usage: ${ISSUE_USAGE}`);
+      throw new UsageError(
+        `Missing issue number or URL. Usage: ${PULL_ISSUE_USAGE}`
+      );
     }
+    parseGitHubRef(rest[0], 'issues');
     return { kind: 'issue', ref: rest[0], title, prompt: promptFlags.prompt };
   }
   if (sub === undefined) {
-    throw new Error(`Missing pull target. Usage: ${PULL_USAGE}`);
+    throw new UsageError(`Missing pull target. Usage: ${PULL_USAGE}`);
   }
-  throw new Error(`Unknown pull target: ${sub}. Expected one of: pr, issue.`);
+  throw new UsageError(
+    `Unknown pull target: ${sub}. Expected one of: pr, issue.`
+  );
 }

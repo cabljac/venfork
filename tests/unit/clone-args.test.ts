@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseCloneCliArgs } from '../../src/clone-args.js';
+import { checkCloneInputs, parseCloneCliArgs } from '../../src/clone-args.js';
 
 describe('parseCloneCliArgs', () => {
   test('parses bare positional vendor URL', () => {
@@ -171,5 +171,20 @@ describe('parseCloneCliArgs --public-fork', () => {
     expect(() => parseCloneCliArgs(['a/b', '--public-fork='])).toThrow(
       '--public-fork requires a value'
     );
+  });
+});
+
+describe('parseCloneCliArgs --upstream form', () => {
+  test('rejects a value that is not a GitHub URL or owner/repo', () => {
+    expect(() =>
+      parseCloneCliArgs(['a/b-private', '--upstream', 'notaurl'])
+    ).toThrow('Invalid --upstream');
+  });
+
+  test('checkCloneInputs returns the canonical upstream URL for owner/repo', () => {
+    expect(
+      checkCloneInputs({ vendorRepoUrl: 'a/b-private', upstreamUrl: 'up/b' })
+        .upstreamUrl
+    ).toBe('git@github.com:up/b.git');
   });
 });

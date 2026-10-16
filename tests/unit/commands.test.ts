@@ -316,6 +316,7 @@ import {
   CommandExitError,
   MissingInputError,
   SyncDivergenceError,
+  UsageError,
 } from '../../src/errors.js';
 
 /** Calls setupCommand with the quiet sync that src/index.ts wires in, unless a test passes its own. */
@@ -1504,8 +1505,10 @@ describe('stageCommand', () => {
     expect(true).toBe(true);
   });
 
-  test('requires branch parameter', async () => {
-    await expect(stageCommand('')).rejects.toThrow(new CommandExitError(1));
+  test('a missing branch is a usage error', async () => {
+    const error = stageCommand('');
+    await expect(error).rejects.toBeInstanceOf(UsageError);
+    await expect(error).rejects.toThrow('Missing branch name. Usage:');
   });
 
   test('omits workflow commits from public staging history', async () => {
@@ -3668,8 +3671,10 @@ describe('cloneCommand remote transport', () => {
 });
 
 describe('cloneCommand - error paths', () => {
-  test('requires vendor repo URL', async () => {
-    await expect(cloneCommand()).rejects.toThrow(new CommandExitError(1));
+  test('a missing vendor repo is a usage error', async () => {
+    const error = cloneCommand();
+    await expect(error).rejects.toBeInstanceOf(UsageError);
+    await expect(error).rejects.toThrow('Missing vendor repository. Usage:');
   });
 
   test('stops before cloning when the target directory already exists', async () => {
@@ -3776,14 +3781,13 @@ describe('cloneCommand --public-fork and legacy prompts', () => {
     ]);
   });
 
-  test('an invalid --public-fork exits 1 before cloning', async () => {
-    await expect(
-      cloneCommand('acme/project-private', { publicForkUrl: 'not a repo' })
-    ).rejects.toThrow(new CommandExitError(1));
-
-    expect(clack.log.error).toHaveBeenCalledWith(
-      'Invalid --public-fork. Use a GitHub URL or owner/repo (e.g. acme/project).',
-      ON_STDERR
+  test('an invalid --public-fork is a usage error before cloning', async () => {
+    const error = cloneCommand('acme/project-private', {
+      publicForkUrl: 'not a repo',
+    });
+    await expect(error).rejects.toBeInstanceOf(UsageError);
+    await expect(error).rejects.toThrow(
+      'Invalid --public-fork. Use a GitHub URL or owner/repo (e.g. acme/project).'
     );
     expect(execaCalls.some((cmd) => cmd.includes('gh repo clone'))).toBe(false);
   });
@@ -4627,15 +4631,15 @@ describe('pullRequestCommand', () => {
     ).toBe(false);
   });
 
-  test('rejects malformed PR ref', async () => {
+  test('a malformed PR ref is a usage error', async () => {
     mockResponses.set('git remote get-url upstream', {
       exitCode: 0,
       stdout: 'git@github.com:up/repo.git',
       stderr: '',
     });
-    await expect(pullRequestCommand('not-a-pr-ref')).rejects.toThrow(
-      new CommandExitError(1)
-    );
+    const error = pullRequestCommand('not-a-pr-ref');
+    await expect(error).rejects.toBeInstanceOf(UsageError);
+    await expect(error).rejects.toThrow('Could not parse PR reference');
   });
 });
 
@@ -5084,19 +5088,21 @@ describe('issueCommand', () => {
     expect(out).toContain('**(unknown)**:');
   });
 
-  test('rejects unknown action', async () => {
+  test('an unknown action is a usage error', async () => {
     setupCommonRemotes();
     await expect(
       // biome-ignore lint/suspicious/noExplicitAny: testing invalid runtime input
       issueCommand('burn' as any, '7')
-    ).rejects.toThrow(new CommandExitError(1));
+    ).rejects.toThrow(
+      new UsageError("Unknown action 'burn'. Expected one of: stage, pull.")
+    );
   });
 
-  test('rejects missing target', async () => {
+  test('a missing target is a usage error', async () => {
     setupCommonRemotes();
-    await expect(issueCommand('stage', undefined)).rejects.toThrow(
-      new CommandExitError(1)
-    );
+    const error = issueCommand('stage', undefined);
+    await expect(error).rejects.toBeInstanceOf(UsageError);
+    await expect(error).rejects.toThrow('Missing issue number or URL. Usage:');
   });
 
   test('accepts URL form for stage', async () => {
@@ -5238,7 +5244,7 @@ describe('no-public mode', () => {
           'forked-name',
           { noPublic: true }
         )
-      ).rejects.toThrow(/no-public.*public fork name/i);
+      ).rejects.toThrow(/no-public.*cannot be combined.*fork-name/i);
     });
 
     test('removes a stale `public` remote when re-running in no-public mode', async () => {

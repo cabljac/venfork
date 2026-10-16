@@ -141,7 +141,8 @@ export function createUi(stream: () => UiStream): Ui {
   };
 }
 
-const stderrUi = createUi(() => process.stderr);
+/** Ui helpers on stderr, for human output (the default). */
+export const stderrUi: Ui = createUi(() => process.stderr);
 
 /** Human output on stderr: progress, warnings, errors and reports. */
 export const { log, note, intro, outro, cancel, spinner } = stderrUi;

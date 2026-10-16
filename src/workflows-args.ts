@@ -1,3 +1,4 @@
+import { UsageError } from './errors.js';
 import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
 
 /** A `venfork workflows` action. */
@@ -50,12 +51,12 @@ export function parseWorkflowsCliArgs(
         .filter((v) => v.length > 0)
     );
     if (values.length === 0) {
-      throw new Error(
+      throw new UsageError(
         `Usage: venfork workflows ${action} <workflow-file> [more-workflow-files]`
       );
     }
     return { action, workflows: values };
   }
 
-  throw new Error(`Usage: ${USAGE}`);
+  throw new UsageError(`Usage: ${USAGE}`);
 }

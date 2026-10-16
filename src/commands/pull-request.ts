@@ -1,7 +1,13 @@
 import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
-import { CommandExitError, RemoteNotFoundError } from '../errors.js';
-import { parsePositiveInt } from '../shared/args.js';
+import {
+  CommandExitError,
+  isEntryReported,
+  RemoteNotFoundError,
+  UsageError,
+} from '../errors.js';
+import { PULL_PR_USAGE } from '../pull-args.js';
+import { parseGitHubRef } from '../shared/args.js';
 import { netExec, netFailureReason } from '../shared/net.js';
 import * as p from '../shared/ui.js';
 import { parseRepoPath } from '../utils.js';
@@ -15,36 +21,20 @@ export interface PullRequestOptions {
 
 /**
  * Resolves a `<pr>` argument (bare number or PR URL) to a numeric PR id.
- * For URL form, also returns the parsed owner/repo so the caller can sanity
- * check it matches the upstream remote.
+ * A URL must point at `upstreamRepoPath`.
  */
-/** Resolve a number or same-repo URL to a positive number; throws on anything else. */
 export function resolvePullRequestArg(
   pr: string,
   upstreamRepoPath: string
 ): { number: number; sourceRepoPath?: string } {
-  const trimmed = pr.trim();
-  const bare = parsePositiveInt(trimmed);
-  if (bare !== null) {
-    return { number: bare };
-  }
-  const match = trimmed.match(
-    /^(?:https?:\/\/(?:www\.)?|git@)github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?\/pull\/(\d+)(?=[/?#]|$)/i
-  );
-  const number = match ? parsePositiveInt(match[2]) : null;
-  if (!match || number === null) {
+  const { number, repoPath } = parseGitHubRef(pr, 'pull');
+  if (repoPath === undefined) return { number };
+  if (repoPath.toLowerCase() !== upstreamRepoPath.toLowerCase()) {
     throw new Error(
-      `Could not parse PR reference: ${pr}. Expected a positive integer or a github.com/<owner>/<repo>/pull/<n> URL.`
+      `Refused to use PR URL ${pr}: it points to ${repoPath}, but the upstream remote is ${upstreamRepoPath}. If this is intentional, pass the PR number directly (\`venfork pull pr ${number}\`).`
     );
   }
-  const sourceRepoPath = match[1];
-  const num = match[2];
-  if (sourceRepoPath.toLowerCase() !== upstreamRepoPath.toLowerCase()) {
-    throw new Error(
-      `Refused to use PR URL ${pr}: it points to ${sourceRepoPath}, but the upstream remote is ${upstreamRepoPath}. If this is intentional, pass the PR number directly (\`venfork pull pr ${num}\`).`
-    );
-  }
-  return { number, sourceRepoPath };
+  return { number, sourceRepoPath: repoPath };
 }
 
 interface UpstreamPrMeta {
@@ -89,15 +79,11 @@ export async function pullRequestCommand(
   pr: string | undefined,
   options: PullRequestOptions = {}
 ): Promise<void> {
-  p.intro('🔀 Venfork Pull Request');
-
   if (!pr) {
-    p.log.error('PR number or URL is required');
-    p.outro(
-      'Usage: venfork pull pr <pr-number-or-url> [--branch-name <override>] [--no-push]'
-    );
-    throw new CommandExitError(1);
+    throw new UsageError(`Missing PR number or URL. Usage: ${PULL_PR_USAGE}`);
   }
+
+  p.intro('🔀 Venfork Pull Request');
 
   const s = p.spinner();
   const repoDir = process.cwd();
@@ -242,7 +228,7 @@ export async function pullRequestCommand(
 
     p.outro('✨ Pull request imported!');
   } catch (error) {
-    if (error instanceof CommandExitError) throw error;
+    if (isEntryReported(error)) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Pull request import failed');

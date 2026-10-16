@@ -617,7 +617,7 @@ describe('per-command help', () => {
   test('errors go to stderr, not stdout', async () => {
     const result = await runCli('sync', '--bogus');
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain("Unknown option '--bogus'");
     expect(result.stdout).not.toContain('--bogus');
   });
@@ -625,7 +625,7 @@ describe('per-command help', () => {
   test('an unknown command is reported on stderr', async () => {
     const result = await runCli('frobnicate');
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain('Unknown command: frobnicate');
   });
 
@@ -653,7 +653,7 @@ describe('per-command help', () => {
     test(`renamed command ${args.join(' ')} names its replacement on stderr`, async () => {
       const result = await runCli(...args);
 
-      expect(result.exitCode).toBe(1);
+      expect(result.exitCode).toBe(2);
       for (const hint of hints) expect(result.stderr).toContain(hint);
       expect(result.stderr).not.toContain('Unknown command');
       expect(result.stdout).toBe('');
@@ -679,7 +679,7 @@ describe('per-command help', () => {
   test('bare `stage issue` without a ref points at `stage branch issue`', async () => {
     const result = await runCli('stage', 'issue');
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain('venfork stage branch issue');
   });
 });
@@ -702,11 +702,76 @@ describe('usage errors', () => {
     test(`${args.join(' ')} reports usage on stderr only`, async () => {
       const result = await runCli(...args);
 
-      expect(result.exitCode).toBe(1);
+      expect(result.exitCode).toBe(2);
       expect(result.stdout).toBe('');
       expect(result.stderr).toContain(usage);
     });
   }
+});
+
+describe('usage errors exit 2 with the error on stderr', () => {
+  for (const [args, message] of [
+    [['frobnicate'], 'Unknown command: frobnicate'],
+    [['setup', 'a/b', '--bogus'], "Unknown option '--bogus'"],
+    [['setup', 'a/b', 'c', 'd'], "Unexpected argument 'd'"],
+    [['setup', 'a/b', '--org'], '--org requires a value'],
+    [['setup', 'a/b', '--no-public', '--fork-name', 'x'], 'cannot be combined'],
+    [['setup', 'not a repo'], 'Invalid upstream repository'],
+    [['setup', 'a/b', '--fork-name', 'bad name'], 'Invalid --fork-name'],
+    [['clone'], 'Missing vendor repository'],
+    [['clone', 'not a repo'], 'Invalid vendor repository'],
+    [
+      ['clone', 'a/b-private', '--no-public', '--public-fork', 'a/b'],
+      '--public-fork cannot be combined with --no-public',
+    ],
+    [['clone', 'a/b-private', '--public-fork', 'x y'], 'Invalid --public-fork'],
+    [['sync', 'a', 'b'], 'Usage: venfork sync'],
+    [['schedule', 'set', 'not a cron'], "Invalid cron expression 'not a cron'"],
+    [['schedule', 'status', '--app'], "--app applies only to 'schedule set'"],
+    [['stage', 'feat', '--internal-pr', 'x'], '--internal-pr requires'],
+    [['stage', 'issue', 'abc'], 'Could not parse issue reference: abc'],
+    [['stage', 'issue', '1', '--pr'], '--pr only applies to stage branch'],
+    [['pull', 'nope'], 'Unknown pull target: nope'],
+    [['pull', 'pr', 'abc'], 'Could not parse PR reference: abc'],
+    [['pull', 'issue', '1', '--no-push'], "Unknown option '--no-push'"],
+    [['doctor', '--bogus'], "Unknown option '--bogus'"],
+    [['workflows', 'nope'], 'Usage: venfork workflows'],
+    [['workflows', 'allow'], 'Usage: venfork workflows allow'],
+    [['preserve', 'nope'], 'Usage: venfork preserve'],
+    [['preserve', 'add'], 'Usage: venfork preserve add'],
+    [['preserve', 'add', '../escape'], "Invalid preserve path '../escape'"],
+  ] as const) {
+    test(`venfork ${args.join(' ')}`, async () => {
+      const result = await runCliIn(tmp, ...args);
+
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain(message);
+    });
+  }
+
+  test('a usage error is reported before gh auth is checked', async () => {
+    const result = await runCli('clone', 'a/b-private', '--bogus');
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("Unknown option '--bogus'");
+    expect(result.stderr).not.toContain('not authenticated');
+  });
+
+  test('bare venfork prints usage on stderr and exits 2', async () => {
+    const result = await runCli();
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('venfork setup <upstream>');
+  });
+
+  test('a runtime failure still exits 1', async () => {
+    const result = await runCli('sync');
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+  });
 });
 
 describe('doctor --json output', () => {

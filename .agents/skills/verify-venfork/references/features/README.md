@@ -21,7 +21,7 @@ Cross-cutting: `leak-invariants.md` (what must never reach public or upstream), 
 
 - Every drive starts from `SKILL.md` Launch: `. "$T/vf.env"; cd "$VF_WORK"`. Default branch is `main`.
 - `$VF_PUBLIC` is empty with `--no-public`. Stage then pushes to `$VF_UPSTREAM`.
-- Exit codes: 0 success, 1 any error (the message prints as `Error: ...` or after a red `■`), 130 a prompt that hit EOF or was cancelled.
+- Exit codes: 0 success (and "no" at a TTY confirm), 1 a runtime failure or a failing `doctor` check (the message prints as `Error: ...` or after a red `■`), 2 a usage error (`UsageError`: unknown command or option, missing or unexpected argument, malformed flag value, flags that cannot be combined, bare `venfork`) or missing input or consent (`MissingInputError`), 130 a prompt that hit EOF or was cancelled. Input valid in form that fails against the repos (a missing branch, divergence, a flag that contradicts `venfork-config`) is exit 1.
 - Typed errors live in `src/errors.ts`. The CLI prints only `.message`, so match on the message text.
 - "Concurrent lease" drives use a stale copy of origin: fetch from the copy, push to the real origin.
 

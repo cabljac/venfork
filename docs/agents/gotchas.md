@@ -31,3 +31,6 @@ Stack metadata is shared in `.git` across worktrees. Only the main checkout driv
 
 ## execa `$` does not parse quotes
 In a `$` template, literal text is split on spaces and quotes are kept: `--jq '.parent.url'` passes `'.parent.url'` with the quotes to gh. Interpolate a value (`--jq ${expr}`) or write an unquoted single word.
+
+## Usage errors must come before gh auth and I/O
+`src/index.ts` parses before `ensureGhAuth`, so a `UsageError` from a parser exits 2 even without gh auth. A check inside a command runs after auth: put a form check in the parser (or a `check*Inputs` helper the parser calls) when the command needs gh. Inside a command, throw `UsageError` before the first repo read, and rethrow it in the catch (`isEntryReported`), or it becomes exit 1.

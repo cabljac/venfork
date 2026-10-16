@@ -1,3 +1,4 @@
+import { UsageError } from './errors.js';
 import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
 
 export type ParsedPreserveArgs = {
@@ -30,12 +31,12 @@ export function parsePreserveCliArgs(
   if (actionRaw === 'add' || actionRaw === 'remove') {
     const values = rest.filter((entry) => entry.length > 0);
     if (values.length === 0) {
-      throw new Error(
+      throw new UsageError(
         `Usage: venfork preserve ${actionRaw} <path> [more-paths]`
       );
     }
     return { action: actionRaw, paths: values };
   }
 
-  throw new Error(`Usage: ${USAGE}`);
+  throw new UsageError(`Usage: ${USAGE}`);
 }
