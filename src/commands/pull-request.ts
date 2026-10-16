@@ -142,13 +142,12 @@ export async function pullRequestCommand(
 
     s.start(`Fetching pull/${prNumber}/head from upstream`);
     const fetchRefspec = `pull/${prNumber}/head:${localBranch}`;
-    const fetchResult = await $({
-      cwd: repoDir,
-      reject: false,
+    const fetchResult = await netExec(repoDir, {
+      bufferOutput: true,
     })`git fetch upstream ${fetchRefspec}`;
     if (fetchResult.exitCode !== 0) {
       throw new GitError(
-        `git fetch upstream ${fetchRefspec} failed. This can happen if the PR's source branch was deleted, or if the local branch already exists at a different commit (try deleting or renaming it first). Stderr:\n${fetchResult.stderr.trim()}`,
+        `git fetch upstream ${fetchRefspec} failed. This can happen if the PR's source branch was deleted, or if the local branch already exists at a different commit (try deleting or renaming it first). Stderr:\n${netFailureReason(fetchResult)}`,
         'git fetch upstream'
       );
     }

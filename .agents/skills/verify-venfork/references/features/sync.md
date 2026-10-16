@@ -7,7 +7,7 @@ config:
   written: [pulledPrs]
 tests:
   unit: [tests/unit/commands.test.ts, tests/unit/sync-args.test.ts, tests/unit/sync-report.test.ts, tests/unit/json-output.test.ts]
-  integration: [tests/integration/cli.test.ts, tests/integration/sync.test.ts, tests/integration/sync-snapshot.test.ts, tests/integration/sync-preserve-guard.test.ts, tests/integration/tip-builder.test.ts, tests/integration/integrity.test.ts, tests/integration/config.test.ts]
+  integration: [tests/integration/cli.test.ts, tests/integration/sync.test.ts, tests/integration/sync-snapshot.test.ts, tests/integration/sync-preserve-guard.test.ts, tests/integration/tip-builder.test.ts, tests/integration/integrity.test.ts, tests/integration/config.test.ts, tests/integration/net-credential.test.ts]
   e2e: [tests/e2e/sync-flow.test.ts]
 ---
 
@@ -20,6 +20,7 @@ tests:
 - Commits that touch only preserved paths on origin are folded into the managed commit, not divergence.
 - `sync <branch>` for a pulled PR (`pulledPrs[branch]` or the name `upstream-pr/<n>`) refetches `pull/<n>/head`, pushes it to origin with a lease and rewrites `pulledPrs[branch]`. Any other branch name is synced as the default branch.
 - `--json` prints one envelope line on stdout. Default branch: `result` is `{ kind: 'default-branch', status: 'pushed' | 'up-to-date', branch, upstreamTip, origin: { tip, pushed }, public?: { tip, pushed } }` (`public` absent in no-public mode). Pulled PR: `{ kind: 'pulled-pr', status: 'pushed' | 'up-to-date' | 'push-failed', branch, prNumber, head }`. A failure is `ok: false` with `error.code`, for example `sync-divergence`.
+- Every git fetch, push and ls-remote runs through `netExec`, which puts `-c credential.https://github.com.helper= -c credential.https://github.com.helper=!gh auth git-credential` after `git`. An HTTPS github.com remote then authenticates with gh only: the empty entry clears the user's helpers for that URL, so none is asked or stores the token. Local-path remotes never reach the helper.
 - `--report-issues` opens or refreshes a `venfork-sync-blocked` issue on divergence and closes it on success (gh only).
 - Errors: `SyncDivergenceError` (origin or public has non-upstream commits), `ConfigError` (bad config JSON, invalid preserve entry, bad cron), `GitError` "origin/main moved since this sync fetched it" (stale lease), `PinDowngradeError` (origin pins a newer venfork), `UnmigratedMirrorError` (unpinned workflow with `GITHUB_ACTIONS=true`), plain error when the config branch is missing but origin carries a managed commit.
 

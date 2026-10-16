@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { withoutGhCredential } from '../harness/net-credential.js';
 
 type MockResponse =
   | { exitCode: number; stdout: string; stderr: string }
@@ -19,7 +20,8 @@ mock.module('execa', () => ({
       !Array.isArray(stringsOrOptions)
     ) {
       // biome-ignore lint/suspicious/noExplicitAny: Template literal values type.
-      return mock((strings: TemplateStringsArray, ...vals: any[]) => {
+      return mock((tagged: TemplateStringsArray, ...tagValues: any[]) => {
+        const [strings, vals] = withoutGhCredential(tagged, tagValues);
         command = String.raw({ raw: strings }, ...vals);
         execaCalls.push(command);
         execaOptions.push({ command, options: stringsOrOptions });

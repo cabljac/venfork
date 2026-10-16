@@ -7,7 +7,8 @@ import {
   spyOn,
   test,
 } from 'bun:test';
-import { rename } from 'node:fs/promises';
+import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import * as prompts from '@clack/prompts';
 import { quietPrompts } from '../harness/prompts.js';
 
@@ -73,7 +74,7 @@ describe('doctor against real repos', () => {
       expect({ id, ok: checks[id]?.ok }).toEqual({ id, ok: true });
     }
     expect(checks.invariant.detail).toBe('upstream + 1 managed commit');
-    for (const id of ['token', 'last-run', 'cron-age']) {
+    for (const id of ['transport', 'token', 'last-run', 'cron-age']) {
       expect(checks[id]).toEqual({
         id,
         ok: 'skipped',
@@ -96,6 +97,7 @@ describe('doctor against real repos', () => {
       'divergence',
       'preserve',
       'workflow',
+      'transport',
       'token',
       'last-run',
       'cron-age',
@@ -607,5 +609,40 @@ describe('doctor and GitHub App auth', () => {
     expect(checks.workflow.fix).toBe(
       'Run `venfork schedule set "0 */6 * * *" --token`.'
     );
+  });
+});
+
+describe('doctor transport check against a real ssh command', () => {
+  test('a quoted GIT_SSH_COMMAND with a space in its path reaches origin', async () => {
+    const sshDir = path.join(fx.root, 'ssh tools');
+    await mkdir(sshDir);
+    const fakeSsh = path.join(sshDir, 'fake ssh');
+    await writeFile(
+      fakeSsh,
+      `#!/bin/sh\nexec git-upload-pack ${JSON.stringify(fx.origin)}\n`
+    );
+    await chmod(fakeSsh, 0o755);
+    await fx.git(
+      fx.work,
+      'remote',
+      'set-url',
+      '--push',
+      'origin',
+      'git@github.com:acme/widget-private.git'
+    );
+    const saved = process.env.GIT_SSH_COMMAND;
+    process.env.GIT_SSH_COMMAND = `"${fakeSsh}" -o IdentitiesOnly=yes`;
+    try {
+      const checks = byId(await runDoctorChecks({ cwd: fx.work }));
+
+      expect(checks.transport).toEqual({
+        id: 'transport',
+        ok: true,
+        detail: 'origin uses ssh; git reaches it',
+      });
+    } finally {
+      if (saved === undefined) delete process.env.GIT_SSH_COMMAND;
+      else process.env.GIT_SSH_COMMAND = saved;
+    }
   });
 });

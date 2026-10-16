@@ -5,6 +5,7 @@ import {
   enginesFloorShortfall,
   nodeRangeFloor,
   runtimeDependencyEngines,
+  SKIPPED_DOCTOR_IDS,
   verifyDoctorOutput,
 } from '../../scripts/smoke-checks';
 
@@ -44,13 +45,32 @@ const mk = (ids: string[], okAt = -1) =>
     schemaVersion: 1,
     ok: true,
     result: {
-      checks: ids.map((id, i) => ({ id, ok: i !== okAt, detail: 'x' })),
+      checks: ids.map((id, i) => ({
+        id,
+        ok:
+          i === okAt
+            ? false
+            : SKIPPED_DOCTOR_IDS.includes(id)
+              ? 'skipped'
+              : true,
+        detail: 'x',
+      })),
       links: null,
     },
   });
 
 test('accepts exit 0 with every expected check passing in order', () => {
   expect(verifyDoctorOutput(0, mk(EXPECTED_DOCTOR_IDS))).toBeNull();
+});
+
+test('rejects transport passing on a local-path origin', () => {
+  const checks = EXPECTED_DOCTOR_IDS.map((id) => ({ id, ok: true }));
+  expect(
+    verifyDoctorOutput(
+      0,
+      JSON.stringify({ schemaVersion: 1, ok: true, result: { checks } })
+    )
+  ).toContain('transport');
 });
 
 test('rejects a non-zero exit code', () => {

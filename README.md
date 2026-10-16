@@ -46,7 +46,7 @@ Before using Venfork, ensure you have:
   gh auth login
   ```
 - **Git** installed locally (used after clone for branches, remotes, and pushes)
-- **Clone URLs:** Venfork uses **`gh repo clone`** for fetching repositories, so transport (SSH vs HTTPS) follows your GitHub CLI config (`gh config get git_protocol`). SSH keys or HTTPS credentials are still required for Git operations such as **`git push`**.
+- **Clone URLs:** Venfork uses **`gh repo clone`** for fetching repositories, so transport (SSH vs HTTPS) follows your GitHub CLI config (`gh config get git_protocol`). Over HTTPS, the git fetches and pushes that venfork runs use your gh login, so you need no other credential. Over SSH you need an SSH key that GitHub accepts. Your own `git push` outside venfork uses your git credentials as usual (run `gh auth setup-git` to let it use gh too). See [Headless and CI use](#headless-and-ci-use).
 
 ## Installation
 
@@ -435,11 +435,12 @@ Check that a mirror is healthy, then list the links recorded in `venfork-config`
 | `divergence` | No user commits on `origin`/`public` that would make sync abort |
 | `preserve` | Every preserve entry is a valid single-file path and exists on `origin/<default>` |
 | `workflow` | The sync workflow on `origin/<default>` matches what this venfork version would write |
+| `transport` | git can reach origin: `git ls-remote --exit-code <origin push URL> HEAD` runs the way venfork's other git calls run (your ssh command with BatchMode for SSH, the gh credential helper for HTTPS), capped at 30 seconds. SSH failure fix: `gh config set git_protocol https` and re-clone, or load an SSH key (or accept GitHub's host key when ssh does not know it). HTTPS failure fix: `gh auth login`. With a schedule set, an HTTPS origin also needs a gh token with the `workflow` scope, because the managed commit changes a workflow file; the fix is `gh auth refresh -s workflow`. Skipped when origin is not on GitHub |
 | `token` | When a schedule is enabled, in both modes: `VENFORK_PUSH_TOKEN` is set on the mirror, or with `schedule set --app` both `VENFORK_APP_CLIENT_ID` and `VENFORK_APP_PRIVATE_KEY` are set, and the public fork has the mirror's owner. In app mode a leftover `VENFORK_PUSH_TOKEN` is a note, not a failure: the check passes and its fix is the `gh secret delete` command. Doctor can only see that the secrets exist: the token itself needs the `workflow` scope (classic) or Workflows: write (fine-grained), and doctor cannot check the App key or installation |
 | `last-run` | The last `venfork-sync.yml` run, from any trigger, did not fail |
 | `cron-age` | The workflow is enabled, and the last scheduled run is not older than twice the cron interval, with a floor of 1 hour because GitHub delays scheduled runs |
 
-Each failing check prints a fix. GitHub checks show as skipped when `gh` is not authenticated or origin is not a GitHub repository, and the summary counts skipped checks. If `git fetch` fails, the `remotes` row shows the reason and the checks that need fresh refs are skipped. The command exits 1 when any check fails. With `--json` the envelope is still `ok: true` when a check fails, because doctor ran: read the checks, or the exit code.
+Each failing check prints a fix. The `token`, `last-run` and `cron-age` checks show as skipped when `gh` is not authenticated or origin is not a GitHub repository; `transport` skips only when origin is not on GitHub, and otherwise fails when git cannot reach origin (for example an HTTPS origin while gh is logged out), and the summary counts skipped checks. If `git fetch` fails, the `remotes` row shows the reason and the checks that need fresh refs are skipped. The command exits 1 when any check fails. With `--json` the envelope is still `ok: true` when a check fails, because doctor ran: read the checks, or the exit code.
 
 ### `venfork schedule <status|set <cron> [--app|--token]|disable> [--json]`
 
@@ -695,6 +696,29 @@ venfork stage feat/auth --pr --yes --no-input
 
 A usage error is reported before venfork checks gh auth or touches a repo. Input that is valid in form but fails against the repos, such as a branch that does not exist, a diverged mirror, or a flag that contradicts the mirror's `venfork-config`, is a runtime failure (`1`).
 
+## Headless and CI use
+
+venfork runs on a machine with no browser, no SSH key and nobody at the keyboard, for example a CI job, a container or an agent. A gh token is the only credential it needs.
+
+1. Give gh a token. Set `GH_TOKEN` in the environment, or run `gh auth login --with-token < token.txt` once. The token needs access to the mirror, the public fork and upstream.
+2. Use HTTPS for GitHub remotes: `gh config set git_protocol https`. Then clone the mirror, so that `gh repo clone` writes HTTPS remote URLs. A clone that already has SSH remotes keeps them.
+3. Run venfork with `--no-input` (or `--json`, which implies it). Pass `--yes` to the commands that ask for consent. With `--json`, stdout carries one JSON document. See [Non-interactive use](#non-interactive-use) and [JSON output](#json-output).
+4. Check the exit code: `0` success, `1` runtime failure or a failing doctor check, `2` usage error or missing input or consent, `130` cancelled.
+
+```bash
+export GH_TOKEN="$(cat /run/secrets/gh-token)"
+gh config set git_protocol https
+venfork clone acme/project-private --no-input --json
+cd project-private
+venfork doctor --json | jq '.result.checks[] | select(.id == "transport")'
+venfork sync --json
+venfork stage feat/auth --pr --yes --json
+```
+
+You do not need `gh auth setup-git`. Every git fetch, push and ls-remote that venfork runs adds `-c credential.https://github.com.helper= -c credential.https://github.com.helper=!gh auth git-credential`. For `https://github.com`, gh is then the only credential helper in venfork's git calls: the helpers in your git config are not asked, and git never stores a gh token in them (a stored copy would go stale when gh refreshes its token). Your own helpers keep working for every other host and for git commands you run yourself. The helper applies only to `https://github.com` URLs, never to other hosts or local paths. When gh is missing or not authenticated, git fails at once with `terminal prompts disabled` and never waits on a prompt. `venfork doctor` shows the result in its `transport` check.
+
+The scheduled sync workflow does not depend on this: actions/checkout stores the push token as an HTTP header in the checkout, and git sends that header on every fetch and push, so the push token still does the pushing.
+
 ## Environment Variables
 
 ### `NO_COLOR`
@@ -905,7 +929,7 @@ After `venfork setup`, your local repository has three remotes:
 
 ### Check Your Setup
 
-If you encounter issues, run `venfork doctor` first. It checks the remotes, the layout mode, the managed-commit invariant, divergence, preserved files, the sync workflow, the push token and the last scheduled run, and prints a fix for each failing check.
+If you encounter issues, run `venfork doctor` first. It checks the remotes, the layout mode, the managed-commit invariant, divergence, preserved files, the sync workflow, the git transport, the push token and the last scheduled run, and prints a fix for each failing check.
 
 ### "GitHub CLI is not authenticated"
 

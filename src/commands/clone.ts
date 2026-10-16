@@ -9,6 +9,7 @@ import {
   PreconditionError,
 } from '../errors.js';
 import { ghGitProtocol } from '../git.js';
+import { netExec, runNetOp } from '../shared/net.js';
 import { isCancel, type PromptContext, promptText } from '../shared/prompt.js';
 import * as p from '../shared/ui.js';
 import {
@@ -121,10 +122,12 @@ export async function cloneCommand(
 
     // Step 2: Clone vendor repository (gh respects git_protocol and accepts owner/repo)
     const vendorGhPath = parseRepoPath(vendorCloneUrl);
-    s.start('Cloning vendor repository');
-    await $`gh repo clone ${vendorGhPath} ${vendorRepoName}`;
+    await runNetOp(
+      'Cloning vendor repository',
+      'Vendor repository cloned',
+      () => netExec()`gh repo clone ${vendorGhPath} ${vendorRepoName}`
+    );
     clonedDir = vendorRepoName;
-    s.stop('Vendor repository cloned');
 
     // Step 3: Try to fetch venfork config
     s.start('Fetching venfork configuration');
@@ -238,9 +241,11 @@ export async function cloneCommand(
           s.stop(`Using --upstream: ${parseRepoPath(upstreamUrl)}`);
         } else {
           try {
-            const result =
-              await $`gh repo view ${publicRepoPath} --json parent --jq .parent.url`;
-            upstreamUrl = result.stdout.trim();
+            const result = await netExec(undefined, {
+              bufferOutput: true,
+            })`gh repo view ${publicRepoPath} --json parent --jq .parent.url`;
+            if (result.exitCode !== 0) throw new Error('No parent found');
+            upstreamUrl = String(result.stdout ?? '').trim();
 
             if (!upstreamUrl || upstreamUrl === 'null') {
               throw new Error('No parent found');
@@ -354,13 +359,14 @@ async function detectPublicFork(
   s.start('Detecting public fork');
   const publicRepoName = vendorRepoName.replace(/-private$/, '');
 
-  try {
-    await $`gh repo view ${owner}/${publicRepoName}`;
+  const view = await netExec(undefined, {
+    bufferOutput: true,
+  })`gh repo view ${owner}/${publicRepoName}`;
+  if (view.exitCode === 0) {
     s.stop(`Found public fork: ${owner}/${publicRepoName}`);
     return `git@github.com:${owner}/${publicRepoName}.git`;
-  } catch {
-    s.stop('Public fork not found');
   }
+  s.stop('Public fork not found');
 
   p.log.warn('⚠️  Could not auto-detect public fork.');
   p.note(

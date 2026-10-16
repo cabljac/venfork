@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { $ } from 'execa';
+import { $, type TemplateExpression } from 'execa';
 import { GitError, RemoteNotFoundError } from '../errors.js';
 import { gitNetTimeoutMs, NET_ENV, NET_SSH_OPTIONS } from './constants.js';
 import * as p from './ui.js';
@@ -26,10 +26,51 @@ export function netSshCommand(cwd?: string): string {
 }
 
 /**
+ * `-c` flags that make gh the only credential helper for
+ * `https://github.com`: the empty entry clears the helpers from git config
+ * files for that URL, so a gh token is never read from, or stored into,
+ * the user's own helper (osxkeychain, store).
+ */
+export const GH_CREDENTIAL_CONFIG: readonly string[] = [
+  '-c',
+  'credential.https://github.com.helper=',
+  '-c',
+  'credential.https://github.com.helper=!gh auth git-credential',
+];
+
+const GIT_COMMAND = /^(\s*git)(\s+)/;
+
+/**
+ * Puts {@link GH_CREDENTIAL_CONFIG} right after `git` in a template whose
+ * command is git; any other command (gh) is returned unchanged.
+ */
+function withGhCredential(
+  templates: TemplateStringsArray,
+  expressions: readonly TemplateExpression[]
+): [TemplateStringsArray, ...TemplateExpression[]] {
+  const head = GIT_COMMAND.exec(templates[0] ?? '');
+  const rawHead = GIT_COMMAND.exec(templates.raw[0] ?? '');
+  if (!head || !rawHead) return [templates, ...expressions];
+  const cooked = [
+    `${head[1]} `,
+    ` ${templates[0].slice(head[0].length)}`,
+    ...templates.slice(1),
+  ];
+  const raw = [
+    `${rawHead[1]} `,
+    ` ${templates.raw[0].slice(rawHead[0].length)}`,
+    ...templates.raw.slice(1),
+  ];
+  return [Object.assign(cooked, { raw }), GH_CREDENTIAL_CONFIG, ...expressions];
+}
+
+/**
  * An execa `$` bound for a heavy network git/gh op: no stdin (any
  * credential/host-key prompt fails fast instead of hanging on an invisible
  * prompt), a hard timeout, and live progress on stderr. The child's stdout
- * also goes to stderr, so venfork's stdout carries only results.
+ * also goes to stderr, so venfork's stdout carries only results. A git
+ * command also gets {@link GH_CREDENTIAL_CONFIG}, so an HTTPS github.com
+ * remote authenticates with gh and only gh.
  *
  * @param cwd Working directory for the command, or undefined for the default.
  * @param opts.captureOutput Pipe stdout/stderr unbuffered so the caller can
@@ -38,19 +79,25 @@ export function netSshCommand(cwd?: string): string {
  *   the caller can read `exitCode`, `stdout`, `stderr` and `timedOut`.
  * @param opts.input Fixed stdin content; stdin closes after it, so a prompt
  *   still cannot wait for the user.
+ * @param opts.timeoutMs A shorter cap than `VENFORK_GIT_TIMEOUT`, for probes.
  */
 export function netExec(
   cwd?: string,
-  opts?: { captureOutput?: boolean; bufferOutput?: boolean; input?: string }
+  opts?: {
+    captureOutput?: boolean;
+    bufferOutput?: boolean;
+    input?: string;
+    timeoutMs?: number;
+  }
 ) {
   const captureOutput = opts?.captureOutput === true;
   const bufferOutput = opts?.bufferOutput === true;
   const stdin = opts?.input === undefined ? 'ignore' : 'pipe';
-  return $({
+  const run = $({
     ...(cwd ? { cwd } : {}),
     ...(opts?.input === undefined ? {} : { input: opts.input }),
     env: { ...NET_ENV, GIT_SSH_COMMAND: netSshCommand(cwd) },
-    timeout: gitNetTimeoutMs(),
+    timeout: opts?.timeoutMs ?? gitNetTimeoutMs(),
     stdio:
       captureOutput || bufferOutput
         ? [stdin, 'pipe', 'pipe']
@@ -58,6 +105,10 @@ export function netExec(
     ...(captureOutput ? { buffer: false } : {}),
     ...(bufferOutput ? { reject: false } : {}),
   });
+  return (
+    templates: TemplateStringsArray,
+    ...expressions: readonly TemplateExpression[]
+  ) => run(...withGhCredential(templates, expressions));
 }
 
 /**
@@ -127,12 +178,10 @@ export async function runNetOp(
   p.log.success(stopMsg);
 }
 
-/** `-c` flags that make a large seed push survive: gh credentials over
- *  HTTPS, a big post buffer + HTTP/1.1 (avoids chunked-encoding issues on
- *  big POSTs), and a stalled-transfer abort. */
+/** `-c` flags that make a large seed push survive: a big post buffer +
+ *  HTTP/1.1 (avoids chunked-encoding issues on big POSTs), and a
+ *  stalled-transfer abort. */
 const SEED_PUSH_CONFIG = [
-  '-c',
-  'credential.https://github.com.helper=!gh auth git-credential',
   '-c',
   'http.postBuffer=524288000',
   '-c',

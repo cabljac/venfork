@@ -884,7 +884,8 @@ describe('doctor --json output', () => {
       for (const stdout of outputs) {
         const { checks } = doctorResult(stdout);
         expect(checks[0].id).toBe('repo');
-        expect(checks).toHaveLength(10);
+        expect(checks).toHaveLength(11);
+        expect(checks.map((check) => check.id)).toContain('transport');
       }
       const cronAge = doctorResult(invalidCron.stdout).checks.find(
         (check) => check.id === 'cron-age'
@@ -939,7 +940,7 @@ describe('output streams', () => {
     try {
       const result = await runCliIn(fx.work, 'doctor', '--json');
 
-      expect(doctorResult(result.stdout).checks).toHaveLength(10);
+      expect(doctorResult(result.stdout).checks).toHaveLength(11);
       expect(doctorResult(result.stdout).healthy).toBe(true);
       expect(result.stderr).not.toContain('\x1b');
     } finally {
@@ -1296,6 +1297,36 @@ describe('--json envelope on stdout, no TTY', () => {
       });
     });
   }
+
+  test('clone honours VENFORK_GIT_TIMEOUT for gh repo clone', async () => {
+    const root = await mkdtemp(path.join(tmp, 'clone-timeout-'));
+    const bin = path.join(root, 'bin');
+    await mkdir(bin);
+    await writeFile(
+      path.join(bin, 'gh'),
+      '#!/bin/sh\n[ "$1 $2" = "auth status" ] && exit 0\n[ "$1 $2" = "repo clone" ] && exec sleep 20\nexit 1\n'
+    );
+    await chmod(path.join(bin, 'gh'), 0o755);
+    const started = Date.now();
+
+    const result = await runCliWithoutTty(
+      root,
+      ['clone', 'acme/proj-private', '--json'],
+      {
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+        VENFORK_GIT_TIMEOUT: '1000',
+      }
+    );
+
+    expect(result.timedOut).toBe(false);
+    expect(Date.now() - started).toBeLessThan(4500);
+    expect(result.exitCode).toBe(1);
+    expect(parseEnvelope(result.stdout)).toEqual({
+      schemaVersion: 1,
+      ok: false,
+      error: { code: 'git', message: expect.stringContaining('timed out') },
+    });
+  });
 
   test('clone --json when gh repo clone fails is a github envelope, exit 1', async () => {
     const work = await mkdtemp(path.join(tmp, 'clone-fail-'));

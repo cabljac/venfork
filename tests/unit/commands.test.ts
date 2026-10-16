@@ -3,6 +3,10 @@ import * as realFsPromises from 'node:fs/promises';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import * as clack from '@clack/prompts';
+import {
+  GH_CREDENTIAL_ARGS,
+  withoutGhCredential,
+} from '../harness/net-credential.js';
 import { ON_STDERR } from '../harness/prompts.js';
 
 /**
@@ -29,6 +33,8 @@ type MockResponse =
 
 // Track calls to our mocks
 const execaCalls: string[] = [];
+/** Every command as spawned, before netExec's credential flags are removed. */
+const spawnedCalls: string[] = [];
 const rmCalls: RmCall[] = [];
 const writeFileCalls: WriteFileCall[] = [];
 const noteCalls: Array<{ message: string; title?: string }> = [];
@@ -66,7 +72,11 @@ mock.module('execa', () => ({
       // Called with options: $({ cwd: '...' })`command`
       _options = stringsOrOptions;
       // biome-ignore lint/suspicious/noExplicitAny: Template literal values type
-      return mock((strings: TemplateStringsArray, ...vals: any[]) => {
+      return mock((tagged: TemplateStringsArray, ...tagValues: any[]) => {
+        spawnedCalls.push(
+          String.raw({ raw: tagged }, ...tagValues.map(argText))
+        );
+        const [strings, vals] = withoutGhCredential(tagged, tagValues);
         command = String.raw({ raw: strings }, ...vals.map(argText));
         execaCalls.push(command);
         return getMockExecaResponse(command, _options);
@@ -75,6 +85,7 @@ mock.module('execa', () => ({
 
     // Called without options: $`command`
     command = String.raw({ raw: stringsOrOptions }, ...values.map(argText));
+    spawnedCalls.push(command);
     execaCalls.push(command);
     return getMockExecaResponse(command);
   }),
@@ -409,6 +420,7 @@ function mockManagedCommitOnBranch(
 beforeEach(() => {
   // Clear tracking arrays
   execaCalls.length = 0;
+  spawnedCalls.length = 0;
   rmCalls.length = 0;
   writeFileCalls.length = 0;
   noteCalls.length = 0;
@@ -572,14 +584,14 @@ describe('setupCommand - execution tests', () => {
       // Expected
     }
 
-    const seedPush = execaCalls.find(
+    const seedPush = spawnedCalls.find(
       (cmd) =>
         cmd.includes(' push ') &&
         cmd.includes('https://github.com/testuser/test-vendor.git')
     );
 
     expect(seedPush).toBeDefined();
-    expect(seedPush).toContain('credential.https://github.com.helper');
+    expect(seedPush?.startsWith(`git ${GH_CREDENTIAL_ARGS} -c `)).toBe(true);
     expect(seedPush).toContain('--progress');
     expect(seedPush).toContain('main:refs/heads/main');
     // The hang fix: the seeding push must not use the raw SSH URL.
@@ -985,6 +997,32 @@ describe('setupCommand result', () => {
 });
 
 describe('syncCommand', () => {
+  test('passes gh credentials to network git ops only', async () => {
+    try {
+      await syncCommand('main');
+    } catch {
+      // Expected - may fail in test environment
+    }
+
+    const network = /^git (?:\S+ )*(?:fetch|push|ls-remote|remote set-head)\b/;
+    const withHelper = (cmd: string) =>
+      cmd.startsWith(`git ${GH_CREDENTIAL_ARGS} `);
+    const net = spawnedCalls.filter((cmd) => network.test(cmd));
+    expect(net.some((cmd) => cmd.includes(' fetch upstream'))).toBe(true);
+    expect(net.some((cmd) => cmd.includes(' push origin '))).toBe(true);
+    expect(net.every(withHelper)).toBe(true);
+    const local = spawnedCalls.filter(
+      (cmd) => cmd.startsWith('git ') && !network.test(cmd)
+    );
+    expect(local.some((cmd) => cmd.startsWith('git rev-parse'))).toBe(true);
+    expect(local.some((cmd) => cmd.includes('credential'))).toBe(false);
+    expect(
+      spawnedCalls.some(
+        (cmd) => cmd.startsWith('gh ') && cmd.includes('credential')
+      )
+    ).toBe(false);
+  });
+
   test('fetches from all remotes', async () => {
     try {
       await syncCommand('main');
@@ -3814,7 +3852,11 @@ describe('cloneCommand --public-fork and legacy prompts', () => {
             stdout: 'https://github.com/upstream/original.git',
             stderr: '',
           })
-        : Promise.reject(new Error('Could not resolve to a Repository'))
+        : Promise.resolve({
+            exitCode: 1,
+            stdout: '',
+            stderr: 'Could not resolve to a Repository',
+          })
     );
   }
 

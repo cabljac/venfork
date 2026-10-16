@@ -107,6 +107,7 @@ async function withTempIndex<T>(
       reject: false,
       stripFinalNewline: false,
       ...(options.input === undefined ? {} : { input: options.input }),
+      // lint-invariants: local-git (plumbing on the local object store)
     })`git -c core.hooksPath=${hooksDir} --literal-pathspecs ${args}`;
     return {
       exitCode: result.exitCode ?? 1,

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { withoutGhCredential } from '../harness/net-credential.js';
 
 /**
  * Unit tests for git.ts with mocked execa
@@ -31,7 +32,8 @@ mock.module('execa', () => ({
       // Called with options: $({ cwd: '...' })`command`
       options = stringsOrOptions;
       // biome-ignore lint/suspicious/noExplicitAny: Template literal values type
-      return mock((strings: TemplateStringsArray, ...vals: any[]) => {
+      return mock((tagged: TemplateStringsArray, ...tagValues: any[]) => {
+        const [strings, vals] = withoutGhCredential(tagged, tagValues);
         command = String.raw({ raw: strings }, ...vals);
         execaCalls.push({ command, options });
         return getMockResponse(command, options);
@@ -241,9 +243,11 @@ describe('getGitHubUsername', () => {
   });
 
   test('returns empty string on error', async () => {
-    mockResponses.set('gh api', (_command: string) =>
-      Promise.reject(new Error('not authenticated'))
-    );
+    mockResponses.set('gh api', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'not authenticated',
+    });
 
     const result = await getGitHubUsername();
 

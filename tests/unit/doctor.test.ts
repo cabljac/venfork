@@ -1,12 +1,22 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { withoutGhCredential } from '../harness/net-credential.js';
 
-type MockResponse = { exitCode: number; stdout: string; stderr: string };
+type MockResponse = {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  timedOut?: boolean;
+};
 
 const responses: Array<[string, MockResponse]> = [];
 const ghCalls: string[] = [];
+const sshCalls: string[] = [];
+const gitCalls: string[] = [];
 
 function respond(command: string): Promise<MockResponse> {
   if (command.startsWith('gh ')) ghCalls.push(command);
+  if (command.startsWith('ssh ')) sshCalls.push(command);
+  if (command.startsWith('git ')) gitCalls.push(command);
   for (const [pattern, response] of responses) {
     if (command.includes(pattern)) return Promise.resolve(response);
   }
@@ -18,14 +28,26 @@ mock.module('execa', () => ({
   $: (first: TemplateStringsArray | any, ...values: any[]) => {
     if (typeof first === 'object' && !Array.isArray(first)) {
       // biome-ignore lint/suspicious/noExplicitAny: Template literal values.
-      return (strings: TemplateStringsArray, ...vals: any[]) =>
-        respond(String.raw({ raw: strings }, ...vals));
+      return (tagged: TemplateStringsArray, ...tagValues: any[]) => {
+        const [strings, vals] = withoutGhCredential(tagged, tagValues);
+        return respond(
+          String.raw(
+            { raw: strings },
+            ...vals.map((v) => (Array.isArray(v) ? v.join(' ') : String(v)))
+          )
+        );
+      };
     }
     return respond(String.raw({ raw: first }, ...values));
   },
 }));
 
-import { doctorSummary } from '../../src/commands/doctor.js';
+import {
+  doctorSummary,
+  HTTPS_TRANSPORT_FIX,
+  SSH_HOST_KEY_FIX,
+  SSH_TRANSPORT_FIX,
+} from '../../src/commands/doctor.js';
 import { type DoctorCheck, runDoctorChecks } from '../../src/commands.js';
 import { generateSyncWorkflow } from '../../src/workflow.js';
 
@@ -47,6 +69,8 @@ function useMirror(
 ): void {
   responses.length = 0;
   ghCalls.length = 0;
+  sshCalls.length = 0;
+  gitCalls.length = 0;
   const config = {
     version: '1',
     upstreamUrl: 'git@github.com:acme/widget.git',
@@ -511,5 +535,169 @@ describe('doctor token check under GitHub App auth', () => {
 
     expect(checks.token.ok).toBe(true);
     expect(checks.token.detail).toContain('can read the private key');
+  });
+});
+
+describe('doctor transport check', () => {
+  const PROBE = 'git ls-remote --exit-code';
+  const PROBE_HEAD = '.git HEAD';
+
+  async function transport(): Promise<DoctorCheck | undefined> {
+    const checks = await runDoctorChecks({ cwd: '/mirror' });
+    return checks.find((check) => check.id === 'transport');
+  }
+
+  function originPushUrl(url: string): void {
+    responses.unshift(['git remote get-url --push origin', ok(url)]);
+  }
+
+  function probeCalls(): string[] {
+    return gitCalls.filter(
+      (call) => call.startsWith(PROBE) && call.endsWith(' HEAD')
+    );
+  }
+
+  test('runs between the workflow and token checks', async () => {
+    const ids = (await runDoctorChecks({ cwd: '/mirror' })).map((c) => c.id);
+    expect(
+      ids.slice(ids.indexOf('workflow'), ids.indexOf('token') + 1)
+    ).toEqual(['workflow', 'transport', 'token']);
+  });
+
+  test('ssh passes when git ls-remote reaches origin, with no ssh -T', async () => {
+    expect(await transport()).toEqual({
+      id: 'transport',
+      ok: true,
+      detail: 'origin uses ssh; git reaches it',
+    });
+    expect(probeCalls()).toEqual([
+      `${PROBE} git@github.com:acme/widget-private.git HEAD`,
+    ]);
+    expect(sshCalls).toEqual([]);
+  });
+
+  test('an empty origin (exit 2, no HEAD) still counts as reached', async () => {
+    responses.unshift([PROBE_HEAD, { exitCode: 2, stdout: '', stderr: '' }]);
+
+    expect((await transport())?.ok).toBe(true);
+  });
+
+  test('ssh fails with the fix when the key is refused', async () => {
+    responses.unshift([
+      PROBE_HEAD,
+      fail('git@github.com: Permission denied (publickey).'),
+    ]);
+
+    expect(await transport()).toEqual({
+      id: 'transport',
+      ok: false,
+      detail:
+        'origin uses ssh, but git cannot reach it: git@github.com: Permission denied (publickey).',
+      fix: SSH_TRANSPORT_FIX,
+    });
+    expect(SSH_TRANSPORT_FIX).toBe(
+      '`gh config set git_protocol https` and re-clone, or load an SSH key'
+    );
+  });
+
+  test('ssh names the host key fix when the host key is unknown', async () => {
+    responses.unshift([PROBE_HEAD, fail('Host key verification failed.')]);
+
+    const check = await transport();
+    expect(check?.ok).toBe(false);
+    expect(check?.fix).toBe(SSH_HOST_KEY_FIX);
+  });
+
+  test('a timed-out probe fails and says so', async () => {
+    responses.unshift([
+      PROBE_HEAD,
+      { exitCode: 1, stdout: '', stderr: '', timedOut: true },
+    ]);
+
+    const check = await transport();
+    expect(check?.ok).toBe(false);
+    expect(check?.detail).toContain('timed out');
+  });
+
+  test('https passes when git ls-remote reaches origin through gh', async () => {
+    originPushUrl('https://github.com/acme/widget-private.git');
+    responses.unshift([
+      'gh auth status --hostname github.com',
+      ok("  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'"),
+    ]);
+
+    expect(await transport()).toEqual({
+      id: 'transport',
+      ok: true,
+      detail: 'origin uses https; gh supplies the github.com credentials',
+    });
+    expect(probeCalls()).toEqual([
+      `${PROBE} https://github.com/acme/widget-private.git HEAD`,
+    ]);
+    expect(ghCalls).toContain('gh auth status --hostname github.com');
+  });
+
+  test('https fails with gh auth login when gh cannot authenticate', async () => {
+    originPushUrl('https://github.com/acme/widget-private.git');
+    responses.unshift([
+      PROBE_HEAD,
+      fail('fatal: could not read Username: terminal prompts disabled'),
+    ]);
+
+    expect(await transport()).toEqual({
+      id: 'transport',
+      ok: false,
+      detail:
+        'origin uses https, but git cannot reach it: fatal: could not read Username: terminal prompts disabled',
+      fix: HTTPS_TRANSPORT_FIX,
+    });
+  });
+
+  test('https with the sync workflow fails when the gh token lacks the workflow scope', async () => {
+    originPushUrl('https://github.com/acme/widget-private.git');
+    responses.unshift([
+      'gh auth status --hostname github.com',
+      ok("  - Token scopes: 'gist', 'read:org', 'repo'"),
+    ]);
+
+    expect(await transport()).toEqual({
+      id: 'transport',
+      ok: false,
+      detail:
+        'origin uses https, but the gh token lacks the workflow scope, so pushing the sync workflow is refused',
+      fix: 'gh auth refresh -s workflow',
+    });
+  });
+
+  test('https without the sync workflow does not need the workflow scope', async () => {
+    useMirror('standard', { schedule: undefined });
+    originPushUrl('https://github.com/acme/widget-private.git');
+    responses.unshift([
+      'gh auth status --hostname github.com',
+      ok("  - Token scopes: 'repo'"),
+    ]);
+
+    expect((await transport())?.ok).toBe(true);
+  });
+
+  test('https passes when gh reports no scopes (a fine-grained or GH_TOKEN token)', async () => {
+    originPushUrl('https://github.com/acme/widget-private.git');
+    responses.unshift([
+      'gh auth status --hostname github.com',
+      ok('  - Logged in to github.com account acme-bot (GH_TOKEN)'),
+    ]);
+
+    expect((await transport())?.ok).toBe(true);
+  });
+
+  test('skips an origin that is not on GitHub', async () => {
+    originPushUrl('/srv/git/widget-private.git');
+
+    expect(await transport()).toEqual({
+      id: 'transport',
+      ok: 'skipped',
+      detail: 'origin is not a GitHub repository',
+    });
+    expect(probeCalls()).toEqual([]);
   });
 });

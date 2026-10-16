@@ -34,3 +34,9 @@ In a `$` template, literal text is split on spaces and quotes are kept: `--jq '.
 
 ## Usage errors must come before gh auth and I/O
 `src/index.ts` parses before `ensureGhAuth`, so a `UsageError` from a parser exits 2 even without gh auth. A check inside a command runs after auth: put a form check in the parser (or a `check*Inputs` helper the parser calls) when the command needs gh. Inside a command, throw `UsageError` before the first repo read, and rethrow it in the catch (`isEntryReported`), or it becomes exit 1.
+
+## Dynamic git templates need netExec or a marker
+`network-via-net` flags a git template whose subcommand is an interpolation (`git ${args}`), since the rule cannot tell it is local. A local-only plumbing helper puts `// lint-invariants: local-git` on the line before the template.
+
+## netExec rewrites git templates
+`netExec` puts the gh credential `-c` flags right after `git`. A unit execa mock that matches command strings must pass the template through `withoutGhCredential` (`tests/harness/net-credential.ts`), or `git fetch origin` arrives as `git -c credential... fetch origin`.

@@ -137,15 +137,19 @@ export const EXPECTED_DOCTOR_IDS = [
   'divergence',
   'preserve',
   'workflow',
+  'transport',
   'token',
   'last-run',
   'cron-age',
 ];
 
+/** Checks that are `'skipped'` on the fixture, whose origin is a local path. */
+export const SKIPPED_DOCTOR_IDS = ['transport'];
+
 /**
  * Validates `doctor --json` output from the smoke run. Returns a problem
  * description, or null when the exit code, envelope, ids and results are
- * as expected.
+ * as expected: every check `true`, except {@link SKIPPED_DOCTOR_IDS}.
  */
 export function verifyDoctorOutput(
   exitCode: number | undefined,
@@ -172,7 +176,12 @@ export function verifyDoctorOutput(
   if (JSON.stringify(ids) !== JSON.stringify(EXPECTED_DOCTOR_IDS)) {
     return `unexpected check ids: ${ids.join(',')}; want ${EXPECTED_DOCTOR_IDS.join(',')}`;
   }
-  const failed = checks.filter((c) => c.ok !== true).map((c) => c.id);
+  const failed = checks
+    .filter(
+      (c) =>
+        c.ok !== (SKIPPED_DOCTOR_IDS.includes(c.id ?? '') ? 'skipped' : true)
+    )
+    .map((c) => c.id);
   if (failed.length > 0) return `failing checks: ${failed.join(',')}`;
   return null;
 }
