@@ -443,6 +443,27 @@ describe('updateVenforkConfig', () => {
     expect(Object.keys(updated.shippedBranches ?? {})).toEqual(['good']);
   });
 
+  test('keeps a string shippedBranches sourceHead and drops any other value', async () => {
+    const entry = {
+      upstreamPrUrl: 'https://github.com/u/r/pull/1',
+      head: 'aaa',
+      shippedAt: '2026-04-28T10:00:00Z',
+    };
+    mockResponses.set(
+      'git show FETCH_HEAD:.venfork/config.json',
+      mockReadResponse({
+        ...baseConfig,
+        shippedBranches: {
+          kept: { ...entry, sourceHead: 'bbb' },
+          dropped: { ...entry, sourceHead: 42 },
+        } as never,
+      })
+    );
+    const updated = await updateVenforkConfig('/tmp/repo', {});
+    expect(updated.shippedBranches?.kept?.sourceHead).toBe('bbb');
+    expect(updated.shippedBranches?.dropped).toEqual(entry);
+  });
+
   test('writes config branch with --force-with-lease against the read sha', async () => {
     mockResponses.set('git rev-parse FETCH_HEAD', {
       exitCode: 0,

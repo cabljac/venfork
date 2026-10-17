@@ -249,3 +249,63 @@ describe('stage in no-public mode', () => {
     );
   });
 });
+
+describe('stage from a given clone and a pinned commit', () => {
+  test('stage runs in options.cwd while process.cwd() is another directory', async () => {
+    await cutFeatureBranch('upstream/main');
+    process.chdir(fx.root);
+
+    await stageCommand('feature', { cwd: fx.work });
+
+    expect(
+      await fx.git(fx.publicFork ?? '', 'rev-parse', 'feature^{tree}')
+    ).toBe(await fx.git(fx.work, 'rev-parse', 'feature^{tree}'));
+  });
+
+  test('source.sha stages a commit that has no local branch', async () => {
+    const sha = await cutFeatureBranch('upstream/main');
+    await fx.git(fx.work, 'checkout', '--quiet', 'main');
+    await fx.git(fx.work, 'branch', '--quiet', '-D', 'feature');
+
+    await stageCommand('feature', { cwd: fx.work, source: { sha } });
+
+    const publicFork = fx.publicFork ?? '';
+    expect(await fx.git(publicFork, 'rev-parse', 'feature^{tree}')).toBe(
+      await fx.git(fx.work, 'rev-parse', `${sha}^{tree}`)
+    );
+    expect(await fx.subjects(publicFork, 'feature', 'main..feature')).toEqual([
+      'feat: feature work',
+    ]);
+    expect(await refExists(fx.work, 'refs/heads/feature')).toBe(false);
+  });
+
+  test('source.sha stages the pinned commit, not the moved local branch', async () => {
+    const sha = await cutFeatureBranch('upstream/main');
+    await Bun.write(`${fx.work}/src/later.txt`, 'later\n');
+    await fx.git(fx.work, 'add', 'src/later.txt');
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: later work');
+
+    await stageCommand('feature', { cwd: fx.work, source: { sha } });
+
+    const publicFork = fx.publicFork ?? '';
+    expect(await fx.fileAt(publicFork, 'feature', 'src/later.txt')).toBeNull();
+    expect(await fx.git(publicFork, 'rev-parse', 'feature^{tree}')).toBe(
+      await fx.git(fx.work, 'rev-parse', `${sha}^{tree}`)
+    );
+  });
+
+  test('source.sha refuses a commit that is not in the clone', async () => {
+    await expect(
+      stageCommand('feature', {
+        cwd: fx.work,
+        source: { sha: 'f'.repeat(40) },
+      })
+    ).rejects.toThrow(new CommandExitError(1));
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(`commit ${'f'.repeat(40)} is not in this clone`),
+      ON_STDERR
+    );
+    expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(false);
+  });
+});

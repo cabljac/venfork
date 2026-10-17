@@ -2218,6 +2218,61 @@ describe('stageCommand', () => {
     expect(execaCalls.some((cmd) => cmd.includes('--body-file -'))).toBe(true);
   });
 
+  test('--pr records the staged source commit as shippedBranches sourceHead', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-parse --verify --quiet refs/heads/feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'cafef00d',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/pull/123\n',
+      stderr: '',
+    });
+
+    await stageCommand('feature-branch', { createPr: true });
+
+    const written = writeFileCalls
+      .filter((call) => call.path.endsWith('config.json'))
+      .map((call) => JSON.parse(call.content))
+      .at(-1);
+    expect(written?.shippedBranches?.['feature-branch']?.sourceHead).toBe(
+      'cafef00d'
+    );
+  });
+
   test('--pr surfaces "already exists" without throwing', async () => {
     confirmResponse = true;
     mockResponses.set('git remote get-url origin', {
