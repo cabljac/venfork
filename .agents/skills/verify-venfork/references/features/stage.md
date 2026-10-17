@@ -21,7 +21,8 @@ tests:
 - Shows commits and files, then asks "Push to public fork?" (no-public: "Push to upstream?"). `--yes` answers it. Unless stdin and stderr are both a TTY, and with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`, the confirm without `--yes` exits 2 naming `--yes` (`MissingInputError`) before it fetches, and nothing is pushed; stdout stays empty.
 - Pushes `<head>:refs/heads/<branch>` with `--force-with-lease=<ref>:<tip from ls-remote>` and `--no-follow-tags`. No-public pushes to the upstream URL directly (the remote's push URL stays `DISABLE`).
 - `--json` never prompts, even at a TTY (it implies `--no-input`). Outside a git repository, stage fails with `not-in-repository` (exit 1) before it reaches the confirm. Without `--yes` it is `ok: false`, `error: { code: 'missing-input', flag: '--yes' }`, exit 2. On success `result` is `{ branch, head, target: 'public' | 'upstream', compareUrl, prAction?, prUrl?, internalPrUrl? }`; `prAction` (`created`, `updated`, `unchanged`, `failed`) is present only with `--pr`.
-- `--pr`/`--draft`: finds the internal PR on the mirror, redacts it (`stripInternalBlocks`, `RedactionError`), runs `gh pr create`, updates an existing PR body unless `--no-update-existing`, writes `shippedBranches[branch]`.
+- `--pr`/`--draft`: finds the internal PR on the mirror, redacts it (`stripInternalBlocks`, `RedactionError`), runs `gh pr create`, updates an existing PR body unless `--no-update-existing`, writes `shippedBranches[branch]`. The entry's `sourceHead` is the mirror commit that was staged; its `head` is the rebuilt commit that was pushed.
+- In-process callers can pass `cwd` (the clone to stage from) and `source: { sha }` (stage that full commit id under the branch name, with no local branch read). A pinned commit missing from the clone is a `precondition` refusal before any fetch. The CLI sets neither.
 
 ## How a user reaches it
 
