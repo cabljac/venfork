@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import * as prompts from '@clack/prompts';
-import { quietPrompts } from '../harness/prompts.js';
+import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
@@ -241,7 +241,8 @@ describe('sync with the managed commit', () => {
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining(
         'origin/main moved since this sync fetched it. Re-run `venfork sync`'
-      )
+      ),
+      ON_STDERR
     );
   });
 
@@ -367,7 +368,8 @@ describe('sync with the managed commit', () => {
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining(
         "Preserved file 'config/x.yml' cannot be restored: upstream now has a file at 'config'"
-      )
+      ),
+      ON_STDERR
     );
   });
 
@@ -430,7 +432,8 @@ describe('unmigrated mirror on the runner', () => {
     }
 
     expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining('run `venfork sync` locally once')
+      expect.stringContaining('run `venfork sync` locally once'),
+      ON_STDERR
     );
     expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
   });
@@ -462,7 +465,8 @@ describe('pinned version downgrade guard', () => {
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining(
         `origin pins venfork 99.0.0, you are running ${VENFORK_VERSION}`
-      )
+      ),
+      ON_STDERR
     );
     expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
   });

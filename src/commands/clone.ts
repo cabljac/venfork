@@ -1,9 +1,9 @@
-import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import { fetchVenforkConfig } from '../config.js';
 import { CommandExitError } from '../errors.js';
 import { ghGitProtocol } from '../git.js';
 import { isCancel, promptText } from '../shared/prompt.js';
+import * as p from '../shared/ui.js';
 import {
   githubUrlForProtocol,
   normalizeGitHubRepoInput,

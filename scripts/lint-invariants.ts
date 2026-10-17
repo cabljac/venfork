@@ -342,6 +342,22 @@ export const promptsViaModule: Rule = ({ file, text }) => {
   return found;
 };
 
+/** The module that owns human output; with {@link PROMPT_MODULE}, the only clack importers. */
+export const UI_MODULE = 'src/shared/ui.ts';
+
+const CLACK_SPECIFIER = /(?:\bfrom|\bimport\s*\(?)\s*['"]@clack\/prompts['"]/g;
+
+/** Rule 7: only {@link UI_MODULE} and {@link PROMPT_MODULE} import `@clack/prompts`. */
+export const clackViaUi: Rule = ({ file, text }) => {
+  if (file === UI_MODULE || file === PROMPT_MODULE) return [];
+  const { code } = scan(text);
+  return [...code.matchAll(CLACK_SPECIFIER)].map((m) => ({
+    file,
+    line: lineOf(text, m.index),
+    message: `@clack/prompts imported outside ${UI_MODULE} and ${PROMPT_MODULE}; use their helpers`,
+  }));
+};
+
 /** Every invariant rule, keyed by the name printed in findings. */
 export const rules: Record<string, Rule> = {
   'remote-refs': remoteRefs,
@@ -350,6 +366,7 @@ export const rules: Record<string, Rule> = {
   'deny-list-coverage': denyListCoverage,
   'no-process-exit': noProcessExit,
   'prompts-via-module': promptsViaModule,
+  'clack-via-ui': clackViaUi,
 };
 
 /** Runs every rule over the given sources. */

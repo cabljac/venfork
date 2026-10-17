@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import * as prompts from '@clack/prompts';
 import { $ } from 'execa';
-import { quietPrompts } from '../harness/prompts.js';
+import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
@@ -369,7 +369,8 @@ describe('a branch name that runs on from the mirror name', () => {
     await expect(stageCommand(branch)).rejects.toThrow(new CommandExitError(1));
 
     expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining("the branch name contains 'widget-private'")
+      expect.stringContaining("the branch name contains 'widget-private'"),
+      ON_STDERR
     );
     expect(
       await fx.git(fx.publicFork ?? '', 'for-each-ref', 'refs/heads')

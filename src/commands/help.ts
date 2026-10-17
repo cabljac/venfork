@@ -1,5 +1,5 @@
-import * as p from '@clack/prompts';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
+import { stdoutUi } from '../shared/ui.js';
 
 const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   [
@@ -168,14 +168,16 @@ export function commandHelp(
  * Show help information
  */
 export function showHelp(): void {
-  p.intro('🔧 Venfork - Private Repository Mirrors for Vendor Development');
+  stdoutUi.intro(
+    '🔧 Venfork - Private Repository Mirrors for Vendor Development'
+  );
 
-  p.note(
+  stdoutUi.note(
     COMMAND_HELP.map(([, text]) => text).join('\n\n'),
     'Available Commands'
   );
 
-  p.note(
+  stdoutUi.note(
     `# One-time setup
 venfork setup git@github.com:awesome/project.git
 # or shorthand:
@@ -205,7 +207,7 @@ venfork pull pr 1234
     'Example Workflow'
   );
 
-  p.note(
+  stdoutUi.note(
     `VENFORK_ORG - Default organization for repo creation
   Priority: --org flag, then VENFORK_ORG, then your personal account (after a prompt)
   Example: export VENFORK_ORG=my-company
@@ -218,10 +220,12 @@ VENFORK_SEED_CHUNK - Commits per push when setup seeds a new mirror (default 100
 
 VENFORK_SEED_RETRY_MS - Base backoff in ms between seed push retries (default 8000)
 
+NO_COLOR - Print plain progress lines on stderr even in a terminal
+
 GITHUB_REPOSITORY - Set by GitHub Actions. With --report-issues, sync files the
   venfork-sync-blocked issue there without a privacy lookup when it names origin`,
     'Environment Variables'
   );
 
-  p.outro('Built for teams who need private vendor workflows');
+  stdoutUi.outro('Built for teams who need private vendor workflows');
 }

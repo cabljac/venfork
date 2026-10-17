@@ -37,6 +37,7 @@ export async function promptText(
   const { flag: _flag, validate, ...clackOpts } = opts;
   return p.text({
     ...clackOpts,
+    output: process.stderr,
     // clack validates before it substitutes defaultValue for an empty line.
     validate:
       validate && ((value) => validate(value || (opts.defaultValue ?? ''))),
@@ -51,7 +52,7 @@ export async function promptConfirm(
   opts: ConfirmPromptOptions
 ): Promise<boolean | symbol> {
   const { flag: _flag, ...clackOpts } = opts;
-  return p.confirm(clackOpts);
+  return p.confirm({ ...clackOpts, output: process.stderr });
 }
 
 /**

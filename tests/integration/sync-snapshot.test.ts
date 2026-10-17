@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import path from 'node:path';
 import * as prompts from '@clack/prompts';
-import { quietPrompts } from '../harness/prompts.js';
+import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
@@ -113,7 +113,8 @@ describe('sync works from one snapshot of origin', () => {
     await expect(sync()).rejects.toThrow(new CommandExitError(1));
 
     expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining('moved since this sync fetched it')
+      expect.stringContaining('moved since this sync fetched it'),
+      ON_STDERR
     );
     expect(await fx.sha(fx.origin, 'main')).toBe(teammateTip);
     expect(await fx.fileAt(fx.origin, 'main', 'teammate.txt')).toBe(

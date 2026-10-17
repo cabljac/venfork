@@ -1,4 +1,3 @@
-import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import {
   assertNoInvalidPreserve,
@@ -32,6 +31,7 @@ import {
   reportSyncBlocked,
   resolveSyncBlocked,
 } from '../shared/sync-report.js';
+import * as p from '../shared/ui.js';
 
 /**
  * Returns the upstream PR number for `branch` if it's a pulled-in PR. First

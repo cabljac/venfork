@@ -80,9 +80,12 @@ describe('built CLI entry point', () => {
     })`node ${entry} setup a/b --org c`;
 
     expect(result.exitCode).toBe(130);
-    expect(result.stderr).toBe('Cancelled: input ended at a prompt');
-    expect(result.stdout).toContain('Private mirror repo name?');
-    expect(result.stdout).not.toContain('Cancelled');
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('Private mirror repo name?');
+    expect(result.stderr.endsWith('Cancelled: input ended at a prompt')).toBe(
+      true
+    );
+    expect(result.stderr).not.toContain('\x1b[?25h');
   });
 
   test('a command that finishes is not reported as an abandoned prompt', async () => {
@@ -280,6 +283,57 @@ describe('doctor --json output', () => {
         }
       ).checks.find((check) => check.id === 'cron-age');
       expect(cronAge?.ok).toBe('skipped');
+    } finally {
+      await fx.cleanup();
+    }
+  });
+});
+
+describe('output streams', () => {
+  test('sync sends progress to stderr as plain lines and leaves stdout empty', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.commitOnUpstream({ 'src/new.txt': 'new\n' });
+
+      const result = await runCliIn(fx.work, 'sync');
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('step: Fetching from upstream');
+      expect(result.stderr).toContain('done: Fetched from all remotes');
+      expect(result.stderr).not.toContain('\x1b');
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('a reader that closes stdout early gets no stack trace', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      for (const args of [['help'], ['doctor', '--json']]) {
+        const stderrFile = path.join(tmp, 'epipe-stderr.txt');
+        const shell = await $({
+          cwd: fx.work,
+          reject: false,
+          env: { PATH: stubPath, STDERR_FILE: stderrFile },
+        })`sh -c ${'node "$0" "$@" 2>"$STDERR_FILE" | (exec 0<&-; sleep 1)'} ${entry} ${args}`;
+        expect(shell.exitCode).toBe(0);
+        const stderr = await readFile(stderrFile, 'utf8');
+        expect(stderr).not.toContain('EPIPE');
+        expect(stderr).not.toContain('    at ');
+      }
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('doctor --json keeps stdout to the JSON document', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const result = await runCliIn(fx.work, 'doctor', '--json');
+
+      expect(() => JSON.parse(result.stdout)).not.toThrow();
+      expect(result.stderr).not.toContain('\x1b');
     } finally {
       await fx.cleanup();
     }

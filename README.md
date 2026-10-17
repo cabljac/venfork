@@ -575,7 +575,22 @@ venfork preserve clear
 
 **Invalid entries:** an entry written by an older venfork, or by hand, that is not a valid single-file path (for example `docs/*.md`) makes sync abort and shows up in `venfork preserve list` and `venfork doctor`. Remove it with `venfork preserve remove <entry>`, using the entry exactly as listed. `remove` works on invalid entries too.
 
+## Output Streams
+
+venfork keeps stdout for results and sends everything a human reads to stderr:
+
+- **stdout** carries only results: `venfork --version`, help you ask for (`venfork help`, `venfork <command> --help`) and `venfork doctor --json`.
+- **stderr** carries progress, spinners, prompts, warnings, errors, usage printed for a bad command line, the human-readable reports of `doctor`, `schedule status`, `workflows status` and `preserve list`, and the output of git and gh subprocesses.
+
+So `venfork doctor --json > health.json` writes clean JSON while progress still shows in the terminal, and `venfork sync 2>sync.log` keeps stdout empty.
+
+When stderr is a terminal, venfork draws styled output with colors and spinners. When stderr is not a terminal (a pipe, a file, CI), `NO_COLOR` is set to a non-empty value, or `TERM` is `dumb`, it prints plain lines with no ANSI escape codes and no spinner animation. Each line starts with a level prefix: `info:`, `ok:`, `step:`, `warn:`, `error:`. A spinner prints one `step:` line when it starts and one `done:` (or `error:`) line when it stops.
+
 ## Environment Variables
+
+### `NO_COLOR`
+
+Set `NO_COLOR` to any non-empty value to get plain stderr output (no colors, no spinner animation) even in a terminal. `TERM=dumb` has the same effect. See [Output Streams](#output-streams).
 
 ### `VENFORK_ORG`
 

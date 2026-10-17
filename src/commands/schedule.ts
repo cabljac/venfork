@@ -1,4 +1,3 @@
-import * as p from '@clack/prompts';
 import {
   readVenforkConfigFromRepo,
   type ScheduleAuth,
@@ -18,6 +17,7 @@ import {
   pushTokenAdvice,
   secretDeleteCommands,
 } from '../shared/push-token.js';
+import * as p from '../shared/ui.js';
 import { parseRepoPath } from '../utils.js';
 
 const MIRROR_PLACEHOLDER = '<owner>/<mirror>';

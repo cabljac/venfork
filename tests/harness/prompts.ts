@@ -1,4 +1,7 @@
-import { mock } from 'bun:test';
+import { expect, mock } from 'bun:test';
+
+/** Matches the options src/shared/ui.ts hands clack: output on stderr. */
+export const ON_STDERR = expect.objectContaining({ output: process.stderr });
 
 const noop = () => {};
 const logError = mock(noop);

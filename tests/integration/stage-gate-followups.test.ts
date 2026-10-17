@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import * as prompts from '@clack/prompts';
 import { $ } from 'execa';
-import { quietPrompts } from '../harness/prompts.js';
+import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
@@ -63,7 +63,8 @@ async function expectRefused(message: string): Promise<void> {
     new CommandExitError(1)
   );
   expect(prompts.log.error).toHaveBeenCalledWith(
-    expect.stringContaining(message)
+    expect.stringContaining(message),
+    ON_STDERR
   );
   expect(await refExists(fx.publicFork ?? '', 'refs/heads/feature')).toBe(
     false
@@ -126,7 +127,8 @@ describe('preserve add verifies each entry is a file on origin', () => {
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining(`Cannot preserve '${DIR}': it is a directory`)
+      expect.stringContaining(`Cannot preserve '${DIR}': it is a directory`),
+      ON_STDERR
     );
     expect((await fx.readRawConfig()).preserve).toBeUndefined();
   });
@@ -139,7 +141,8 @@ describe('preserve add verifies each entry is a file on origin', () => {
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining(
         `Cannot preserve '${DOC}': it does not exist on origin/main`
-      )
+      ),
+      ON_STDERR
     );
   });
 
@@ -164,7 +167,8 @@ describe('preserve add verifies each entry is a file on origin', () => {
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining(
         "Cannot preserve 'vendor/lib': it is not a file on origin/main"
-      )
+      ),
+      ON_STDERR
     );
     expect((await fx.readRawConfig()).preserve).toBeUndefined();
   });

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { chmod } from 'node:fs/promises';
 import * as prompts from '@clack/prompts';
 import { $ } from 'execa';
-import { quietPrompts } from '../harness/prompts.js';
+import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
@@ -125,7 +125,8 @@ describe('stage against real repos', () => {
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining(`preserved mirror-only path(s) ${CALLER}`)
+      expect.stringContaining(`preserved mirror-only path(s) ${CALLER}`),
+      ON_STDERR
     );
   });
 });
@@ -159,7 +160,8 @@ async function expectLeakRefused(): Promise<void> {
     new CommandExitError(1)
   );
   expect(prompts.log.error).toHaveBeenCalledWith(
-    expect.stringContaining(`mirror-only path(s) ${DOC}`)
+    expect.stringContaining(`mirror-only path(s) ${DOC}`),
+    ON_STDERR
   );
   expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(false);
 }
@@ -209,7 +211,8 @@ describe('stage refuses branches that are not upstream work', () => {
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining("holds venfork's private configuration")
+      expect.stringContaining("holds venfork's private configuration"),
+      ON_STDERR
     );
     expect(await refExists(pushTarget(), 'refs/heads/venfork-config')).toBe(
       false
@@ -227,7 +230,8 @@ describe('stage refuses branches that are not upstream work', () => {
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining('no history in common with upstream/main')
+      expect.stringContaining('no history in common with upstream/main'),
+      ON_STDERR
     );
     expect(await refExists(pushTarget(), 'refs/heads/lonely')).toBe(false);
   });

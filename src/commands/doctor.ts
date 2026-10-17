@@ -1,4 +1,3 @@
-import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import {
   preserveRemoveHint,
@@ -33,6 +32,7 @@ import {
   isUnpinnedWorkflow,
   pinnedVenforkVersion,
 } from '../shared/semver.js';
+import * as p from '../shared/ui.js';
 import { parseRepoPath } from '../utils.js';
 import { VENFORK_VERSION } from '../version.js';
 import { generateSyncWorkflow, type SyncAuth } from '../workflow.js';

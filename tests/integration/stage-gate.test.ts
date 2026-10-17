@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import * as prompts from '@clack/prompts';
 import { $ } from 'execa';
-import { quietPrompts } from '../harness/prompts.js';
+import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
@@ -71,7 +71,8 @@ async function publishedText(repo: string, range: string): Promise<string> {
 async function expectRefused(branch: string, message: string): Promise<void> {
   await expect(stageCommand(branch)).rejects.toThrow(new CommandExitError(1));
   expect(prompts.log.error).toHaveBeenCalledWith(
-    expect.stringContaining(message)
+    expect.stringContaining(message),
+    ON_STDERR
   );
   expect(await refExists(target(), `refs/heads/${branch}`)).toBe(false);
 }
@@ -255,7 +256,8 @@ describe.each(['standard', 'no-public'] as const)(
       );
 
       expect(prompts.log.error).toHaveBeenCalledWith(
-        expect.stringContaining("upstream's default branch")
+        expect.stringContaining("upstream's default branch"),
+        ON_STDERR
       );
       expect(await fx.sha(target(), 'main')).toBe(before);
     });

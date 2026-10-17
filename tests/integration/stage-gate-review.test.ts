@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import * as prompts from '@clack/prompts';
 import { $ } from 'execa';
 import { seedPreserve } from '../harness/preserve.js';
-import { quietPrompts } from '../harness/prompts.js';
+import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
@@ -64,7 +64,8 @@ async function expectRefused(...messages: string[]): Promise<void> {
   );
   for (const message of messages) {
     expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining(message)
+      expect.stringContaining(message),
+      ON_STDERR
     );
   }
   expect(await published()).toBe(false);

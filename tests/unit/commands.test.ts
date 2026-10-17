@@ -3,6 +3,7 @@ import * as realFsPromises from 'node:fs/promises';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import * as clack from '@clack/prompts';
+import { ON_STDERR } from '../harness/prompts.js';
 
 /**
  * Command tests with execution-based mocking
@@ -834,7 +835,8 @@ describe('setupCommand - idempotent recovery', () => {
     expect(clack.log.error).toHaveBeenCalledWith(
       expect.stringContaining(
         'existing venfork-config disagrees with this setup: mode is no-public (expected standard); upstreamUrl is git@github.com:other/project.git (expected git@github.com:test/repo.git); publicForkUrl is (none) (expected git@github.com:testuser/repo.git)'
-      )
+      ),
+      ON_STDERR
     );
     expect(execaCalls.some((c) => c.includes('git remote set-url'))).toBe(
       false
@@ -3525,7 +3527,8 @@ describe('cloneCommand - error paths', () => {
     );
 
     expect(clack.log.error).toHaveBeenCalledWith(
-      "Directory 'project-private' already exists."
+      "Directory 'project-private' already exists.",
+      ON_STDERR
     );
     expect(execaCalls.some((cmd) => cmd.includes('gh repo clone'))).toBe(false);
   });
@@ -3740,7 +3743,8 @@ describe('syncCommand - error paths', () => {
     await expect(syncCommand('main')).rejects.toThrow(new CommandExitError(1));
 
     expect(clack.log.error).toHaveBeenLastCalledWith(
-      'upstream/main not found after fetch. Check the upstream remote and the default branch name.'
+      'upstream/main not found after fetch. Check the upstream remote and the default branch name.',
+      ON_STDERR
     );
   });
 
@@ -3985,7 +3989,8 @@ describe('stageCommand --pr payload', () => {
     expect(clack.log.error).toHaveBeenCalledWith(
       expect.stringContaining(
         "upstream remote '/srv/git/upstream.git' is not a GitHub repository"
-      )
+      ),
+      ON_STDERR
     );
     expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
   });

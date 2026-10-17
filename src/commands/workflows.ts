@@ -1,4 +1,3 @@
-import * as p from '@clack/prompts';
 import {
   readVenforkConfigFromRepo,
   updateVenforkConfig,
@@ -6,6 +5,7 @@ import {
 } from '../config.js';
 import { CommandExitError } from '../errors.js';
 import { normalizeWorkflowList } from '../shared/mirror-commit.js';
+import * as p from '../shared/ui.js';
 import type { WorkflowsAction } from '../workflows-args.js';
 
 const LIST_EDITS: Record<

@@ -1,4 +1,3 @@
-import * as p from '@clack/prompts';
 import { $ } from 'execa';
 import {
   assertNoInvalidPreserve,
@@ -37,6 +36,7 @@ import {
   assertPublishableCommits,
   collectMirrorBlobs,
 } from '../shared/stage-gate.js';
+import * as p from '../shared/ui.js';
 import {
   createUpstreamPr,
   editUpstreamPrBody,
