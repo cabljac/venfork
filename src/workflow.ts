@@ -8,6 +8,13 @@ export function getSyncWorkflowPath(): string {
   return WORKFLOW_FILENAME;
 }
 
+/**
+ * Pinned by commit SHA; the job runs the bundled CLI on Node 22, the
+ * `engines.node` floor, whatever Node the runner image ships.
+ */
+export const SETUP_NODE_ACTION =
+  'actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0';
+
 /** Pinned by commit SHA so a moved tag cannot change what runs with the App key. */
 export const CREATE_APP_TOKEN_ACTION =
   'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0';
@@ -210,7 +217,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-${steps.check}      - name: Install venfork
+${steps.check}      - name: Set up Node.js
+        uses: ${SETUP_NODE_ACTION}
+        with:
+          node-version: '22'
+      - name: Install venfork
         env:
           VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
         shell: bash

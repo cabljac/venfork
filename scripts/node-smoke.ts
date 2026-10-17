@@ -1,16 +1,41 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { $ } from 'execa';
 import { createMirrorFixture } from '../tests/harness/mirror-fixture.js';
-import { verifyDoctorOutput } from './smoke-checks.js';
+import {
+  enginesFloorShortfall,
+  runtimeDependencyEngines,
+  verifyDoctorOutput,
+} from './smoke-checks.js';
 
 /**
- * Runs the built CLI under the `node` on PATH against a local fixture and
- * checks that `doctor --json` exits 0 and prints the expected checks, all ok.
- * Run after `bun run build`.
+ * Fails when a runtime dependency needs a newer Node than `engines.node`
+ * admits, then runs the built CLI under the `node` on PATH against a local
+ * fixture and checks that `doctor --json` exits 0 and prints the expected
+ * checks, all ok. Run after `bun run build`.
  */
-const entry = path.resolve(import.meta.dir, '..', 'dist', 'index.js');
+const root = path.resolve(import.meta.dir, '..');
+const { engines } = JSON.parse(
+  await readFile(path.join(root, 'package.json'), 'utf8')
+) as { engines: { node: string } };
+const shortfall = enginesFloorShortfall(
+  engines.node,
+  await runtimeDependencyEngines(root)
+);
+if (shortfall.length > 0) {
+  throw new Error(
+    `engines.node ${engines.node} admits a Node older than ${shortfall.join(', ')} supports; raise engines.node`
+  );
+}
+const entry = path.join(root, 'dist', 'index.js');
 const tmp = await mkdtemp(path.join(os.tmpdir(), 'venfork-node-smoke-'));
 const fx = await createMirrorFixture();
 try {

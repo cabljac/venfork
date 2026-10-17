@@ -17,6 +17,7 @@ import {
   CREATE_APP_TOKEN_ACTION,
   generateSyncWorkflow,
   getSyncWorkflowPath,
+  SETUP_NODE_ACTION,
   type SyncAuth,
 } from '../../src/workflow.js';
 
@@ -30,6 +31,28 @@ describe('workflow helpers', () => {
     expect(workflow).toContain("cron: '0 */6 * * *'");
     expect(workflow).toContain('workflow_dispatch');
     expect(workflow).toContain('run: venfork sync --report-issues');
+  });
+
+  test('sets up Node 22 with a SHA-pinned setup-node before installing venfork', () => {
+    const auths: SyncAuth[] = [
+      { kind: 'token' },
+      { kind: 'app', publicRepo: { owner: 'vendor', name: 'widget' } },
+    ];
+    for (const auth of auths) {
+      const workflow = generateSyncWorkflow(
+        '0 */6 * * *',
+        'standard',
+        VENFORK_VERSION,
+        auth
+      );
+      expect(SETUP_NODE_ACTION).toMatch(
+        /^actions\/setup-node@[0-9a-f]{40} # v\d+\.\d+\.\d+$/
+      );
+      const setup = workflow.indexOf(`uses: ${SETUP_NODE_ACTION}\n`);
+      expect(setup).toBeGreaterThan(-1);
+      expect(workflow.slice(setup)).toContain("node-version: '22'");
+      expect(setup).toBeLessThan(workflow.indexOf('- name: Install venfork'));
+    }
   });
 
   test('checkout uses the VENFORK_PUSH_TOKEN secret with no github.token fallback', () => {

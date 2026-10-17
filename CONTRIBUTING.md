@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Venfork! This guide will help you
 
 ### Prerequisites
 
-- **Node.js 18+** or **Bun** (recommended for faster development)
+- **Node.js 22+** or **Bun** (recommended for faster development)
 - **GitHub CLI (`gh`)** installed and authenticated
 - **Git** configured with SSH keys
 

@@ -30,6 +30,10 @@ jobs:
             echo "::error::VENFORK_PUSH_TOKEN is not set on this repository. Create a fine-grained token with Contents and Workflows write for the mirror and the public fork, then: gh secret set VENFORK_PUSH_TOKEN --repo $GITHUB_REPOSITORY --body <token>"
             exit 1
           fi
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
       - name: Install venfork
         env:
           VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
@@ -159,6 +163,10 @@ jobs:
             exit 1
           fi
           echo "mirror=\${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
       - name: Install venfork
         env:
           VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
@@ -296,6 +304,10 @@ jobs:
             exit 1
           fi
           echo "mirror=\${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
       - name: Install venfork
         env:
           VENFORK_INSTALL_SPEC: \${{ vars.VENFORK_INSTALL_SPEC }}
