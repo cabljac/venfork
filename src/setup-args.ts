@@ -10,6 +10,8 @@ export type ParsedSetupArgs = {
   upstreamUrl?: string;
   privateMirrorName?: string;
   organization?: string;
+  /** True when `organization` came from `VENFORK_ORG`, not `--org`. */
+  organizationFromEnv?: boolean;
   publicForkRepoName?: string;
   noPublic: boolean;
   /** `--yes` / `--no-input`. */
@@ -59,6 +61,9 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
     upstreamUrl: positional[0],
     privateMirrorName: positional[1],
     organization: organization ?? process.env.VENFORK_ORG,
+    ...(organization === undefined && process.env.VENFORK_ORG !== undefined
+      ? { organizationFromEnv: true }
+      : {}),
     publicForkRepoName: trimmedForkName,
     noPublic,
     prompt: promptFlags.prompt,

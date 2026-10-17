@@ -328,6 +328,7 @@ function setupCommand(
     noPublic?: boolean;
     syncMirror?: (cwd: string) => Promise<void>;
     prompt?: { yes: boolean; noInput: boolean };
+    organizationFromEnv?: boolean;
   } = {}
 ): Promise<void> {
   return runSetupCommand(
@@ -3419,6 +3420,69 @@ describe('setupCommand - VENFORK_ORG environment variable', () => {
     );
     expect(createCalls.length).toBe(0);
   });
+  test('VENFORK_ORG set to own username still needs --yes without a TTY', async () => {
+    process.stdin.isTTY = false;
+
+    const err = await setupCommand(
+      'git@github.com:test/repo.git',
+      'test-vendor',
+      'testuser',
+      undefined,
+      { organizationFromEnv: true }
+    ).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(MissingInputError);
+    expect((err as MissingInputError).flag).toBe('--yes');
+    expect(execaCalls.some((cmd) => cmd.includes('gh repo fork'))).toBe(false);
+  });
+
+  test('--org matches the gh login case-insensitively', async () => {
+    process.stdin.isTTY = false;
+    const confirm = clack.confirm as unknown as ReturnType<typeof mock>;
+    confirm.mockClear();
+
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        'TestUser'
+      );
+    } catch {
+      // Expected in mocked env
+    }
+
+    expect(confirm).not.toHaveBeenCalled();
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls.some((cmd) => cmd.includes('--org'))).toBe(false);
+  });
+
+  test('--org <own username> uses the personal account with no confirm, even without a TTY', async () => {
+    process.stdin.isTTY = false;
+    const confirm = clack.confirm as unknown as ReturnType<typeof mock>;
+    confirm.mockClear();
+
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        'testuser'
+      );
+    } catch {
+      // Expected in mocked env
+    }
+
+    expect(confirm).not.toHaveBeenCalled();
+    const forkCalls = execaCalls.filter((cmd) => cmd.includes('gh repo fork'));
+    expect(forkCalls.length).toBeGreaterThan(0);
+    expect(forkCalls.some((cmd) => cmd.includes('--org'))).toBe(false);
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('gh repo clone') && cmd.includes('testuser/test-vendor')
+      )
+    ).toBe(true);
+  });
 });
 
 describe('setupCommand - error paths', () => {
@@ -3621,6 +3685,262 @@ describe('cloneCommand - error paths', () => {
     );
     expect(execaCalls.some((cmd) => cmd.includes('gh repo clone'))).toBe(false);
   });
+});
+
+describe('cloneCommand --public-fork and legacy prompts', () => {
+  type TextOptions = {
+    message: string;
+    validate?: (value: string | undefined) => string | undefined;
+  };
+  const textMock = () => clack.text as unknown as ReturnType<typeof mock>;
+  const textCalls = (): TextOptions[] =>
+    textMock().mock.calls.map((call) => call[0] as TextOptions);
+  const remoteAdds = () =>
+    execaCalls.filter((cmd) => cmd.startsWith('git remote add'));
+  const forkLookups = () =>
+    execaCalls.filter(
+      (cmd) => cmd.startsWith('gh repo view') && !cmd.includes('--json')
+    );
+
+  function useSsh(): void {
+    mockResponses.set('gh config get git_protocol', {
+      exitCode: 0,
+      stdout: 'ssh\n',
+      stderr: '',
+    });
+  }
+
+  function useConfig(config: Record<string, unknown>): void {
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({ version: '1', ...config }),
+      stderr: '',
+    });
+  }
+
+  function failForkDetection(): void {
+    mockResponses.set('gh repo view acme/project', (command) =>
+      command.includes('--json parent')
+        ? Promise.resolve({
+            exitCode: 0,
+            stdout: 'https://github.com/upstream/original.git',
+            stderr: '',
+          })
+        : Promise.reject(new Error('Could not resolve to a Repository'))
+    );
+  }
+
+  function failParentLookup(): void {
+    mockResponses.set('--json parent', {
+      exitCode: 0,
+      stdout: 'null',
+      stderr: '',
+    });
+  }
+
+  beforeEach(() => {
+    textMock().mockClear();
+    useSsh();
+  });
+
+  test('legacy mirror: --public-fork skips fork detection and reads upstream from that fork', async () => {
+    await cloneCommand('acme/project-private', {
+      publicForkUrl: 'other-org/project-fork',
+    });
+
+    expect(forkLookups()).toEqual([]);
+    expect(
+      execaCalls.some((cmd) =>
+        cmd.startsWith('gh repo view other-org/project-fork --json parent')
+      )
+    ).toBe(true);
+    expect(remoteAdds()).toEqual([
+      'git remote add public git@github.com:other-org/project-fork.git',
+      'git remote add upstream git@github.com:upstream/original.git',
+    ]);
+    expect(textMock()).not.toHaveBeenCalled();
+  });
+
+  test('legacy mirror: --public-fork with --upstream makes no gh repo view call', async () => {
+    await cloneCommand('acme/project-private', {
+      publicForkUrl: 'https://github.com/other-org/project-fork',
+      upstreamUrl: 'git@github.com:upstream/original.git',
+    });
+
+    expect(execaCalls.some((cmd) => cmd.startsWith('gh repo view'))).toBe(
+      false
+    );
+    expect(remoteAdds()).toEqual([
+      'git remote add public git@github.com:other-org/project-fork.git',
+      'git remote add upstream git@github.com:upstream/original.git',
+    ]);
+  });
+
+  test('an invalid --public-fork exits 1 before cloning', async () => {
+    await expect(
+      cloneCommand('acme/project-private', { publicForkUrl: 'not a repo' })
+    ).rejects.toThrow(new CommandExitError(1));
+
+    expect(clack.log.error).toHaveBeenCalledWith(
+      'Invalid --public-fork. Use a GitHub URL or owner/repo (e.g. acme/project).',
+      ON_STDERR
+    );
+    expect(execaCalls.some((cmd) => cmd.includes('gh repo clone'))).toBe(false);
+  });
+
+  test('--public-fork with --no-public is refused before cloning', async () => {
+    await expect(
+      cloneCommand('acme/project-private', {
+        noPublic: true,
+        publicForkUrl: 'acme/project',
+      })
+    ).rejects.toThrow('--public-fork cannot be combined with --no-public');
+
+    expect(execaCalls.some((cmd) => cmd.includes('gh repo clone'))).toBe(false);
+  });
+
+  test('with a config branch, a --public-fork naming the recorded fork is accepted', async () => {
+    useConfig({
+      publicForkUrl: 'https://github.com/acme/project.git',
+      upstreamUrl: 'git@github.com:upstream/original.git',
+    });
+
+    await cloneCommand('acme/project-private', {
+      publicForkUrl: 'acme/project',
+    });
+
+    expect(remoteAdds()).toEqual([
+      'git remote add public git@github.com:acme/project.git',
+      'git remote add upstream git@github.com:upstream/original.git',
+    ]);
+  });
+
+  test('with a config branch, a different --public-fork is refused and adds no remotes', async () => {
+    useConfig({
+      publicForkUrl: 'git@github.com:acme/project.git',
+      upstreamUrl: 'git@github.com:upstream/original.git',
+    });
+
+    await expect(
+      cloneCommand('acme/project-private', {
+        publicForkUrl: 'other-org/project',
+      })
+    ).rejects.toThrow(new CommandExitError(1));
+
+    expect(clack.log.error).toHaveBeenCalledWith(
+      "Refusing to override venfork-config: --public-fork='other-org/project' but config records publicForkUrl='git@github.com:acme/project.git'.",
+      ON_STDERR
+    );
+    expect(remoteAdds()).toEqual([]);
+  });
+
+  test('with a no-public config branch, --public-fork is refused', async () => {
+    useConfig({
+      mode: 'no-public',
+      upstreamUrl: 'git@github.com:upstream/original.git',
+    });
+
+    await expect(
+      cloneCommand('acme/project-private', { publicForkUrl: 'acme/project' })
+    ).rejects.toThrow(new CommandExitError(1));
+
+    expect(clack.log.error).toHaveBeenCalledWith(
+      'Refusing to clone with --public-fork: the venfork-config branch records mode=no-public.',
+      ON_STDERR
+    );
+    expect(remoteAdds()).toEqual([]);
+  });
+
+  test('with a config branch, --upstream naming the recorded repo over another transport is accepted', async () => {
+    useConfig({
+      publicForkUrl: 'git@github.com:acme/project.git',
+      upstreamUrl: 'git@github.com:upstream/original.git',
+    });
+
+    await cloneCommand('acme/project-private', {
+      upstreamUrl: 'https://github.com/upstream/original',
+    });
+
+    expect(remoteAdds()).toContain(
+      'git remote add upstream git@github.com:upstream/original.git'
+    );
+  });
+
+  test('legacy mirror without a TTY: the fork prompt throws naming --public-fork <url>', async () => {
+    failForkDetection();
+    process.stdin.isTTY = false;
+
+    const err = await cloneCommand('acme/project-private').catch(
+      (e: unknown) => e
+    );
+
+    expect(err).toBeInstanceOf(MissingInputError);
+    expect((err as MissingInputError).flag).toBe('--public-fork <url>');
+    expect(remoteAdds()).toEqual([]);
+  });
+
+  test('the fork prompt rejects an empty or non-GitHub answer and normalizes owner/repo', async () => {
+    failForkDetection();
+    textMock().mockImplementationOnce(() => Promise.resolve('other-org/fork'));
+
+    await cloneCommand('acme/project-private');
+
+    const forkPrompt = textCalls()[0];
+    expect(forkPrompt.message).toBe('Please provide the public fork URL:');
+    expect(forkPrompt.validate?.(undefined)).toBe(
+      'Public fork URL is required'
+    );
+    expect(forkPrompt.validate?.('  ')).toBe('Public fork URL is required');
+    expect(forkPrompt.validate?.('not a repo')).toBe(
+      'Use a GitHub URL or owner/repo (e.g. acme/project)'
+    );
+    expect(forkPrompt.validate?.('other-org/fork')).toBeUndefined();
+    expect(remoteAdds()[0]).toBe(
+      'git remote add public git@github.com:other-org/fork.git'
+    );
+  });
+
+  test('the upstream prompts reject an empty answer', async () => {
+    failParentLookup();
+    textMock().mockImplementationOnce(() =>
+      Promise.resolve(' git@github.com:upstream/original.git ')
+    );
+
+    await cloneCommand('acme/project-private');
+    await cloneCommand('acme/project-private', { noPublic: true }).catch(
+      () => undefined
+    );
+
+    const [parentPrompt, noPublicPrompt] = textCalls();
+    expect(parentPrompt.message).toBe('Please provide the upstream URL:');
+    expect(noPublicPrompt.message).toStartWith('Upstream URL?');
+    for (const prompt of [parentPrompt, noPublicPrompt]) {
+      expect(prompt.validate?.(undefined)).toBe('Upstream URL is required');
+      expect(prompt.validate?.(' ')).toBe('Upstream URL is required');
+      expect(prompt.validate?.('git@github.com:a/b.git')).toBeUndefined();
+    }
+    expect(remoteAdds()).toContain(
+      'git remote add upstream git@github.com:upstream/original.git'
+    );
+  });
+
+  test.each([
+    ['public fork', failForkDetection, {}],
+    ['upstream (parent lookup)', failParentLookup, {}],
+    ['upstream (--no-public)', () => {}, { noPublic: true }],
+  ])(
+    'a cancelled %s prompt exits 130 and adds no remotes',
+    async (_name, arrange, options) => {
+      arrange();
+      promptCancelled = true;
+
+      await expect(
+        cloneCommand('acme/project-private', options)
+      ).rejects.toThrow(new CommandExitError(130));
+
+      expect(remoteAdds()).toEqual([]);
+    }
+  );
 });
 
 describe('syncCommand - error paths', () => {

@@ -9,7 +9,8 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   <upstream>: GitHub HTTPS/SSH URL, or shorthand owner/repo (e.g. facebook/react)
 
   Options:
-  • --org <name>       Create repos under organization instead of user account
+  • --org <name>       Create repos under organization instead of user account.
+                       Your own username keeps the personal account with no confirm
   • --fork-name <name> Public fork repo name under owner (gh repo fork --fork-name).
                        Use when upstream is already owner/repo so the fork needs a different name.
   • --no-public        Skip the public fork hop entirely. Only origin + upstream are
@@ -27,7 +28,7 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'clone',
-    `venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--no-input]
+    `venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--no-input]
   Clone an existing vendor setup and configure remotes automatically
   <vendor-repo>: URL or owner/repo for the private mirror
 
@@ -40,6 +41,8 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   Options (only meaningful when venfork-config is absent):
   • --no-public        Declare a no-public layout (origin + upstream only)
   • --upstream <url>   Provide the upstream URL explicitly (skips auto-detect/prompt)
+  • --public-fork <url> Provide the public fork URL or owner/repo (skips auto-detect/prompt);
+                       not with --no-public
   • --no-input         Never prompt; a URL that would be asked for exits 2`,
   ],
   [

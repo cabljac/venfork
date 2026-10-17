@@ -15,16 +15,16 @@ tests:
 
 - Needs gh auth first (`AuthenticationError`).
 - Refuses an empty or invalid repo ("Invalid vendor repository") and an existing `./<name>` directory ("Directory '<name>' already exists."). Both exit 1.
-- `gh repo clone <owner/name> <name>`, then reads `venfork-config` from the mirror. When it exists it is authoritative: `--no-public` on a standard config and a different `--upstream` are refused.
-- Legacy mirror without a config: guesses the public fork by stripping `-private` (`gh repo view`), then the upstream from the fork's parent. Each failed guess prompts for a URL. `--no-public` skips the fork; `--upstream` skips the parent lookup.
+- `gh repo clone <owner/name> <name>`, then reads `venfork-config` from the mirror. When it exists it is authoritative: `--no-public` on a standard config, `--public-fork` on a no-public config, and an `--upstream` or `--public-fork` naming another repo are refused (exit 1). A flag naming the recorded repo in another URL form is accepted.
+- Legacy mirror without a config: guesses the public fork by stripping `-private` (`gh repo view`), then the upstream from the fork's parent. Each failed guess prompts for a URL; an empty answer is rejected by `validate`, and the fork answer must be a GitHub URL or `owner/repo`. `--no-public` skips the fork; `--public-fork <url>` (URL or `owner/repo`) skips the fork guess and its prompt, and the parent lookup then runs on that fork; `--upstream` skips the parent lookup. `--public-fork` with `--no-public` is refused, and an invalid `--public-fork` exits 1 before cloning.
 - Adds `public` (standard mode) and `upstream` with push URL `DISABLE`. URLs follow `gh config get git_protocol`. Runs `gh repo set-default`.
-- A cancelled URL prompt exits 1, not 130. A prompt that hits stdin EOF exits 130.
-- Never prompts without a TTY on stdin, with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`: a URL prompt exits 2 (`MissingInputError`) naming `--upstream <url>` (or `--no-public --upstream <url>` for the public fork URL). `--yes` is refused: clone has no confirm. Any failure or cancel after the clone removes the cloned directory, so the rerun with the named flag works.
+- A cancelled URL prompt exits 130 (`CommandExitError(130)`), and so does a prompt that hits stdin EOF.
+- Never prompts without a TTY on stdin, with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`: a URL prompt exits 2 (`MissingInputError`) naming `--public-fork <url>` for the public fork URL and `--upstream <url>` for the upstream URL. `--yes` is refused: clone has no confirm. Any failure or cancel after the clone removes the cloned directory, so the rerun with the named flag works.
 - It never writes `venfork-config` and never pushes.
 
 ## How a user reaches it
 
-`venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--no-input]`. `<vendor-repo>` is the private mirror as a GitHub URL or `owner/repo`.
+`venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--no-input]`. `<vendor-repo>` is the private mirror as a GitHub URL or `owner/repo`.
 
 ## How to drive it
 
@@ -39,7 +39,8 @@ venfork clone a/b-private </dev/null 2>&1 | grep "gh stub"               # exit 
 ```
 
 - Already current: a second clone into the same directory is refused, which is the idempotence guard.
-- Cancel at a URL prompt, the exit-2 URL prompts and the concurrent lease path are not reachable on the fixture: the first gh call fails first. `tests/unit/commands.test.ts` pins the `--no-input` exit-2 path.
+- The fixture's gh stub fails `gh repo clone`, so the legacy paths need a gh that clones the fixture origin. `tests/integration/cli.test.ts` ("clone on a legacy mirror without venfork-config") deletes origin's `venfork-config` branch and uses such a stub: `clone acme/legacy-private --public-fork other-org/legacy` exits 0 with `public` = `git@github.com:other-org/legacy.git` and `upstream` = the fixture upstream (push `DISABLE`), and the same clone without `--public-fork` and without a TTY exits 2 with "Pass --public-fork <url>.".
+- Cancel at a URL prompt needs a TTY; `tests/unit/commands.test.ts` pins the exit-130 paths and the `validate` rules.
 
 ## What proves it
 

@@ -112,6 +112,7 @@ async function assertExistingConfigAgrees(
  * @param publicForkRepoName - Optional GitHub repo name for the public fork under `owner` (see `gh repo fork --fork-name`). Defaults to the upstream repo basename. Use when the fork must differ (e.g. same org as upstream).
  * @param options.noPublic - Skip the public-fork hop entirely. Only `origin` (private mirror) and `upstream` are configured; `stage` later pushes branches directly to `upstream`. Mutually exclusive with `publicForkRepoName`.
  * @param options.prompt - `--yes` answers the personal-account confirm; `--no-input` never prompts.
+ * @param options.organizationFromEnv - `organization` came from `VENFORK_ORG`, so naming your own account there is not consent.
  * @param options.syncMirror - Quietly syncs the local clone at `cwd` when the fork or mirror already existed on GitHub.
  */
 export async function setupCommand(
@@ -123,6 +124,7 @@ export async function setupCommand(
     noPublic?: boolean;
     syncMirror: (cwd: string) => Promise<void>;
     prompt?: PromptContext;
+    organizationFromEnv?: boolean;
   }
 ): Promise<void> {
   const noPublic = options.noPublic === true;
@@ -225,13 +227,17 @@ export async function setupCommand(
   const s = p.spinner();
   const username = await getGitHubUsername();
 
-  // If organization is the user's personal account, treat it as no organization
-  if (organization && organization === username) {
+  const ownAccount =
+    organization !== undefined &&
+    username !== '' &&
+    organization.toLowerCase() === username.toLowerCase();
+  // Only `--org <you>` is consent; a VENFORK_ORG value is ambient.
+  const personalAccountChosen = ownAccount && !options.organizationFromEnv;
+  if (ownAccount) {
     organization = undefined;
   }
 
-  // If no organization is specified, confirm before using personal account
-  if (!organization) {
+  if (!organization && !personalAccountChosen) {
     p.log.warn('⚠️  No organization specified');
     p.log.info(
       `Repos will be created under your personal account (username: ${username})`

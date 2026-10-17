@@ -87,6 +87,7 @@ async function main(): Promise<void> {
           noPublic: parsed.noPublic,
           syncMirror: setupSyncMirror(),
           prompt: parsed.prompt,
+          organizationFromEnv: parsed.organizationFromEnv,
         }
       );
       break;
@@ -96,6 +97,7 @@ async function main(): Promise<void> {
       await cloneCommand(parsed.vendorRepoUrl, {
         noPublic: parsed.noPublic,
         upstreamUrl: parsed.upstreamUrl,
+        publicForkUrl: parsed.publicForkUrl,
         prompt: parsed.prompt,
       });
       break;

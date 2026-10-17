@@ -25,15 +25,47 @@ async function removePartialClone(dir: string): Promise<void> {
   }
 }
 
+/** True when two remote URLs name the same repository. */
+function sameRepo(a: string, b: string): boolean {
+  const pathA = parseRepoPath(a).toLowerCase();
+  const pathB = parseRepoPath(b).toLowerCase();
+  if (pathA && pathB) return pathA === pathB;
+  return a.trim() === b.trim();
+}
+
+/** Canonical URL of a GitHub public fork given as a URL or owner/repo, or ''. */
+function publicForkInput(value: string): string {
+  const url = normalizeGitHubRepoInput(value);
+  return parseRepoPath(url) ? url : '';
+}
+
+function validatePublicFork(value: string): string | undefined {
+  if (!value.trim()) return 'Public fork URL is required';
+  if (!publicForkInput(value)) {
+    return 'Use a GitHub URL or owner/repo (e.g. acme/project)';
+  }
+  return undefined;
+}
+
+function validateUpstream(value: string): string | undefined {
+  return value.trim() ? undefined : 'Upstream URL is required';
+}
+
 /**
  * Clone command: Clone vendor repository and configure all remotes. A run
  * that fails or is cancelled after cloning removes the clone.
+ *
+ * @param options.noPublic - Legacy mirrors only: the mirror has no public fork.
+ * @param options.upstreamUrl - Legacy mirrors only: upstream URL, skips detection.
+ * @param options.publicForkUrl - Legacy mirrors only: public fork URL or owner/repo, skips detection.
+ * @param options.prompt - `--no-input`: never prompt.
  */
 export async function cloneCommand(
   vendorRepoUrl?: string,
   options: {
     noPublic?: boolean;
     upstreamUrl?: string;
+    publicForkUrl?: string;
     /** `--no-input`. */
     prompt?: PromptContext;
   } = {}
@@ -51,6 +83,22 @@ export async function cloneCommand(
   if (!parseRepoPath(vendorCloneUrl)) {
     p.log.error(
       'Invalid vendor repository. Use a GitHub URL or owner/repo (e.g. invertase/project-private).'
+    );
+    p.outro('❌ Clone failed');
+    throw new CommandExitError(1);
+  }
+
+  if (options.noPublic && options.publicForkUrl) {
+    throw new Error(
+      '--public-fork cannot be combined with --no-public: --no-public means the mirror has no public fork.'
+    );
+  }
+  const publicForkFlag = options.publicForkUrl
+    ? publicForkInput(options.publicForkUrl)
+    : undefined;
+  if (publicForkFlag === '') {
+    p.log.error(
+      'Invalid --public-fork. Use a GitHub URL or owner/repo (e.g. acme/project).'
     );
     p.outro('❌ Clone failed');
     throw new CommandExitError(1);
@@ -103,7 +151,23 @@ export async function cloneCommand(
           'Refusing to clone with --no-public: the venfork-config branch records mode=standard. To convert an existing setup, re-run `venfork setup` instead.'
         );
       }
-      if (options.upstreamUrl && options.upstreamUrl !== config.upstreamUrl) {
+      if (publicForkFlag && configMode === 'no-public') {
+        throw new Error(
+          'Refusing to clone with --public-fork: the venfork-config branch records mode=no-public.'
+        );
+      }
+      if (
+        publicForkFlag &&
+        !sameRepo(publicForkFlag, config.publicForkUrl ?? '')
+      ) {
+        throw new Error(
+          `Refusing to override venfork-config: --public-fork='${options.publicForkUrl}' but config records publicForkUrl='${config.publicForkUrl ?? '(missing)'}'.`
+        );
+      }
+      if (
+        options.upstreamUrl &&
+        !sameRepo(options.upstreamUrl, config.upstreamUrl)
+      ) {
         throw new Error(
           `Refusing to override venfork-config: --upstream='${options.upstreamUrl}' but config records upstreamUrl='${config.upstreamUrl}'.`
         );
@@ -132,8 +196,7 @@ export async function cloneCommand(
         );
       }
     } else {
-      // No config branch (legacy mirror). Fall back to auto-detection,
-      // honoring `--no-public` / `--upstream` flags as the explicit override.
+      // No config branch (legacy mirror): flags override auto-detection.
       noPublic = options.noPublic === true;
       s.stop(
         noPublic
@@ -153,59 +216,31 @@ export async function cloneCommand(
                 'Upstream URL? (no venfork-config branch was found, so it cannot be auto-detected)',
               flag: '--upstream <url>',
               placeholder: 'git@github.com:owner/repo.git',
+              validate: validateUpstream,
             },
             options.prompt
           );
-          if (isCancel(response) || !response.trim()) {
+          if (isCancel(response)) {
             p.outro('❌ Clone cancelled');
-            throw new CommandExitError(1);
+            throw new CommandExitError(130);
           }
           upstreamUrl = response.trim();
         }
       } else {
-        // Step 3a: Auto-detect public fork
-        s.start('Detecting public fork');
-
-        // Try to strip -private suffix
-        let publicRepoName = vendorRepoName;
-        if (vendorRepoName.endsWith('-private')) {
-          publicRepoName = vendorRepoName.replace(/-private$/, '');
-        }
-
-        // Verify public fork exists
-        try {
-          await $`gh repo view ${owner}/${publicRepoName}`;
-          publicForkUrl = `git@github.com:${owner}/${publicRepoName}.git`;
-          s.stop(`Found public fork: ${owner}/${publicRepoName}`);
-        } catch {
-          s.stop('Public fork not found');
-
-          p.log.warn('⚠️  Could not auto-detect public fork.');
-          p.note(
-            `Tried: ${owner}/${publicRepoName}\n\nTip: if this mirror has no public fork, re-run with --no-public --upstream <url>.`,
-            'Detection Failed'
-          );
-
-          const response = await promptText(
-            {
-              message: 'Please provide the public fork URL:',
-              flag: '--no-public --upstream <url> (when the mirror has no public fork)',
-              placeholder: 'git@github.com:owner/repo.git',
-            },
+        if (publicForkFlag) {
+          publicForkUrl = publicForkFlag;
+          p.log.info(`Using --public-fork: ${parseRepoPath(publicForkUrl)}`);
+        } else {
+          publicForkUrl = await detectPublicFork(
+            owner,
+            vendorRepoName,
+            s,
             options.prompt
           );
-
-          if (isCancel(response)) {
-            p.outro('❌ Clone cancelled');
-            throw new CommandExitError(1);
-          }
-
-          publicForkUrl = response;
-          publicRepoName = parseRepoName(publicForkUrl);
         }
+        const publicRepoPath = parseRepoPath(publicForkUrl);
 
-        // Step 3b: Auto-detect upstream from public fork's parent — or use
-        // --upstream if the user supplied it explicitly.
+        // Upstream is the public fork's parent unless --upstream names it.
         s.start('Detecting upstream repository');
 
         if (options.upstreamUrl) {
@@ -214,7 +249,7 @@ export async function cloneCommand(
         } else {
           try {
             const result =
-              await $`gh repo view ${owner}/${publicRepoName} --json parent --jq '.parent.url'`;
+              await $`gh repo view ${publicRepoPath} --json parent --jq .parent.url`;
             upstreamUrl = result.stdout.trim();
 
             if (!upstreamUrl || upstreamUrl === 'null') {
@@ -233,16 +268,17 @@ export async function cloneCommand(
                 message: 'Please provide the upstream URL:',
                 flag: '--upstream <url>',
                 placeholder: 'git@github.com:original/repo.git',
+                validate: validateUpstream,
               },
               options.prompt
             );
 
             if (isCancel(response)) {
               p.outro('❌ Clone cancelled');
-              throw new CommandExitError(1);
+              throw new CommandExitError(130);
             }
 
-            upstreamUrl = response;
+            upstreamUrl = response.trim();
           }
         }
       }
@@ -302,4 +338,48 @@ export async function cloneCommand(
     p.outro('❌ Clone failed');
     throw new CommandExitError(1);
   }
+}
+
+/**
+ * Finds the public fork of a legacy mirror: `<owner>/<name without -private>`
+ * when it exists, else the answer to a prompt.
+ */
+async function detectPublicFork(
+  owner: string,
+  vendorRepoName: string,
+  s: ReturnType<typeof p.spinner>,
+  prompt: PromptContext | undefined
+): Promise<string> {
+  s.start('Detecting public fork');
+  const publicRepoName = vendorRepoName.replace(/-private$/, '');
+
+  try {
+    await $`gh repo view ${owner}/${publicRepoName}`;
+    s.stop(`Found public fork: ${owner}/${publicRepoName}`);
+    return `git@github.com:${owner}/${publicRepoName}.git`;
+  } catch {
+    s.stop('Public fork not found');
+  }
+
+  p.log.warn('⚠️  Could not auto-detect public fork.');
+  p.note(
+    `Tried: ${owner}/${publicRepoName}\n\nTip: pass --public-fork <url>, or --no-public --upstream <url> if this mirror has no public fork.`,
+    'Detection Failed'
+  );
+
+  const response = await promptText(
+    {
+      message: 'Please provide the public fork URL:',
+      flag: '--public-fork <url>',
+      placeholder: 'git@github.com:owner/repo.git',
+      validate: validatePublicFork,
+    },
+    prompt
+  );
+
+  if (isCancel(response)) {
+    p.outro('❌ Clone cancelled');
+    throw new CommandExitError(130);
+  }
+  return publicForkInput(response);
 }
