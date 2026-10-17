@@ -12,7 +12,7 @@ A unit `node:fs/promises` mock must spread the real module (`...realFsPromises`)
 Remote tip lookups (`git rev-parse --verify refs/remotes/<r>/...`) are answered by the dispatcher in `tests/unit/commands.test.ts` as `<remote>0tip`, for example `upstream0tip`.
 
 ## Snapshots
-Run `bun test -u` only after reading the diff. The workflow YAML snapshot (`tests/unit/__snapshots__/workflow.test.ts.snap`, token mode) changes only with an approved workflow change, because a changed YAML rewrites every scheduled mirror's managed commit on its next sync. "Token mode" means the `scheduleAuth` token mode once the #85 stack lands.
+Run `bun test -u` only after reading the diff. The workflow YAML snapshots (`tests/unit/__snapshots__/workflow.test.ts.snap`: token mode, where `scheduleAuth` is absent, and App mode, `scheduleAuth: 'app'`) change only with an approved workflow change, because a changed YAML rewrites every scheduled mirror's managed commit on its next sync.
 
 ## pinnedVenforkVersion takes the first match
 `pinnedVenforkVersion` matches the first `venfork@` occurrence in the workflow YAML, so never add that string elsewhere in the YAML.

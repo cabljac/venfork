@@ -54,7 +54,7 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'doctor',
-    `venfork doctor [--json]
+    `venfork doctor [--no-input] [--json]
   Check mirror health: remotes, the managed-commit invariant, divergence,
   preserved files, the sync workflow, the git transport (gh over HTTPS, or an SSH
   key GitHub accepts), the push secrets (VENFORK_PUSH_TOKEN, or the
@@ -65,7 +65,7 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'sync',
-    `venfork sync [branch] [--report-issues] [--json]
+    `venfork sync [branch] [--report-issues] [--no-input] [--json]
   Update the default branches of origin (and public, unless the mirror is in no-public mode) to match upstream
   --report-issues (used by the scheduled workflow) opens a venfork-sync-blocked
     issue on the mirror when sync is blocked and closes it after a successful sync
@@ -77,7 +77,7 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'schedule',
-    `venfork schedule <status|set <cron> [--app|--token]|disable> [--json]
+    `venfork schedule <status|set <cron> [--app|--token]|disable> [--no-input] [--json]
   Manage scheduled sync config stored in venfork-config
   Set writes/removes ${SYNC_WORKFLOW_PATH} on the private mirror default branch
   --app mints a one-hour push token from a GitHub App on each run
@@ -111,7 +111,7 @@ venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--jso
   ],
   [
     'pull',
-    `venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push] [--json]
+    `venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push] [--no-input] [--json]
 venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]
   Bring upstream content into the private mirror
   • pr: fetch pull/<n>/head from upstream into a new branch (default: upstream-pr/<n>)
@@ -123,7 +123,7 @@ venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json
   ],
   [
     'workflows',
-    `venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...] [--json]
+    `venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...] [--no-input] [--json]
   Configure workflow allowlist/blocklist policy in venfork-config
   allow/block add files to their list; unallow/unblock remove them;
   clear empties both lists
@@ -131,7 +131,7 @@ venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json
   ],
   [
     'preserve',
-    `venfork preserve <list|add|remove|clear> [path ...] [--json]
+    `venfork preserve <list|add|remove|clear> [path ...] [--no-input] [--json]
   Carry mirror-only files (e.g. caller workflows) forward across \`venfork sync\`
   Each entry is a single repo-relative file (no globs, no directories), read from
   the previous origin tip on every sync
@@ -144,7 +144,7 @@ venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json
 const SUBCOMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   [
     'pull pr',
-    `venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push] [--json]
+    `venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push] [--no-input] [--json]
   Bring a third-party upstream PR into the mirror for internal review
   Fetches pull/<n>/head from upstream into a new branch (default: upstream-pr/<n>)
   Pushes the branch to origin so the team can see it
@@ -178,7 +178,7 @@ export function commandHelp(
   command: string,
   rest: string[] = []
 ): string | null {
-  if (command.startsWith('-')) return null;
+  if (command.startsWith('-') && command !== '--version') return null;
   const sub = rest.find((arg) => !arg.startsWith('-'));
   if (sub) {
     const subHelp = SUBCOMMAND_HELP.find(
@@ -237,8 +237,9 @@ venfork pull pr 1234
   Example: export VENFORK_ORG=my-company
 
 VENFORK_NONINTERACTIVE=1 - Never prompt, as with --no-input (it does not confirm;
-  pass --yes for that). venfork also never prompts without a TTY on stdin or when
-  CI is set. A prompt that cannot be shown exits 2 naming the flag to pass.
+  pass --yes for that). venfork also never prompts when CI is set or without a
+  terminal on stdin and stderr. A prompt that cannot be shown exits 2 naming the
+  flag to pass.
 
 VENFORK_GIT_TIMEOUT - Cap in ms for each network git/gh operation (default 600000)
 
@@ -257,7 +258,8 @@ GITHUB_REPOSITORY - Set by GitHub Actions. With --report-issues, sync files the
     `0    Success, or "no" at a confirm in a terminal
 1    Runtime failure, or doctor found a failing check
 2    Usage error, or missing input or consent with no prompt
-130  Cancelled at a prompt`,
+130  Cancelled at a prompt, or interrupted by SIGINT
+143  Terminated by SIGTERM`,
     'Exit Codes'
   );
 

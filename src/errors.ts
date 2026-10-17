@@ -317,7 +317,7 @@ export class MissingInputError extends VenforkError {
     public readonly question: string
   ) {
     super(
-      `Cannot ask "${question}": venfork does not prompt without a TTY on stdin, in CI, with --no-input or with VENFORK_NONINTERACTIVE=1. Pass ${flag}.`,
+      `Cannot ask "${question}": venfork does not prompt without a terminal on stdin and stderr, in CI, with --no-input or with VENFORK_NONINTERACTIVE=1. Pass ${flag}.`,
       'missing-input'
     );
     this.name = 'MissingInputError';

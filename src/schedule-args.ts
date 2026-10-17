@@ -1,6 +1,7 @@
 import type { ScheduleAuth } from './config.js';
 import { UsageError } from './errors.js';
 import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
+import { isValidCronExpression } from './shared/cron.js';
 import { JSON_FLAG } from './shared/json-output.js';
 
 /** Parsed `venfork schedule ...` arguments. */
@@ -16,11 +17,26 @@ export type ParsedScheduleArgs = {
 
 /** Usage line for `venfork schedule`. */
 export const SCHEDULE_USAGE =
-  'venfork schedule <status|set <cron> [--app|--token]|disable> [--json]';
+  'venfork schedule <status|set <cron> [--app|--token]|disable> [--no-input] [--json]';
 
 /**
- * Parse `venfork schedule ...` argv after the `schedule` token. The cron
- * expression itself is validated by the command.
+ * Throws {@link UsageError} when `cron` (trimmed) is missing or is not a
+ * 5-field cron expression GitHub Actions accepts.
+ */
+export function checkCronExpression(cron: string | undefined): void {
+  const trimmed = cron?.trim();
+  if (!trimmed) {
+    throw new UsageError(`Missing cron expression. Usage: ${SCHEDULE_USAGE}`);
+  }
+  if (!isValidCronExpression(trimmed)) {
+    throw new UsageError(
+      `Invalid cron expression '${trimmed}' (expected 5 fields), e.g. "0 */6 * * *". Usage: ${SCHEDULE_USAGE}`
+    );
+  }
+}
+
+/**
+ * Parse `venfork schedule ...` argv after the `schedule` token.
  */
 export function parseScheduleCliArgs(args: string[]): ParsedScheduleArgs {
   const authFlags: string[] = [];
@@ -51,10 +67,8 @@ export function parseScheduleCliArgs(args: string[]): ParsedScheduleArgs {
         `--app and --token cannot be used together. Usage: ${SCHEDULE_USAGE}`
       );
     }
-    if (rest.length === 0) {
-      throw new UsageError(`Missing cron expression. Usage: ${SCHEDULE_USAGE}`);
-    }
     if (rest.length > 1) throw unexpectedArgument(rest[1], SCHEDULE_USAGE);
+    checkCronExpression(rest[0]);
     const auth =
       authFlags[0] === '--app' ? 'app' : authFlags[0] ? 'token' : undefined;
     return { action, cron: rest[0], ...(auth ? { auth } : {}), json };

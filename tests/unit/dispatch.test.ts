@@ -1,18 +1,12 @@
 import { describe, expect, mock, test } from 'bun:test';
 import type { SyncResult } from '../../src/commands.js';
 import {
-  outsideRepositoryError,
+  assertInRepository,
   requiresGhAuth,
   requiresRepository,
   setupSyncMirror,
 } from '../../src/dispatch.js';
-import {
-  CommandExitError,
-  GitError,
-  MissingInputError,
-  NotInRepositoryError,
-  UsageError,
-} from '../../src/errors.js';
+import { NotInRepositoryError } from '../../src/errors.js';
 
 const syncStub = (): Promise<SyncResult> =>
   Promise.resolve({
@@ -72,53 +66,35 @@ describe('requiresRepository', () => {
   });
 });
 
-describe('outsideRepositoryError', () => {
+describe('assertInRepository', () => {
   const outside = () => Promise.resolve(false);
   const inside = () => Promise.resolve(true);
 
-  test('a runtime failure of a mirror command outside a repository is not-in-repository', async () => {
-    const reported = await outsideRepositoryError(
+  test('a mirror command outside a repository is not-in-repository', async () => {
+    for (const command of [
       'sync',
-      new GitError('fetch failed', 'fetch'),
-      outside
-    );
-    expect(reported).toBeInstanceOf(NotInRepositoryError);
-  });
-
-  test('a reported failure (exit 1) outside a repository is not-in-repository', async () => {
-    const reported = await outsideRepositoryError(
       'stage',
-      new CommandExitError(1, new GitError('no remote', 'remote')),
-      outside
-    );
-    expect(reported).toBeInstanceOf(NotInRepositoryError);
-  });
-
-  test('a failure inside a repository keeps its own error', async () => {
-    const error = new GitError('fetch failed', 'fetch');
-    expect(await outsideRepositoryError('sync', error, inside)).toBe(error);
-  });
-
-  test.each([
-    ['a usage error', new UsageError('Usage: venfork stage <branch>')],
-    ['a missing input', new MissingInputError('--yes', 'Push to public fork?')],
-    [
-      'a reported missing input',
-      new CommandExitError(1, new MissingInputError('--yes', 'Open it?')),
-    ],
-    ['a cancel', new CommandExitError(130)],
-  ])(
-    '%s outside a repository keeps its own error and exit code',
-    async (_name, error) => {
-      expect(await outsideRepositoryError('stage', error, outside)).toBe(error);
+      'pull',
+      'schedule',
+      'workflows',
+      'preserve',
+    ]) {
+      await expect(assertInRepository(command, outside)).rejects.toBeInstanceOf(
+        NotInRepositoryError
+      );
     }
-  );
+  });
 
-  test('doctor, setup and clone keep their own error outside a repository', async () => {
-    const error = new GitError('fetch failed', 'fetch');
+  test('a mirror command inside a repository passes', async () => {
+    await expect(assertInRepository('sync', inside)).resolves.toBeUndefined();
+  });
+
+  test('doctor, setup and clone do not check for a repository', async () => {
+    const inRepository = mock(outside);
     for (const command of ['doctor', 'setup', 'clone']) {
-      expect(await outsideRepositoryError(command, error, outside)).toBe(error);
+      await assertInRepository(command, inRepository);
     }
+    expect(inRepository).not.toHaveBeenCalled();
   });
 });
 

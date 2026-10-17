@@ -57,6 +57,48 @@ const cases: ReadonlyArray<
   ['workflows', parseWorkflowsCliArgs, ['allow'], 'Usage: venfork workflows'],
   ['preserve', parsePreserveCliArgs, ['nope'], 'Usage: venfork preserve'],
   ['preserve', parsePreserveCliArgs, ['add'], 'Usage: venfork preserve'],
+  [
+    'schedule',
+    parseScheduleCliArgs,
+    ['set', 'not a cron'],
+    "Invalid cron expression 'not a cron'",
+  ],
+  [
+    'sync',
+    parseSyncCliArgs,
+    ['--bogus'],
+    'Usage: venfork sync [branch] [--report-issues] [--no-input] [--json]',
+  ],
+  [
+    'doctor',
+    parseDoctorCliArgs,
+    ['--bogus'],
+    'Usage: venfork doctor [--no-input] [--json]',
+  ],
+  [
+    'schedule',
+    parseScheduleCliArgs,
+    ['--bogus'],
+    '|disable> [--no-input] [--json]',
+  ],
+  [
+    'workflows',
+    parseWorkflowsCliArgs,
+    ['nope'],
+    '[workflow-file ...] [--no-input] [--json]',
+  ],
+  [
+    'preserve',
+    parsePreserveCliArgs,
+    ['nope'],
+    '[path ...] [--no-input] [--json]',
+  ],
+  [
+    'pull',
+    parsePullCliArgs,
+    ['pr', '1', '--bogus'],
+    '[--no-push] [--no-input] [--json]',
+  ],
 ];
 
 describe('arg parsers throw UsageError', () => {

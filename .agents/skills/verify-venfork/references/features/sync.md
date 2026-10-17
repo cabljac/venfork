@@ -44,7 +44,7 @@ venfork sync --json </dev/null 2>/dev/null | jq -r .error.code; echo "${PIPESTAT
 - Concurrent lease: build the stale copy (README), `vf_upstream_commit`, then `vf_origin_commit` a teammate commit, swap the fetch URL, `venfork sync` exits 1 with "origin/main moved since this sync fetched it". The teammate commit stays on origin.
 - Pulled PR: `git -C "$VF_PUBLIC" push -q "$VF_UPSTREAM" <branch>:refs/pull/1/head`, then `venfork sync upstream-pr/1`. A second run pushes nothing to the branch.
 - Pin guard: after `schedule set`, `vf_origin_commit .github/workflows/venfork-sync.yml "$(git -C "$VF_ORIGIN" show main:.github/workflows/venfork-sync.yml | sed "s/venfork@$(venfork --version)/venfork@9.9.9/")" "$(printf 'chore: venfork-managed mirror commit\n\nVenfork-Managed: 1')"`, `vf_upstream_commit src/n.txt n`, `venfork sync`: exit 1, "origin pins venfork 9.9.9, you are running <the version `venfork --version` prints>".
-- Cancel: there is no prompt. `venfork sync --json` killed with SIGINT prints the `cancelled` envelope and exits 130 (`tests/integration/cli.test.ts`); SIGTERM exits 143. To drive it, put a `git` wrapper first on `PATH` that sleeps on `fetch`, start `venfork sync --json &`, then `kill -INT` it.
+- Cancel: there is no prompt. `venfork sync --json` killed with SIGINT prints the `cancelled` envelope and exits 130 (`tests/integration/cli.test.ts`); killed with SIGTERM it prints the same envelope ("Interrupted by SIGTERM") and exits 143 (also pinned). To drive it, put a `git` wrapper first on `PATH` that sleeps on `fetch`, start `venfork sync --json &`, then `kill -INT` it.
 
 ## What proves it
 

@@ -24,7 +24,7 @@ tests:
 
 ## How a user reaches it
 
-`venfork pull pr <n-or-url> [--branch-name <name>] [--no-push] [--json]`, then `venfork sync upstream-pr/<n>`. No prompt: `--no-input` is accepted and changes nothing, and `--yes` is an unknown option (exit 2).
+`venfork pull pr <n-or-url> [--branch-name <name>] [--no-push] [--no-input] [--json]`, then `venfork sync upstream-pr/<n>`. No prompt: `--no-input` is accepted and changes nothing, and `--yes` is an unknown option (exit 2).
 
 ## How to drive it
 

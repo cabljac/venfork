@@ -145,6 +145,14 @@ describe('UsageError', () => {
   });
 });
 
+describe('MissingInputError', () => {
+  test('names both streams canPrompt needs a terminal on', () => {
+    expect(new MissingInputError('--yes', 'Push?').message).toBe(
+      'Cannot ask "Push?": venfork does not prompt without a terminal on stdin and stderr, in CI, with --no-input or with VENFORK_NONINTERACTIVE=1. Pass --yes.'
+    );
+  });
+});
+
 describe('isEntryReported', () => {
   test('passes usage, missing-input and exit errors through to the entry point', () => {
     expect(isEntryReported(new UsageError('x'))).toBe(true);
