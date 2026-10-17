@@ -6,6 +6,7 @@ describe('parseSyncCliArgs', () => {
     expect(parseSyncCliArgs([])).toEqual({
       branch: undefined,
       reportIssues: false,
+      json: false,
     });
   });
 
@@ -13,6 +14,15 @@ describe('parseSyncCliArgs', () => {
     expect(parseSyncCliArgs(['--report-issues', 'develop'])).toEqual({
       branch: 'develop',
       reportIssues: true,
+      json: false,
+    });
+  });
+
+  test('reads --json', () => {
+    expect(parseSyncCliArgs(['main', '--json'])).toEqual({
+      branch: 'main',
+      reportIssues: false,
+      json: true,
     });
   });
 
@@ -26,13 +36,15 @@ describe('parseSyncCliArgs', () => {
 
 describe('parseSyncCliArgs and --', () => {
   test('-- ends options, so a dash-leading branch can follow it', () => {
-    expect(parseSyncCliArgs(['--'])).toEqual({
+    expect(parseSyncCliArgs(['--json', '--'])).toEqual({
       branch: undefined,
       reportIssues: false,
+      json: true,
     });
     expect(parseSyncCliArgs(['--report-issues', '--', '-weird'])).toEqual({
       branch: '-weird',
       reportIssues: true,
+      json: false,
     });
   });
 });

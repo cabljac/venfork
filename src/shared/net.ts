@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { $ } from 'execa';
-import { GitError } from '../errors.js';
+import { GitError, RemoteNotFoundError } from '../errors.js';
 import { gitNetTimeoutMs, NET_ENV, NET_SSH_OPTIONS } from './constants.js';
 import * as p from './ui.js';
 
@@ -77,14 +77,20 @@ export function netFailureReason(result: {
 }
 
 /**
- * Runs `git fetch <remote>` through {@link netExec}; throws a `GitError`
- * with git's reason when it fails or times out.
+ * Runs `git fetch <remote>` through {@link netExec}; throws a
+ * `RemoteNotFoundError` when no such remote is configured, else a
+ * `GitError` with git's reason when it fails or times out.
  */
 export async function netFetch(remote: string, cwd?: string): Promise<void> {
   const result = await netExec(cwd, {
     bufferOutput: true,
   })`git fetch ${remote}`;
   if (result.exitCode !== 0) {
+    const configured = await $({
+      ...(cwd ? { cwd } : {}),
+      reject: false,
+    })`git remote get-url ${remote}`;
+    if (configured.exitCode !== 0) throw new RemoteNotFoundError(remote);
     throw new GitError(
       `git fetch ${remote} failed: ${netFailureReason(result)}`,
       `git fetch ${remote}`

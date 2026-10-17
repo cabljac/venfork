@@ -42,7 +42,7 @@ afterEach(async () => {
   active = undefined;
 });
 
-function sync(): Promise<void> {
+function sync(): Promise<unknown> {
   return syncCommand(undefined, { cwd: fx.work, quiet: true });
 }
 

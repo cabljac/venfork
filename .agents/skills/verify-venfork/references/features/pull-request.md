@@ -1,12 +1,12 @@
 ---
 command: pull pr
 entry: src/commands/pull-request.ts
-shared: [args, mirror-commit, net]
+shared: [args, json-output, mirror-commit, net]
 config:
   read: [pulledPrs]
   written: [pulledPrs]
 tests:
-  unit: [tests/unit/commands.test.ts, tests/unit/pull-args.test.ts, tests/unit/dispatch.test.ts]
+  unit: [tests/unit/commands.test.ts, tests/unit/pull-args.test.ts, tests/unit/dispatch.test.ts, tests/unit/json-output.test.ts]
   integration: [tests/integration/cli.test.ts]
   e2e: [tests/e2e/sync-flow.test.ts]
 ---
@@ -18,12 +18,13 @@ tests:
 - Reads the PR with `gh pr view`. Refuses an existing local `upstream-pr/<n>` unless `--branch-name` is given.
 - `git fetch upstream pull/<n>/head:<branch>`, then a plain `git push origin <branch> --no-follow-tags` (no lease), then writes `pulledPrs[<branch>]` (number, URL, head, `lastSyncedAt`).
 - `--no-push`, or a failed push, keeps the branch local and writes no `pulledPrs` entry. Both exit 0.
+- `--json`: `result` is `{ branch, head, prNumber, prUrl, pushed }`; `pushed` is false with `--no-push` or a failed push. Failures are `ok: false` with `error.code` (`remote-not-found`, `usage`, `internal` for an unparsable upstream URL).
 - Refresh is `venfork sync <branch>` (see `sync.md`): it finds the PR by `pulledPrs[branch]` or the name `upstream-pr/<n>`, force-fetches, pushes with a lease and needs no gh.
 - The old `venfork pull-request` name exits 2 and names `venfork pull pr`. A malformed `<pr-number-or-url>` exits 2 at parse time; a URL to another repo than upstream exits 1.
 
 ## How a user reaches it
 
-`venfork pull pr <n-or-url> [--branch-name <name>] [--no-push]`, then `venfork sync upstream-pr/<n>`. No prompt.
+`venfork pull pr <n-or-url> [--branch-name <name>] [--no-push] [--json]`, then `venfork sync upstream-pr/<n>`. No prompt.
 
 ## How to drive it
 
@@ -31,6 +32,7 @@ tests:
 
 ```bash
 venfork pull pr 1 </dev/null 2>&1 | grep -o "Could not parse upstream remote URL"   # exit 1
+venfork pull pr 1 --json </dev/null 2>/dev/null | jq -c .error                  # code internal, exit 1
 venfork pull pr </dev/null 2>&1 | head -1                                          # usage, exit 2
 venfork pull-request 1 </dev/null 2>&1                                             # rename hint, exit 2
 git checkout -q -b pr-head upstream/main && echo p > src/p.txt && git add . && git commit -qm "feat: p"

@@ -160,6 +160,7 @@ describe('parseStageCliArgs issue', () => {
       ref: '7',
       title: undefined,
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 
@@ -169,12 +170,14 @@ describe('parseStageCliArgs issue', () => {
       ref: '7',
       title: 'Override',
       prompt: { yes: false, noInput: false },
+      json: false,
     });
     expect(parseStageUnion(['issue', '7', '--title=Override'])).toEqual({
       kind: 'issue',
       ref: '7',
       title: 'Override',
       prompt: { yes: false, noInput: false },
+      json: false,
     });
   });
 
@@ -285,6 +288,7 @@ describe('parseStageCliArgs prompt flags', () => {
       ref: '7',
       title: undefined,
       prompt: { yes: true, noInput: true },
+      json: false,
     });
   });
 });

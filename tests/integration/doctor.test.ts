@@ -15,7 +15,9 @@ mock.module('@clack/prompts', quietPrompts);
 
 import {
   type DoctorCheck,
+  type DoctorResult,
   doctorCommand,
+  isHealthy,
   runDoctorChecks,
   syncCommand,
 } from '../../src/commands.js';
@@ -80,24 +82,13 @@ describe('doctor against real repos', () => {
     }
   });
 
-  test('--json prints every check and reports failure', async () => {
+  test('returns every check and reports failure', async () => {
     await fx.commitOnOrigin({ 'src/hotfix.ts': 'export {};\n' });
-    const printed: string[] = [];
-    const originalLog = console.log;
-    console.log = (line: string) => {
-      printed.push(line);
-    };
-    let healthy: boolean;
-    try {
-      healthy = await doctorCommand({ json: true, cwd: fx.work });
-    } finally {
-      console.log = originalLog;
-    }
 
-    expect(healthy).toBe(false);
-    const parsed = (JSON.parse(printed.join('\n')) as { checks: DoctorCheck[] })
-      .checks;
-    expect(parsed.map((check) => check.id)).toEqual([
+    const result = await doctorCommand({ cwd: fx.work });
+
+    expect(isHealthy(result)).toBe(false);
+    expect(result.checks.map((check) => check.id)).toEqual([
       'repo',
       'remotes',
       'mode',
@@ -109,13 +100,13 @@ describe('doctor against real repos', () => {
       'last-run',
       'cron-age',
     ]);
-    for (const check of parsed) {
+    for (const check of result.checks) {
       expect([true, false, 'skipped']).toContain(check.ok);
       expect(typeof check.detail).toBe('string');
     }
   });
 
-  test('prints the link maps after the checks and includes them in --json', async () => {
+  test('prints the link maps after the checks and returns them', async () => {
     await updateVenforkConfig(fx.work, {
       shippedBranches: {
         'feat/x': {
@@ -131,16 +122,10 @@ describe('doctor against real repos', () => {
         notes.push([title ?? '', message ?? '']);
       }
     );
-    const printed: string[] = [];
-    const originalLog = console.log;
+    let result: DoctorResult;
     try {
-      await doctorCommand({ cwd: fx.work });
-      console.log = (line: string) => {
-        printed.push(line);
-      };
-      await doctorCommand({ json: true, cwd: fx.work });
+      result = await doctorCommand({ cwd: fx.work });
     } finally {
-      console.log = originalLog;
       noteSpy.mockRestore();
     }
 
@@ -149,13 +134,12 @@ describe('doctor against real repos', () => {
       'feat/x -> https://github.com/up/repo/pull/9 (2025-03-04)'
     );
     expect(notes[0][0]).toBe('Checks');
-    const json = JSON.parse(printed.join('\n')) as {
-      links: { shippedBranches: Record<string, unknown> };
-    };
-    expect(Object.keys(json.links.shippedBranches)).toEqual(['feat/x']);
+    expect(Object.keys(result.links?.shippedBranches ?? {})).toEqual([
+      'feat/x',
+    ]);
   });
 
-  test('omits the Links note when no links are recorded and --json links is empty', async () => {
+  test('omits the Links note when no links are recorded', async () => {
     const notes: string[] = [];
     const noteSpy = spyOn(prompts, 'note').mockImplementation(
       (_message?: string, title?: string) => {
@@ -544,7 +528,7 @@ describe('the preserve check asks the tip builder sync uses', () => {
     expect(checks.preserve.ok).toBe(true);
     await expect(
       syncCommand(undefined, { cwd: fx.work, quiet: true })
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ kind: 'default-branch' });
   });
 });
 

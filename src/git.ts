@@ -18,13 +18,17 @@ export async function checkGhAuth(): Promise<boolean> {
 }
 
 /**
- * Throws `AuthenticationError` unless the GitHub CLI is authenticated.
+ * Throws `AuthenticationError` unless the GitHub CLI is authenticated; its
+ * message says so when no `gh` is on PATH.
  * Called by the CLI dispatcher for commands that talk to GitHub through gh.
  */
 export async function ensureGhAuth(): Promise<void> {
-  if (!(await checkGhAuth())) {
-    throw new AuthenticationError();
-  }
+  const result = await $({ reject: false })`gh auth status`;
+  if (result.exitCode === 0) return;
+  const spawnCode = (result as { code?: unknown }).code;
+  throw new AuthenticationError(
+    spawnCode === 'ENOENT' ? 'missing' : 'unauthenticated'
+  );
 }
 
 /**

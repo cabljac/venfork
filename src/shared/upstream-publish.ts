@@ -1,4 +1,5 @@
 import { $ } from 'execa';
+import { GitHubError } from '../errors.js';
 import { assertNoMirrorReference } from './deny-list.js';
 
 /**
@@ -40,7 +41,7 @@ export async function createUpstreamPr(args: {
   if (existing && /already exists/i.test(combined)) {
     return { url: existing[0], alreadyExists: true };
   }
-  throw new Error(
+  throw new GitHubError(
     `Failed to create upstream PR via gh: ${combined.trim() || `exit ${result.exitCode}`}`
   );
 }
@@ -77,14 +78,16 @@ async function ghIssueCreate(args: {
     input: args.body,
   })`gh issue create --repo ${args.repoPath} --title ${args.title} --body-file -`;
   if (result.exitCode !== 0) {
-    throw new Error(
+    throw new GitHubError(
       `Failed to create issue on ${args.repoPath}: ${result.stderr.trim() || `exit ${result.exitCode}`}`
     );
   }
   const url = result.stdout.trim().split(/\s+/).pop() ?? '';
   const numberMatch = url.match(/\/issues\/(\d+)/);
   if (!numberMatch) {
-    throw new Error(`gh issue create returned an unexpected output: ${url}`);
+    throw new GitHubError(
+      `gh issue create returned an unexpected output: ${url}`
+    );
   }
   return { url, number: Number(numberMatch[1]) };
 }

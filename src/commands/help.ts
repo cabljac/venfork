@@ -57,18 +57,20 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   preserved files, the sync workflow, the push secrets (VENFORK_PUSH_TOKEN, or the
   GitHub App secrets with schedule set --app) and the last scheduled run
   Also lists the shipped and pulled branch, PR and issue links from venfork-config
-  Exits 1 when any check fails; --json prints { checks, links } for CI`,
+  Exits 1 when any check fails; --json prints the envelope with result
+    { checks, links } (ok: true even when a check fails)`,
   ],
   [
     'sync',
-    `venfork sync [branch] [--report-issues]
+    `venfork sync [branch] [--report-issues] [--json]
   Update the default branches of origin (and public, unless the mirror is in no-public mode) to match upstream
   --report-issues (used by the scheduled workflow) opens a venfork-sync-blocked
     issue on the mirror when sync is blocked and closes it after a successful sync
   Keeps the private default branch at upstream plus one venfork-managed commit
     when that commit carries the sync workflow or preserved files
   Applies workflow filtering from enabledWorkflows/disabledWorkflows policy
-  Syncs main/master branch without affecting your current work`,
+  Syncs main/master branch without affecting your current work
+  --json prints one JSON envelope on stdout (see README "JSON output")`,
   ],
   [
     'schedule',
@@ -82,9 +84,9 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'stage',
-    `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input]
+    `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]
 venfork stage branch <name> [same options]
-venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input]
+venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]
   Push a branch (or an issue) from the mirror outward, to the public fork or upstream
   Branch names \`issue\` and \`branch\` need the explicit form: venfork stage branch issue
   Branch: push to public fork for PR to upstream
@@ -98,20 +100,22 @@ venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input]
   • --no-update-existing   Do not update an already-open upstream PR body when staging
   • --yes, -y              Push (and open the PR or issue) without the confirm
   • --no-input             Never prompt; without --yes the confirm exits 2
+  • --json                 Print one JSON envelope on stdout; implies --no-input
   Issue: read the internal mirror issue, strip venfork:internal blocks, open the
     upstream counterpart, record linkage in venfork-config
   This is when your work becomes visible to the client`,
   ],
   [
     'pull',
-    `venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push]
-venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input]
+    `venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push] [--json]
+venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]
   Bring upstream content into the private mirror
   • pr: fetch pull/<n>/head from upstream into a new branch (default: upstream-pr/<n>)
     and push it to origin so the team can review it. Refresh later with: venfork sync <branch>
   • issue: read the upstream issue, open an internal triage issue on the mirror,
     record linkage. No comment sync; the linkage is one-shot.
-    --yes opens it without the confirm; --no-input without --yes exits 2.`,
+    --yes opens it without the confirm; --no-input without --yes exits 2.
+  --json prints one JSON envelope on stdout and implies --no-input`,
   ],
   [
     'workflows',
@@ -134,25 +138,28 @@ venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input]
 const SUBCOMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   [
     'pull pr',
-    `venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push]
+    `venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push] [--json]
   Bring a third-party upstream PR into the mirror for internal review
   Fetches pull/<n>/head from upstream into a new branch (default: upstream-pr/<n>)
   Pushes the branch to origin so the team can see it
-  Refresh later with: venfork sync <branch>`,
+  Refresh later with: venfork sync <branch>
+  --json prints one JSON envelope on stdout`,
   ],
   [
     'pull issue',
-    `venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input]
+    `venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]
   Read an upstream issue and open an internal triage issue on the mirror
   Records linkage in venfork-config. No comment sync; the linkage is one-shot.
-  --yes opens it without the confirm; --no-input without --yes exits 2`,
+  --yes opens it without the confirm; --no-input without --yes exits 2
+  --json prints one JSON envelope on stdout and implies --no-input`,
   ],
   [
     'stage issue',
-    `venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input]
+    `venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]
   Read an internal mirror issue, strip venfork:internal blocks,
   open the upstream counterpart, record linkage in venfork-config
-  --yes opens it without the confirm; --no-input without --yes exits 2`,
+  --yes opens it without the confirm; --no-input without --yes exits 2
+  --json prints one JSON envelope on stdout and implies --no-input`,
   ],
 ];
 

@@ -35,6 +35,8 @@ export type ParsedStageBranchArgs = {
   noUpdateExisting: boolean;
   /** `--yes` / `--no-input`. */
   prompt: PromptContext;
+  /** Print the `--json` envelope on stdout. */
+  json: boolean;
 };
 
 /** Parsed `venfork stage issue ...` arguments. */
@@ -46,13 +48,15 @@ export type ParsedStageIssueArgs = {
   title?: string;
   /** `--yes` / `--no-input`. */
   prompt: PromptContext;
+  /** Print the `--json` envelope on stdout. */
+  json: boolean;
 };
 
 export type ParsedStageArgs = ParsedStageBranchArgs | ParsedStageIssueArgs;
 
 /** Usage line for `venfork stage <branch>`. */
 export const STAGE_USAGE =
-  'venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input]';
+  'venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]';
 
 /**
  * Parse `venfork stage ...` argv after the `stage` token.
@@ -67,7 +71,7 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   let base: string | undefined;
   let internalPrNumber: number | undefined;
   let noUpdateExisting = false;
-  const promptFlags = parsePromptFlags({ allowYes: true });
+  const promptFlags = parsePromptFlags({ allowYes: true, allowJson: true });
 
   const positional = scanArgs(stageArgs, STAGE_USAGE, (a, i) => {
     if (promptFlags.onOption(a) !== undefined) return 0;
@@ -127,7 +131,13 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     }
     if (rest.length > 1) throw unexpectedArgument(rest[1], STAGE_USAGE);
     parseGitHubRef(rest[0], 'issues');
-    return { kind: 'issue', ref: rest[0], title, prompt: promptFlags.prompt };
+    return {
+      kind: 'issue',
+      ref: rest[0],
+      title,
+      prompt: promptFlags.prompt,
+      json: promptFlags.json,
+    };
   }
 
   let branch = first;
@@ -156,5 +166,6 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     internalPrNumber,
     noUpdateExisting,
     prompt: promptFlags.prompt,
+    json: promptFlags.json,
   };
 }

@@ -1,13 +1,13 @@
 ---
 command: sync
 entry: src/commands/sync.ts
-shared: [net, divergence, managed-commit, mirror-commit, stage-gate, sync-report]
+shared: [net, divergence, json-output, managed-commit, mirror-commit, stage-gate, sync-report]
 config:
   read: [mode, preserve, invalidPreserve, schedule, enabledWorkflows, disabledWorkflows, pulledPrs]
   written: [pulledPrs]
 tests:
-  unit: [tests/unit/commands.test.ts, tests/unit/sync-args.test.ts, tests/unit/sync-report.test.ts]
-  integration: [tests/integration/sync.test.ts, tests/integration/sync-snapshot.test.ts, tests/integration/sync-preserve-guard.test.ts, tests/integration/tip-builder.test.ts, tests/integration/integrity.test.ts, tests/integration/config.test.ts]
+  unit: [tests/unit/commands.test.ts, tests/unit/sync-args.test.ts, tests/unit/sync-report.test.ts, tests/unit/json-output.test.ts]
+  integration: [tests/integration/cli.test.ts, tests/integration/sync.test.ts, tests/integration/sync-snapshot.test.ts, tests/integration/sync-preserve-guard.test.ts, tests/integration/tip-builder.test.ts, tests/integration/integrity.test.ts, tests/integration/config.test.ts]
   e2e: [tests/e2e/sync-flow.test.ts]
 ---
 
@@ -19,12 +19,13 @@ tests:
 - One `--force-with-lease` push per remote, skipped when the remote already has the target. Public is set to the upstream tip.
 - Commits that touch only preserved paths on origin are folded into the managed commit, not divergence.
 - `sync <branch>` for a pulled PR (`pulledPrs[branch]` or the name `upstream-pr/<n>`) refetches `pull/<n>/head`, pushes it to origin with a lease and rewrites `pulledPrs[branch]`. Any other branch name is synced as the default branch.
+- `--json` prints one envelope line on stdout. Default branch: `result` is `{ kind: 'default-branch', status: 'pushed' | 'up-to-date', branch, upstreamTip, origin: { tip, pushed }, public?: { tip, pushed } }` (`public` absent in no-public mode). Pulled PR: `{ kind: 'pulled-pr', status: 'pushed' | 'up-to-date' | 'push-failed', branch, prNumber, head }`. A failure is `ok: false` with `error.code`, for example `sync-divergence`.
 - `--report-issues` opens or refreshes a `venfork-sync-blocked` issue on divergence and closes it on success (gh only).
 - Errors: `SyncDivergenceError` (origin or public has non-upstream commits), `ConfigError` (bad config JSON, invalid preserve entry, bad cron), `GitError` "origin/main moved since this sync fetched it" (stale lease), `PinDowngradeError` (origin pins a newer venfork), `UnmigratedMirrorError` (unpinned workflow with `GITHUB_ACTIONS=true`), plain error when the config branch is missing but origin carries a managed commit.
 
 ## How a user reaches it
 
-`venfork sync`, `venfork sync develop`, `venfork sync upstream-pr/12`, `venfork sync --report-issues` (the generated workflow). No prompt.
+`venfork sync`, `venfork sync develop`, `venfork sync upstream-pr/12`, `venfork sync --report-issues` (the generated workflow), `venfork sync --json`. No prompt.
 
 ## How to drive it
 
@@ -34,7 +35,9 @@ echo "$N $(vf_pushes "$VF_ORIGIN")"                                        # equ
 venfork schedule set "0 * * * *" </dev/null >/dev/null 2>&1                # managed commit on
 vf_upstream_commit src/new.txt new && venfork sync </dev/null 2>&1 | grep Updated
 venfork sync </dev/null 2>&1 | grep -c "already up to date"                # 2, and no new push
+venfork sync --json </dev/null 2>/dev/null | jq -c '[.ok, .result.status]'      # [true,"up-to-date"]
 vf_origin_commit src/hotfix.txt hot; venfork sync </dev/null 2>&1 | grep "Sync aborted"  # SyncDivergenceError, exit 1
+venfork sync --json </dev/null 2>/dev/null | jq -r .error.code; echo $?          # sync-divergence, 1
 ```
 
 - Concurrent lease: build the stale copy (README), `vf_upstream_commit`, then `vf_origin_commit` a teammate commit, swap the fetch URL, `venfork sync` exits 1 with "origin/main moved since this sync fetched it". The teammate commit stays on origin.

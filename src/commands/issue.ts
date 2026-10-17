@@ -2,7 +2,9 @@ import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
 import {
   CommandExitError,
+  GitHubError,
   isEntryReported,
+  PreconditionError,
   RemoteNotFoundError,
   UsageError,
 } from '../errors.js';
@@ -58,7 +60,7 @@ async function readIssue(
     reject: false,
   })`gh issue view ${number} --repo ${repoPath} --json number,url,title,body,state,author,comments`;
   if (result.exitCode !== 0) {
-    throw new Error(
+    throw new GitHubError(
       `Failed to read issue #${number} from ${repoPath}: ${result.stderr.trim() || `exit ${result.exitCode}`}`
     );
   }
@@ -95,11 +97,21 @@ export function resolveIssueArg(
     repoPath !== undefined &&
     repoPath.toLowerCase() !== expectedRepoPath.toLowerCase()
   ) {
-    throw new Error(
+    throw new PreconditionError(
       `Refused to use issue URL ${target}: it points to ${repoPath}, but the expected repo is ${expectedRepoPath}. If this is intentional, pass the issue number directly.`
     );
   }
   return { number };
+}
+
+/**
+ * `--json` result of `venfork stage issue` and `venfork pull issue`: the
+ * issue venfork opened, and the issue it was made from.
+ */
+export interface IssueResult {
+  number: number;
+  url: string;
+  source: { number: number; url: string };
 }
 
 function issueUsage(action: 'stage' | 'pull' | undefined): string {
@@ -113,12 +125,13 @@ function issueUsage(action: 'stage' | 'pull' | undefined): string {
  * issue into the mirror for internal triage. Body translation uses the same
  * `<!-- venfork:internal -->...<!-- /venfork:internal -->` markers as
  * `stage --pr`. No comment sync — the linkage is one-shot.
+ * @returns The opened issue, for `--json`.
  */
 export async function issueCommand(
   action: 'stage' | 'pull' | undefined,
   target: string | undefined,
   options: { title?: string; prompt?: PromptContext } = {}
-): Promise<void> {
+): Promise<IssueResult> {
   if (!action || !target) {
     throw new UsageError(
       `Missing issue number or URL. Usage: venfork ${issueUsage(action)} <number-or-url> [--title <text>]`
@@ -146,7 +159,7 @@ export async function issueCommand(
     }
     const upstreamRepoPath = parseRepoPath(upstreamUrlResult.stdout.trim());
     if (!upstreamRepoPath) {
-      throw new Error(
+      throw new PreconditionError(
         `Could not parse upstream remote URL: ${upstreamUrlResult.stdout.trim()}`
       );
     }
@@ -235,7 +248,11 @@ export async function issueCommand(
       }
 
       p.outro(`✨ Issue staged: ${created.url}`);
-      return;
+      return {
+        number: created.number,
+        url: created.url,
+        source: { number: internal.number, url: internal.url },
+      };
     }
 
     // action === 'pull'
@@ -307,11 +324,16 @@ export async function issueCommand(
     }
 
     p.outro(`✨ Issue pulled: ${created.url}`);
+    return {
+      number: created.number,
+      url: created.url,
+      source: { number: upstream.number, url: upstream.url },
+    };
   } catch (error) {
     if (isEntryReported(error)) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Issue command failed');
-    throw new CommandExitError(1);
+    throw new CommandExitError(1, error);
   }
 }

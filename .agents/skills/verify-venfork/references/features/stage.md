@@ -1,13 +1,13 @@
 ---
 command: stage
 entry: src/commands/stage.ts
-shared: [stage-gate, deny-list, redaction, prompt, divergence, managed-commit, mirror-commit, net, repo, worktree, constants]
+shared: [stage-gate, deny-list, redaction, prompt, divergence, json-output, managed-commit, mirror-commit, net, repo, worktree, constants]
 config:
   read: [mode, upstreamUrl, publicForkUrl, preserve, invalidPreserve]
   written: [shippedBranches]
 tests:
-  unit: [tests/unit/commands.test.ts, tests/unit/stage-args.test.ts, tests/unit/redaction.test.ts, tests/unit/synthetic-body.test.ts, tests/unit/deny-list.test.ts]
-  integration: [tests/integration/stage.test.ts, tests/integration/stage-gate.test.ts, tests/integration/stage-gate-content.test.ts, tests/integration/stage-gate-review.test.ts, tests/integration/stage-gate-followups.test.ts, tests/integration/stage-publish-followups.test.ts, tests/integration/integrity.test.ts, tests/integration/deny-list.test.ts]
+  unit: [tests/unit/commands.test.ts, tests/unit/stage-args.test.ts, tests/unit/json-output.test.ts, tests/unit/redaction.test.ts, tests/unit/synthetic-body.test.ts, tests/unit/deny-list.test.ts]
+  integration: [tests/integration/cli.test.ts, tests/integration/stage.test.ts, tests/integration/stage-gate.test.ts, tests/integration/stage-gate-content.test.ts, tests/integration/stage-gate-review.test.ts, tests/integration/stage-gate-followups.test.ts, tests/integration/stage-publish-followups.test.ts, tests/integration/integrity.test.ts, tests/integration/deny-list.test.ts]
   e2e: [tests/e2e/sync-flow.test.ts]
 ---
 
@@ -19,11 +19,12 @@ tests:
 - Gates every rebuilt commit (see `leak-invariants.md`): `StageLeakError` for mirror-only paths or content, `MirrorReferenceError` for mirror terms in author, committer, message, file content or file name, refusal of bot-authored commits.
 - Shows commits and files, then asks "Push to public fork?" (no-public: "Push to upstream?"). `--yes` answers it. Without a TTY on stdin, with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`, the confirm without `--yes` exits 2 naming `--yes` (`MissingInputError`) before it fetches, and nothing is pushed; stdout stays empty.
 - Pushes `<head>:refs/heads/<branch>` with `--force-with-lease=<ref>:<tip from ls-remote>` and `--no-follow-tags`. No-public pushes to the upstream URL directly (the remote's push URL stays `DISABLE`).
+- `--json` never prompts, even at a TTY (it implies `--no-input`). Without `--yes` it is `ok: false`, `error: { code: 'missing-input', flag: '--yes' }`, exit 2. On success `result` is `{ branch, head, target: 'public' | 'upstream', compareUrl, prAction?, prUrl?, internalPrUrl? }`; `prAction` (`created`, `updated`, `unchanged`, `failed`) is present only with `--pr`.
 - `--pr`/`--draft`: finds the internal PR on the mirror, redacts it (`stripInternalBlocks`, `RedactionError`), runs `gh pr create`, updates an existing PR body unless `--no-update-existing`, writes `shippedBranches[branch]`.
 
 ## How a user reaches it
 
-`venfork stage <branch>`, `venfork stage branch <name>` (for a branch named `issue` or `branch`), plus `--pr`, `--draft`, `--title <t>`, `--base <b>`, `--internal-pr <n>`, `--no-update-existing`, `--yes`/`-y`, `--no-input`. `stage issue` is in `issue.md`.
+`venfork stage <branch>`, `venfork stage branch <name>` (for a branch named `issue` or `branch`), plus `--pr`, `--draft`, `--title <t>`, `--base <b>`, `--internal-pr <n>`, `--no-update-existing`, `--yes`/`-y`, `--no-input`, `--json`. `stage issue` is in `issue.md`.
 
 ## How to drive it
 
@@ -31,7 +32,9 @@ tests:
 git checkout -q -b feat upstream/main && echo f > src/feat.txt && git add . && git commit -qm "feat: add feat"
 venfork stage feat </dev/null 2>&1; echo $?                    # 2, "Pass --yes."; nothing on $VF_PUBLIC
 VENFORK_NONINTERACTIVE=1 venfork stage feat </dev/null 2>&1; echo $?   # 2 as well: it does not confirm
+venfork stage feat --json </dev/null 2>/dev/null; echo $?      # missing-input envelope naming --yes, 2
 venfork stage feat --yes </dev/null >/dev/null 2>&1; echo $?    # 0
+venfork stage feat --yes --json </dev/null 2>/dev/null | jq -r .result.head   # equals vf_tip "$VF_PUBLIC" feat
 vf_yes stage feat >/dev/null 2>&1; echo $?                      # 0 (answers the confirm through a pseudo-TTY)
 A=$(vf_tip "$VF_PUBLIC" feat); vf_yes stage feat >/dev/null 2>&1; vf_tip "$VF_PUBLIC" feat   # differs from $A
 git checkout -q -b leak upstream/main && mkdir -p .github/workflows && echo x > .github/workflows/venfork-sync.yml && git add . && git commit -qm "ci: wf"

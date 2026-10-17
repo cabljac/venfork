@@ -224,7 +224,9 @@ venfork clone git@github.com:acme-corp/awesome-project-private.git
 - An empty answer is rejected and the prompt asks again; cancelling a prompt (Ctrl-C) exits 130
 - Without a terminal (see [Non-interactive use](#non-interactive-use)) these prompts exit 2 instead and name the flag: `--public-fork <url>` for the public fork, `--upstream <url>` for upstream. Use `--no-public --upstream <url>` when the mirror has no public fork
 
-### `venfork sync [branch] [--report-issues]`
+### `venfork sync [branch] [--report-issues] [--json]`
+
+With `--json`, sync prints one JSON envelope on stdout (see [JSON output](#json-output)).
 
 Update default branches from upstream. With scheduled sync or a preserve list enabled, the private mirror uses a managed `+0/+1` model:
 - `public/<default>` matches `upstream/<default>`
@@ -263,9 +265,9 @@ venfork sync develop   # Sync develop branch with upstream/develop
 - Workflow allow/block entries match file basenames exactly (no glob patterns)
 - A preserved file that upstream adds is replaced by upstream's version. If upstream later deletes that path again, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork preserve remove <path>` to let it go
 
-### `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input]`
+### `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]`
 
-Push a branch to the public fork, making it visible and ready for PR to upstream. `venfork stage branch <name>` is the explicit form of the same command; use it for a branch named `issue` or `branch`. With `--pr`, also opens the upstream PR for you using your internal review PR's body.
+Push a branch to the public fork, making it visible and ready for PR to upstream. `venfork stage branch <name>` is the explicit form of the same command; use it for a branch named `issue` or `branch`. With `--pr`, also opens the upstream PR for you using your internal review PR's body. With `--json`, stage never prompts and prints one JSON envelope on stdout (see [JSON output](#json-output)).
 
 **⚠️ Important:** This is when your work becomes visible to the client!
 
@@ -346,9 +348,9 @@ The implementation follows the spec at https://example.com/oauth.
 
 A comment that mentions venfork but is not a well-formed marker (for example a typo such as `venfork:intenral`), an unmatched close marker, or any `venfork` left in the text after stripping stops the stage before anything is pushed. An unmatched open marker drops everything after it. If you forget to add markers around other internal context, it is sent upstream, so review the preview prompt before confirming.
 
-### `venfork pull pr <pr-number-or-url> [--branch-name <override>] [--no-push]`
+### `venfork pull pr <pr-number-or-url> [--branch-name <override>] [--no-push] [--json]`
 
-Pull a third-party upstream PR into the private mirror so your team can review it internally before it lands. The PR's commits land on a new branch (`upstream-pr/<n>` by default) that's pushed to your mirror.
+Pull a third-party upstream PR into the private mirror so your team can review it internally before it lands. The PR's commits land on a new branch (`upstream-pr/<n>` by default) that's pushed to your mirror. With `--json`, it prints one JSON envelope on stdout (see [JSON output](#json-output)).
 
 **Arguments:**
 - `pr-number-or-url` - Either a bare integer (`1234`) or a github.com PR URL.
@@ -389,9 +391,9 @@ venfork sync upstream-pr/1234
 
 In that case it refetches `pull/<n>/head` from upstream and force-with-lease pushes the result to origin. The default-branch sync (the +1-managed-commit flow) is unaffected.
 
-### `venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input]` and `venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input]`
+### `venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]` and `venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]`
 
-Move *issue* context between the private mirror and upstream. The command names follow the direction: `stage` goes outward (mirror to upstream), `pull` comes inward (upstream to mirror). The shape matches `stage --pr` and `pull pr`, but for issues instead of PRs.
+Move *issue* context between the private mirror and upstream. The command names follow the direction: `stage` goes outward (mirror to upstream), `pull` comes inward (upstream to mirror). The shape matches `stage --pr` and `pull pr`, but for issues instead of PRs. With `--json`, both never prompt and print one JSON envelope on stdout (see [JSON output](#json-output)).
 
 - `stage issue <internal-#>` - read an internal triage issue from the mirror, redact `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks (same convention as `stage --pr`), and open the upstream counterpart via `gh issue create`.
 - `pull issue <upstream-#>` - read an upstream issue **and its comments**, create a parallel internal issue on the mirror titled `[upstream #N] <original title>` so the team can triage it without leaving the private space. The upstream comment thread is snapshotted into the mirror issue body under an "Upstream comments" section.
@@ -422,7 +424,7 @@ This is **only the linkage** — there is no *live* sync. `pull issue` snapshots
 
 ### `venfork doctor [--json]`
 
-Check that a mirror is healthy, then list the links recorded in `venfork-config` (shipped branches, pulled PRs, shipped and pulled issues, with dates). `--json` prints `{ "checks": [...], "links": {...} }`; `links` is `null` when the config cannot be read. It only reads, apart from fetching the remotes and the `venfork-config` branch.
+Check that a mirror is healthy, then list the links recorded in `venfork-config` (shipped branches, pulled PRs, shipped and pulled issues, with dates). `--json` prints the [JSON envelope](#json-output) with `result: { "checks": [...], "links": {...}, "healthy": true | false }`; `links` is `null` when the config cannot be read. It only reads, apart from fetching the remotes and the `venfork-config` branch.
 
 | Check | What it verifies |
 |---|---|
@@ -437,7 +439,7 @@ Check that a mirror is healthy, then list the links recorded in `venfork-config`
 | `last-run` | The last `venfork-sync.yml` run, from any trigger, did not fail |
 | `cron-age` | The workflow is enabled, and the last scheduled run is not older than twice the cron interval, with a floor of 1 hour because GitHub delays scheduled runs |
 
-Each failing check prints a fix. GitHub checks show as skipped when `gh` is not authenticated or origin is not a GitHub repository, and the summary counts skipped checks. If `git fetch` fails, the `remotes` row shows the reason and the checks that need fresh refs are skipped. The command exits 1 when any check fails; `--json` prints only the JSON results, for CI.
+Each failing check prints a fix. GitHub checks show as skipped when `gh` is not authenticated or origin is not a GitHub repository, and the summary counts skipped checks. If `git fetch` fails, the `remotes` row shows the reason and the checks that need fresh refs are skipped. The command exits 1 when any check fails. With `--json` the envelope is still `ok: true` when a check fails, because doctor ran: read the checks, or the exit code.
 
 ### `venfork schedule <status|set <cron> [--app|--token]|disable>`
 
@@ -593,12 +595,66 @@ venfork preserve clear
 
 venfork keeps stdout for results and sends everything a human reads to stderr:
 
-- **stdout** carries only results: `venfork --version`, help you ask for (`venfork help`, `venfork <command> --help`) and `venfork doctor --json`.
+- **stdout** carries only results: `venfork --version`, help you ask for (`venfork help`, `venfork <command> --help`) and the `--json` envelope.
 - **stderr** carries progress, spinners, prompts, warnings, errors, usage printed for a bad command line (including bare `venfork` with no command), the human-readable reports of `doctor`, `schedule status`, `workflows status` and `preserve list`, and the output of git and gh subprocesses.
 
 So `venfork doctor --json > health.json` writes clean JSON while progress still shows in the terminal, and `venfork sync 2>sync.log` keeps stdout empty.
 
 When stderr is a terminal, venfork draws styled output with colors and spinners. When stderr is not a terminal (a pipe, a file, CI), `NO_COLOR` is set to a non-empty value, or `TERM` is `dumb`, it prints plain lines with no ANSI escape codes and no spinner animation. Each line starts with a level prefix: `info:`, `ok:`, `step:`, `warn:`, `error:`. A spinner prints one `step:` line when it starts and one `done:` (or `error:`) line when it stops.
+
+## JSON output
+
+`sync`, `stage` (branch and `stage issue`), `pull pr`, `pull issue` and `doctor` accept `--json`. With it, stdout gets exactly one JSON object on one line, followed by a newline, also when the command fails. Progress, warnings and errors still go to stderr as usual. The exit code still follows the [exit codes](#non-interactive-use) table.
+
+`--json` implies `--no-input`: venfork never prompts, even at a terminal. A confirm without `--yes` gives a `missing-input` error and exit 2.
+
+```json
+{ "schemaVersion": 1, "ok": true, "result": { } }
+{ "schemaVersion": 1, "ok": false, "error": { "code": "missing-input", "message": "...", "flag": "--yes" } }
+```
+
+`schemaVersion` changes only when a field is removed or changes meaning. New fields can be added in the same version.
+
+Any command line that contains `--json` before any `--` gets the envelope, whatever the command: a usage error, an unknown or renamed command, `--json` before the command (`venfork --json sync`) or `--json` on a command that has no JSON output prints the error envelope with code `usage` and exit 2. Help and `--version` print text, so `--json` with `help`, `-h`, `--help` or `--version` is also a usage error. A SIGINT prints the `cancelled` envelope and exits 130; a SIGTERM prints it and exits 143.
+
+**Error codes** (`error.code`):
+
+| Code | Meaning |
+| --- | --- |
+| `usage` | Bad command line (exit 2) |
+| `missing-input` | venfork could not prompt and no flag gave the answer; `error.flag` names the flag (exit 2) |
+| `cancelled` | Cancelled or interrupted (exit 130, or 143 for SIGTERM) |
+| `auth` | gh is not authenticated, or not installed (the message says which) |
+| `git` | A git operation failed, for example a rejected push |
+| `github` | A gh call to GitHub failed, for example reading an issue or opening a PR |
+| `precondition` | The repos or the mirror state do not allow the action, for example staging upstream's default branch |
+| `remote-not-found` | A required remote (`origin`, `public`, `upstream`) is missing |
+| `not-in-repository` | A command that runs in a mirror (`sync`, `stage`, `pull`, `schedule`, `workflows`, `preserve`) failed outside a git repository |
+| `branch-not-found` | The branch does not exist |
+| `sync-divergence` | Sync stopped: origin or public has commits upstream does not have |
+| `config` | The `venfork-config` branch cannot be read, is invalid, or moved during a write |
+| `redaction` | A title or body mentions venfork outside a well-formed internal block |
+| `mirror-reference` | Text bound for upstream points back at the private mirror |
+| `stage-leak` | Stage would publish a mirror-only path or its content, or it cannot check the mirror history (too many reflog entries or commits, a directory where venfork writes a file, a file over 100 MB). Text that names the mirror is `mirror-reference`, and a bad internal block is `redaction` |
+| `pin-downgrade` | origin pins a newer venfork than the one running |
+| `unmigrated-mirror` | The mirror's sync workflow predates venfork 0.11 |
+| `command-failed` | The command failed and reported why on stderr |
+| `runtime` | Another venfork runtime failure |
+| `internal` | An unexpected error that venfork did not classify |
+
+**Results** (`result`), per command:
+
+- `sync` on the default branch: `{ "kind": "default-branch", "status": "pushed" | "up-to-date", "branch", "upstreamTip", "origin": { "tip", "pushed" }, "public"?: { "tip", "pushed" } }`. `public` is absent in no-public mode. `status` is `pushed` when origin or public moved.
+- `sync <branch>` on a pulled upstream PR: `{ "kind": "pulled-pr", "status": "pushed" | "up-to-date" | "push-failed", "branch", "prNumber", "head" }`. `push-failed` means the local branch moved but origin did not; the exit code is 0, as without `--json`.
+- `stage <branch>`: `{ "branch", "head", "target": "public" | "upstream", "compareUrl", "prAction"?, "prUrl"?, "internalPrUrl"? }`. `head` is the rebuilt commit that was pushed. `prAction` is present only with `--pr`: `created`, `updated` (an open PR's body was refreshed), `unchanged` (an open PR was left as is) or `failed` (the push worked, the PR could not be opened).
+- `stage issue` and `pull issue`: `{ "number", "url", "source": { "number", "url" } }`. `number` and `url` are the issue venfork opened; `source` is the issue it was made from.
+- `pull pr`: `{ "branch", "head", "prNumber", "prUrl", "pushed" }`. `pushed` is false with `--no-push` or when the push to origin failed.
+- `doctor`: `{ "checks": [{ "id", "ok": true | false | "skipped", "detail", "fix"? }], "links": { "shippedBranches", "pulledPrs", "shippedIssues", "pulledIssues" } | null, "healthy" }`. `healthy` is false when any check failed. Doctor that ran is `ok: true` even when a check failed; it then exits 1.
+
+```bash
+venfork sync --json | jq -r '.result.status'
+venfork stage feat/auth --pr --yes --json | jq -r '.result.prUrl'
+```
 
 ## Non-interactive use
 
