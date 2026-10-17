@@ -1,4 +1,5 @@
 import type { ScheduleAuth } from './config.js';
+import { UsageError } from './errors.js';
 import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
 
 /** Parsed `venfork schedule ...` arguments. */
@@ -29,7 +30,7 @@ export function parseScheduleCliArgs(args: string[]): ParsedScheduleArgs {
 
   if (action === 'status' || action === 'disable') {
     if (authFlags.length > 0) {
-      throw new Error(
+      throw new UsageError(
         `${authFlags[0]} applies only to 'schedule set'. Usage: ${SCHEDULE_USAGE}`
       );
     }
@@ -38,19 +39,19 @@ export function parseScheduleCliArgs(args: string[]): ParsedScheduleArgs {
   }
   if (action === 'set') {
     if (new Set(authFlags).size > 1) {
-      throw new Error(
+      throw new UsageError(
         `--app and --token cannot be used together. Usage: ${SCHEDULE_USAGE}`
       );
     }
     if (rest.length === 0) {
-      throw new Error(`Missing cron expression. Usage: ${SCHEDULE_USAGE}`);
+      throw new UsageError(`Missing cron expression. Usage: ${SCHEDULE_USAGE}`);
     }
     if (rest.length > 1) throw unexpectedArgument(rest[1], SCHEDULE_USAGE);
     const auth =
       authFlags[0] === '--app' ? 'app' : authFlags[0] ? 'token' : undefined;
     return { action, cron: rest[0], ...(auth ? { auth } : {}) };
   }
-  throw new Error(
+  throw new UsageError(
     `Unknown schedule action '${action}'. Usage: ${SCHEDULE_USAGE}`
   );
 }

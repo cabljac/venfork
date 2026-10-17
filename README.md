@@ -191,7 +191,7 @@ Clone an existing vendor setup and automatically configure all remotes.
 
 **Options** (only meaningful for **legacy mirrors** without a `venfork-config` branch. When config is present it is authoritative: a flag that names the recorded value is accepted, and a flag that contradicts it is an error):
 - `--no-public` - Declare a no-public layout (origin + upstream only). Use when the original setup was created with `venfork setup --no-public` but the config branch is missing.
-- `--upstream <url>` - Provide the upstream URL explicitly. Useful with `--no-public` (no public fork to derive it from) or to skip the auto-detect prompt.
+- `--upstream <url>` - Provide the upstream explicitly, as a GitHub URL or `owner/repo` (anything else exits 2). Useful with `--no-public` (no public fork to derive it from) or to skip the auto-detect prompt.
 - `--public-fork <url>` - Provide the public fork (GitHub URL or `owner/repo`) explicitly. Skips the public-fork detection and prompt; upstream is still read from the fork's parent unless `--upstream` is given. Cannot be combined with `--no-public`.
 
 `--no-input` never prompts: a URL that clone would ask for exits 2 and names the flag that supplies it. `clone` has no confirm, so it does not take `--yes`. A clone that fails or is cancelled after the repository was cloned removes the cloned directory, so you can rerun it with the named flag.
@@ -594,7 +594,7 @@ venfork preserve clear
 venfork keeps stdout for results and sends everything a human reads to stderr:
 
 - **stdout** carries only results: `venfork --version`, help you ask for (`venfork help`, `venfork <command> --help`) and `venfork doctor --json`.
-- **stderr** carries progress, spinners, prompts, warnings, errors, usage printed for a bad command line, the human-readable reports of `doctor`, `schedule status`, `workflows status` and `preserve list`, and the output of git and gh subprocesses.
+- **stderr** carries progress, spinners, prompts, warnings, errors, usage printed for a bad command line (including bare `venfork` with no command), the human-readable reports of `doctor`, `schedule status`, `workflows status` and `preserve list`, and the output of git and gh subprocesses.
 
 So `venfork doctor --json > health.json` writes clean JSON while progress still shows in the terminal, and `venfork sync 2>sync.log` keeps stdout empty.
 
@@ -628,9 +628,11 @@ venfork stage feat/auth --pr --yes --no-input
 | Code | Meaning |
 | --- | --- |
 | `0` | Success, or you answered "no" to a confirm at a terminal |
-| `1` | Runtime failure, usage error, or `venfork doctor` found a failing check |
-| `2` | Missing input or consent: venfork could not prompt and no flag supplied the answer |
+| `1` | Runtime failure, or `venfork doctor` found a failing check |
+| `2` | Usage error (unknown command or option, missing or unexpected argument, malformed flag value, flags that cannot be combined, or bare `venfork` with no command), or missing input or consent: venfork could not prompt and no flag supplied the answer |
 | `130` | Cancelled at a prompt (Ctrl-C, Esc, or input ended), or the terminal closed during the run |
+
+A usage error is reported before venfork checks gh auth or touches a repo. Input that is valid in form but fails against the repos, such as a branch that does not exist, a diverged mirror, or a flag that contradicts the mirror's `venfork-config`, is a runtime failure (`1`).
 
 ## Environment Variables
 

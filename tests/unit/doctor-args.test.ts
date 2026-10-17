@@ -10,6 +10,12 @@ describe('parseDoctorCliArgs', () => {
     expect(parseDoctorCliArgs(['--json'])).toEqual({ check: true, json: true });
   });
 
+  test('rejects a positional as an unexpected argument', () => {
+    expect(() => parseDoctorCliArgs(['extra'])).toThrow(
+      "Unexpected argument 'extra'"
+    );
+  });
+
   test('rejects unknown options', () => {
     expect(() => parseDoctorCliArgs(['--fix'])).toThrow(
       "Unknown option '--fix'"

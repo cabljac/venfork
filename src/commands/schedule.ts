@@ -4,8 +4,9 @@ import {
   scheduleAuthOf,
   type VenforkConfig,
 } from '../config.js';
-import { CommandExitError } from '../errors.js';
+import { CommandExitError, isEntryReported, UsageError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
+import { SCHEDULE_USAGE } from '../schedule-args.js';
 import { applyConfigChange } from '../shared/config-change.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
 import { isValidCronExpression } from '../shared/cron.js';
@@ -73,14 +74,14 @@ export async function scheduleCommand(
     if (action === 'set') {
       const cron = value?.trim();
       if (!cron) {
-        p.log.error('Cron expression is required');
-        p.outro('Usage: venfork schedule set "<cron>" [--app|--token]');
-        throw new CommandExitError(1);
+        throw new UsageError(
+          `Missing cron expression. Usage: ${SCHEDULE_USAGE}`
+        );
       }
       if (!isValidCronExpression(cron)) {
-        p.log.error('Invalid cron expression (expected 5 fields)');
-        p.outro('Usage: venfork schedule set "<cron>" [--app|--token]');
-        throw new CommandExitError(1);
+        throw new UsageError(
+          `Invalid cron expression '${cron}' (expected 5 fields), e.g. "0 */6 * * *". Usage: ${SCHEDULE_USAGE}`
+        );
       }
 
       const mirrorRepo = await mirrorOriginPath(repoDir);
@@ -201,13 +202,11 @@ export async function scheduleCommand(
       return;
     }
 
-    p.log.error(`Unknown schedule action: ${action}`);
-    p.outro(
-      'Usage: venfork schedule <status|set <cron> [--app|--token]|disable>\nExample: venfork schedule set "0 */6 * * *"'
+    throw new UsageError(
+      `Unknown schedule action '${action}'. Usage: ${SCHEDULE_USAGE}`
     );
-    throw new CommandExitError(1);
   } catch (error) {
-    if (error instanceof CommandExitError) throw error;
+    if (isEntryReported(error)) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Schedule command failed');

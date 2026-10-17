@@ -1,4 +1,4 @@
-import { NO_INPUT_FLAG } from './shared/args.js';
+import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
 
 /** Parsed `venfork sync` arguments. */
 export type ParsedSyncArgs = {
@@ -7,26 +7,22 @@ export type ParsedSyncArgs = {
   reportIssues: boolean;
 };
 
+const USAGE = 'venfork sync [branch] [--report-issues]';
+
 /**
- * Parse `venfork sync [branch] [--report-issues] [--no-input]` argv after the `sync` token.
+ * Parse `venfork sync [branch] [--report-issues] [--no-input]` argv after
+ * the `sync` token. `--` ends options. Throws a `UsageError`.
  */
 export function parseSyncCliArgs(args: string[]): ParsedSyncArgs {
-  let branch: string | undefined;
   let reportIssues = false;
-  for (const arg of args) {
-    if (arg === '--report-issues') {
-      reportIssues = true;
-    } else if (arg === NO_INPUT_FLAG) {
-      // Accepted on every command; sync never prompts.
-    } else if (arg.startsWith('-')) {
-      throw new Error(
-        `Unknown option '${arg}'. Usage: venfork sync [branch] [--report-issues]`
-      );
-    } else if (branch === undefined) {
-      branch = arg;
-    } else {
-      throw new Error('Usage: venfork sync [branch] [--report-issues]');
-    }
+  const positional = scanArgs(args, USAGE, (arg) => {
+    if (arg === NO_INPUT_FLAG) return 0;
+    if (arg !== '--report-issues') return undefined;
+    reportIssues = true;
+    return 0;
+  });
+  if (positional.length > 1) {
+    throw unexpectedArgument(positional[1], USAGE);
   }
-  return { branch, reportIssues };
+  return { branch: positional[0], reportIssues };
 }

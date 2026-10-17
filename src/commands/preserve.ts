@@ -6,7 +6,7 @@ import {
   updateVenforkConfig,
   type VenforkConfigPatch,
 } from '../config.js';
-import { CommandExitError } from '../errors.js';
+import { CommandExitError, isEntryReported, UsageError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { applyConfigChange } from '../shared/config-change.js';
 import { changedFilesInCommit } from '../shared/divergence.js';
@@ -102,6 +102,22 @@ async function writeRemoval(
 }
 
 /**
+ * The clean form of each `preserve add` path. Throws {@link UsageError} for
+ * a path that {@link normalizePreservePath} rejects.
+ */
+function normalizePreserveArgs(paths: string[]): string[] {
+  return paths.map((candidate) => {
+    const cleaned = normalizePreservePath(candidate);
+    if (!cleaned) {
+      throw new UsageError(
+        `Invalid preserve path '${candidate}': must be a clean relative path (no leading '/' or '-', no '..' / '.' / empty segments, no backslashes, NUL bytes, Windows drive prefixes, whitespace, glob characters (* ? [ ]) or leading ':'), and not the venfork sync workflow or a path under .venfork/.`
+      );
+    }
+    return cleaned;
+  });
+}
+
+/**
  * Preserve command: manage the `preserve` allowlist of mirror-only file paths
  * carried forward by `venfork sync`. Allowlist-only / opt-in: there's no
  * "deny preserve" concept (entries can still be added, removed, or cleared;
@@ -157,13 +173,12 @@ export async function preserveCommand(
       return;
     }
 
-    const config = await readVenforkConfigFromRepo(repoDir);
-    const current = [
-      ...(config?.preserve ?? []),
-      ...(config?.invalidPreserve ?? []),
-    ];
-
     if (action === 'remove') {
+      const config = await readVenforkConfigFromRepo(repoDir);
+      const current = [
+        ...(config?.preserve ?? []),
+        ...(config?.invalidPreserve ?? []),
+      ];
       const toRemove = [
         ...new Set(paths.map((entry) => normalizePreservePath(entry) ?? entry)),
       ];
@@ -181,17 +196,7 @@ export async function preserveCommand(
       return;
     }
 
-    const validated: string[] = [];
-    for (const candidate of paths) {
-      const cleaned = normalizePreservePath(candidate);
-      if (!cleaned) {
-        throw new Error(
-          `Invalid preserve path '${candidate}': must be a clean relative path (no leading '/' or '-', no '..' / '.' / empty segments, no backslashes, NUL bytes, Windows drive prefixes, whitespace, glob characters (* ? [ ]) or leading ':'), and not the venfork sync workflow or a path under .venfork/.`
-        );
-      }
-      validated.push(cleaned);
-    }
-
+    const validated = normalizePreserveArgs(paths);
     await assertPreserveEntriesAreFiles(validated, repoDir);
     await updateVenforkConfig(repoDir, { preserveAdd: validated });
     p.note(
@@ -202,7 +207,7 @@ export async function preserveCommand(
       '✨ Preserve list updated. Run `venfork sync` to apply on the private mirror default branch.'
     );
   } catch (error) {
-    if (error instanceof CommandExitError) throw error;
+    if (isEntryReported(error)) throw error;
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Preserve command failed');
     throw new CommandExitError(1);

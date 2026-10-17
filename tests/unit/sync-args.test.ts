@@ -23,3 +23,16 @@ describe('parseSyncCliArgs', () => {
     expect(() => parseSyncCliArgs(['a', 'b'])).toThrow('Usage: venfork sync');
   });
 });
+
+describe('parseSyncCliArgs and --', () => {
+  test('-- ends options, so a dash-leading branch can follow it', () => {
+    expect(parseSyncCliArgs(['--'])).toEqual({
+      branch: undefined,
+      reportIssues: false,
+    });
+    expect(parseSyncCliArgs(['--report-issues', '--', '-weird'])).toEqual({
+      branch: '-weird',
+      reportIssues: true,
+    });
+  });
+});

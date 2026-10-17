@@ -8,8 +8,10 @@ import {
   BranchNotFoundError,
   CommandExitError,
   GitError,
+  isEntryReported,
   MissingInputError,
   RemoteNotFoundError,
+  UsageError,
 } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { WORKFLOWS_DIR } from '../shared/constants.js';
@@ -48,6 +50,7 @@ import {
   editUpstreamPrBody,
 } from '../shared/upstream-publish.js';
 import { withDetachedWorktree } from '../shared/worktree.js';
+import { STAGE_USAGE } from '../stage-args.js';
 import { parseRepoPath } from '../utils.js';
 
 const CONFIG_BRANCH = 'venfork-config';
@@ -617,15 +620,11 @@ export async function stageCommand(
   branch: string | undefined,
   options: StageOptions = {}
 ): Promise<void> {
-  p.intro('📤 Venfork Stage');
-
   if (!branch) {
-    p.log.error('Branch name is required');
-    p.outro(
-      'Usage: venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>]. Run `venfork stage --help` for every option.'
-    );
-    throw new CommandExitError(1);
+    throw new UsageError(`Missing branch name. Usage: ${STAGE_USAGE}`);
   }
+
+  p.intro('📤 Venfork Stage');
 
   const createPr = Boolean(options.createPr || options.draft);
 
@@ -864,11 +863,11 @@ export async function stageCommand(
 
     p.outro('✨ Stage complete!');
   } catch (error) {
-    if (error instanceof CommandExitError) throw error;
     if (error instanceof MissingInputError) {
       s.cancel('Not staged: the push confirm needs --yes');
       throw error;
     }
+    if (isEntryReported(error)) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Stage failed');

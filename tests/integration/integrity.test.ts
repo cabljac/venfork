@@ -21,7 +21,11 @@ import {
   readVenforkConfigFromRepo,
   updateVenforkConfig,
 } from '../../src/config.js';
-import { CommandExitError, SyncDivergenceError } from '../../src/errors.js';
+import {
+  CommandExitError,
+  SyncDivergenceError,
+  UsageError,
+} from '../../src/errors.js';
 import { buildMirrorTip } from '../../src/shared/mirror-commit.js';
 import { netExec, netFailureReason } from '../../src/shared/net.js';
 import {
@@ -70,13 +74,9 @@ describe('preserve cannot capture venfork state', () => {
   test('preserving the sync workflow is refused, so schedule set still rewrites it', async () => {
     await scheduleCommand('set', '0 * * * *');
 
-    await expect(preserveCommand('add', [WF])).rejects.toThrow(
-      new CommandExitError(1)
-    );
-    expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining(`Invalid preserve path '${WF}'`),
-      ON_STDERR
-    );
+    const refused = preserveCommand('add', [WF]);
+    await expect(refused).rejects.toBeInstanceOf(UsageError);
+    await expect(refused).rejects.toThrow(`Invalid preserve path '${WF}'`);
     await scheduleCommand('set', '30 2 * * *');
 
     expect(await fx.fileAt(fx.origin, 'main', WF)).toContain(

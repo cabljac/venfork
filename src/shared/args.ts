@@ -1,3 +1,4 @@
+import { UsageError } from '../errors.js';
 import type { PromptContext } from './prompt.js';
 
 /**
@@ -13,25 +14,26 @@ export function consumeValue(
   const a = args[i];
   if (a === flag) {
     const v = args[i + 1];
-    if (!v || v.startsWith('--')) throw new Error(`${flag} requires a value`);
+    if (!v || v.startsWith('--'))
+      throw new UsageError(`${flag} requires a value`);
     return { value: v, consumed: 1 };
   }
   if (a.startsWith(equalsForm)) {
     const v = a.slice(equalsForm.length);
-    if (!v) throw new Error(`${flag} requires a value`);
+    if (!v) throw new UsageError(`${flag} requires a value`);
     return { value: v, consumed: 0 };
   }
   throw new Error(`internal: consumeValue called for non-matching arg ${a}`);
 }
 
 /** Error for an option the command does not define. */
-export function unknownOption(arg: string, usage: string): Error {
-  return new Error(`Unknown option '${arg}'. Usage: ${usage}`);
+export function unknownOption(arg: string, usage: string): UsageError {
+  return new UsageError(`Unknown option '${arg}'. Usage: ${usage}`);
 }
 
 /** Error for a positional the command does not accept. */
-export function unexpectedArgument(arg: string, usage: string): Error {
-  return new Error(`Unexpected argument '${arg}'. Usage: ${usage}`);
+export function unexpectedArgument(arg: string, usage: string): UsageError {
+  return new UsageError(`Unexpected argument '${arg}'. Usage: ${usage}`);
 }
 
 /**
@@ -111,4 +113,39 @@ export function parsePositiveInt(value: string): number | null {
   if (!/^\d+$/.test(value)) return null;
   const n = Number(value);
   return Number.isSafeInteger(n) && n >= 1 ? n : null;
+}
+
+/** A parsed `<number-or-url>` argument. */
+export interface GitHubRef {
+  number: number;
+  /** `owner/repo` from the URL form; absent for a bare number. */
+  repoPath?: string;
+}
+
+/**
+ * Parse a `<number-or-url>` argument: a positive integer, or a github.com
+ * URL to `<owner>/<repo>/<segment>/<n>`. Throws {@link UsageError} for
+ * anything else.
+ */
+export function parseGitHubRef(
+  value: string,
+  segment: 'pull' | 'issues'
+): GitHubRef {
+  const trimmed = value.trim();
+  const bare = parsePositiveInt(trimmed);
+  if (bare !== null) return { number: bare };
+  const match = trimmed.match(
+    new RegExp(
+      `^(?:https?:\\/\\/(?:www\\.)?|git@)github\\.com[/:]([^/]+\\/[^/]+?)(?:\\.git)?\\/${segment}\\/(\\d+)(?=[/?#]|$)`,
+      'i'
+    )
+  );
+  const number = match ? parsePositiveInt(match[2]) : null;
+  if (!match || number === null) {
+    const kind = segment === 'pull' ? 'PR' : 'issue';
+    throw new UsageError(
+      `Could not parse ${kind} reference: ${value}. Expected a positive integer or a github.com/<owner>/<repo>/${segment}/<n> URL.`
+    );
+  }
+  return { number, repoPath: match[1] };
 }

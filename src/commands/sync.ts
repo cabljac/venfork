@@ -8,6 +8,7 @@ import {
 import {
   CommandExitError,
   ConfigError,
+  isEntryReported,
   SyncDivergenceError,
 } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
@@ -346,7 +347,7 @@ export async function syncCommand(
       );
     }
   } catch (error) {
-    if (error instanceof CommandExitError) throw error;
+    if (isEntryReported(error)) throw error;
     if (error instanceof SyncDivergenceError || error instanceof ConfigError) {
       if (error instanceof ConfigError) s.stop('Config error');
       throw error;

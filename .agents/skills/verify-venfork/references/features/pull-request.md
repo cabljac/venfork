@@ -19,7 +19,7 @@ tests:
 - `git fetch upstream pull/<n>/head:<branch>`, then a plain `git push origin <branch> --no-follow-tags` (no lease), then writes `pulledPrs[<branch>]` (number, URL, head, `lastSyncedAt`).
 - `--no-push`, or a failed push, keeps the branch local and writes no `pulledPrs` entry. Both exit 0.
 - Refresh is `venfork sync <branch>` (see `sync.md`): it finds the PR by `pulledPrs[branch]` or the name `upstream-pr/<n>`, force-fetches, pushes with a lease and needs no gh.
-- The old `venfork pull-request` name exits 1 and names `venfork pull pr`.
+- The old `venfork pull-request` name exits 2 and names `venfork pull pr`. A malformed `<pr-number-or-url>` exits 2 at parse time; a URL to another repo than upstream exits 1.
 
 ## How a user reaches it
 
@@ -31,8 +31,8 @@ tests:
 
 ```bash
 venfork pull pr 1 </dev/null 2>&1 | grep -o "Could not parse upstream remote URL"   # exit 1
-venfork pull pr </dev/null 2>&1 | head -1                                          # usage, exit 1
-venfork pull-request 1 </dev/null 2>&1                                             # rename hint, exit 1
+venfork pull pr </dev/null 2>&1 | head -1                                          # usage, exit 2
+venfork pull-request 1 </dev/null 2>&1                                             # rename hint, exit 2
 git checkout -q -b pr-head upstream/main && echo p > src/p.txt && git add . && git commit -qm "feat: p"
 git push -q "$VF_UPSTREAM" pr-head:refs/pull/7/head                                # fake upstream PR #7
 venfork sync upstream-pr/7 </dev/null 2>&1 | grep "synced with upstream PR #7"

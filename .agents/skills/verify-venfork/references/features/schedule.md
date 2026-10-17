@@ -20,7 +20,7 @@ Pending #85 stack: `schedule set --app`/`--token` and `scheduleAuth`; update thi
 - `disable` writes `enabled: false` and re-stamps origin without the workflow. With no preserve or workflow list, origin returns to the plain upstream tip.
 - Order inside `set`/`disable`: read config at SHA S, refuse divergence, build the tip, write the config with a lease on S (no retry), push the tip with a lease. If the push fails, the config is restored to S.
 - `set` warns that every upstream workflow can read `VENFORK_PUSH_TOKEN` while both workflow lists are empty, and prints the `gh secret set` command.
-- Errors: "Invalid cron expression (expected 5 fields)", `SyncDivergenceError` (origin has user commits), `PinDowngradeError`, `GitError` "origin/main moved since this sync fetched it" (stale lease; the message says sync even here), `ConfigError` reason `conflict` (config moved between read and write), a combined error when the rollback also fails. Usage errors from the parser: "Missing cron expression", "Unknown schedule action".
+- Usage errors (exit 2): "Invalid cron expression '<cron>' (expected 5 fields)", "Missing cron expression", "Unknown schedule action". Runtime errors (exit 1): `SyncDivergenceError` (origin has user commits), `PinDowngradeError`, `GitError` "origin/main moved since this sync fetched it" (stale lease; the message says sync even here), `ConfigError` reason `conflict` (config moved between read and write), a combined error when the rollback also fails.
 
 ## How a user reaches it
 
@@ -34,7 +34,7 @@ git -C "$VF_ORIGIN" show --stat --format=%s main                             # m
 A=$(vf_tip "$VF_ORIGIN"); N=$(vf_pushes "$VF_ORIGIN")
 venfork sync </dev/null >/dev/null 2>&1; echo "$A $(vf_tip "$VF_ORIGIN") $N $(vf_pushes "$VF_ORIGIN")"  # same SHA, same count
 venfork schedule status </dev/null 2>&1 | grep -E "Enabled|Cron"
-venfork schedule set "61 * * * *" </dev/null 2>&1 | grep Invalid             # exit 1
+venfork schedule set "61 * * * *" </dev/null 2>&1 | grep Invalid             # usage, exit 2
 venfork schedule disable </dev/null 2>&1 | grep "Scheduled sync disabled"   # origin back to upstream (+0)
 vf_origin_commit src/hot.txt x; venfork schedule set "0 * * * *" </dev/null 2>&1 | grep "Sync aborted"  # divergence, exit 1
 ```

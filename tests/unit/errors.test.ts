@@ -2,13 +2,17 @@ import { describe, expect, test } from 'bun:test';
 import {
   AuthenticationError,
   BranchNotFoundError,
+  CommandExitError,
   GitError,
+  isEntryReported,
+  MissingInputError,
   NotInRepositoryError,
   RemoteNotFoundError,
   StageLeakError,
   SyncDivergenceError,
   UNMIGRATED_MIRROR_STEPS,
   UnmigratedMirrorError,
+  UsageError,
   VenforkError,
 } from '../../src/errors';
 
@@ -129,5 +133,28 @@ describe('SyncDivergenceError', () => {
     expect(error.message).toBe(
       'Sync aborted to prevent data loss: origin/main has 1 commit(s) not in upstream/main'
     );
+  });
+});
+
+describe('UsageError', () => {
+  test('is a VenforkError named UsageError', () => {
+    const error = new UsageError('Missing branch name.');
+    expect(error.message).toBe('Missing branch name.');
+    expect(error.name).toBe('UsageError');
+    expect(error instanceof VenforkError).toBe(true);
+  });
+});
+
+describe('isEntryReported', () => {
+  test('passes usage, missing-input and exit errors through to the entry point', () => {
+    expect(isEntryReported(new UsageError('x'))).toBe(true);
+    expect(isEntryReported(new MissingInputError('--yes', 'Push?'))).toBe(true);
+    expect(isEntryReported(new CommandExitError(130))).toBe(true);
+  });
+
+  test('leaves runtime failures to the command', () => {
+    expect(isEntryReported(new Error('boom'))).toBe(false);
+    expect(isEntryReported(new BranchNotFoundError('feat'))).toBe(false);
+    expect(isEntryReported('boom')).toBe(false);
   });
 });

@@ -239,3 +239,28 @@ export class MissingInputError extends VenforkError {
     this.name = 'MissingInputError';
   }
 }
+
+/**
+ * Thrown for a usage error: an unknown command or option, a missing or
+ * unexpected argument, a malformed flag value, or flags that cannot be
+ * combined. `src/index.ts` exits 2.
+ */
+export class UsageError extends VenforkError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UsageError';
+  }
+}
+
+/**
+ * True for an error a command's catch block rethrows unchanged, because
+ * `src/index.ts` reports it and picks its exit code (2, or the code a
+ * {@link CommandExitError} carries).
+ */
+export function isEntryReported(error: unknown): boolean {
+  return (
+    error instanceof CommandExitError ||
+    error instanceof UsageError ||
+    error instanceof MissingInputError
+  );
+}

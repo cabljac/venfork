@@ -20,7 +20,7 @@ tests:
 - Writes the orphan `venfork-config` branch. Never overwrites one: an existing config that agrees is kept, one that disagrees is a `ConfigError` ("The existing venfork-config disagrees with this setup").
 - Sets remotes: `origin`, `public` (not with `--no-public`; a stale `public` is removed), `upstream` with push URL `DISABLE`. URLs follow `gh config get git_protocol`.
 - Recovery: when the fork or the mirror already exists on GitHub, setup skips the seed, reuses a matching local clone and runs `sync` quietly inside it.
-- Errors: `--no-public` with `--fork-name`, invalid upstream, invalid `--fork-name`, upstream already under the owner without `--fork-name`, an existing repo that is not a fork of upstream, a local directory that is not the expected mirror clone.
+- Usage errors (exit 2, before gh auth): `--no-public` with `--fork-name`, invalid upstream, invalid `--fork-name`. Runtime errors (exit 1): upstream already under the owner without `--fork-name`, an existing repo that is not a fork of upstream, a local directory that is not the expected mirror clone.
 
 ## How a user reaches it
 

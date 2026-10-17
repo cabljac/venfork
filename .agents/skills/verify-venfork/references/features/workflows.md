@@ -19,7 +19,7 @@ tests:
 - The command writes only `venfork-config` (leased, up to 3 retries). It never moves `main`. The next `sync` applies it.
 - In the managed commit, a non-empty allow list wins: only listed top-level `.github/workflows/*.yml|yaml` files stay. Else blocked basenames are removed. Subdirectories and the sync workflow are never removed.
 - A non-empty list alone is enough to put a managed commit on origin, with no schedule or preserve list.
-- Errors: usage errors only ("Usage: venfork workflows allow <workflow-file> ..."), and "venfork-config branch not found or invalid". Removing a name that is not listed succeeds silently.
+- Errors: usage errors (exit 2: "Usage: venfork workflows allow <workflow-file> ...", an unknown action), and "venfork-config branch not found or invalid" (exit 1). Removing a name that is not listed succeeds silently.
 
 ## How a user reaches it
 
@@ -36,7 +36,7 @@ N=$(vf_pushes "$VF_ORIGIN"); venfork sync </dev/null >/dev/null 2>&1; echo "$N $
 venfork workflows allow lint.yml </dev/null >/dev/null 2>&1; venfork sync </dev/null >/dev/null 2>&1
 git -C "$VF_ORIGIN" ls-tree --name-only main .github/workflows/                          # lint.yml only
 venfork workflows clear </dev/null >/dev/null 2>&1; venfork sync </dev/null >/dev/null 2>&1   # origin == upstream (+0)
-venfork workflows allow </dev/null 2>&1 | head -1                                         # exit 1, usage
+venfork workflows allow </dev/null 2>&1 | head -1                                         # exit 2, usage
 ```
 
 - Cancel: there is no prompt, so there is no 130 path.

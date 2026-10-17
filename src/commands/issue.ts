@@ -2,10 +2,11 @@ import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
 import {
   CommandExitError,
-  MissingInputError,
+  isEntryReported,
   RemoteNotFoundError,
+  UsageError,
 } from '../errors.js';
-import { parsePositiveInt } from '../shared/args.js';
+import { parseGitHubRef } from '../shared/args.js';
 import {
   assertNoMirrorReference,
   mirrorDenyList,
@@ -89,24 +90,13 @@ export function resolveIssueArg(
   target: string,
   expectedRepoPath: string
 ): { number: number } {
-  const trimmed = target.trim();
-  const bare = parsePositiveInt(trimmed);
-  if (bare !== null) {
-    return { number: bare };
-  }
-  const match = trimmed.match(
-    /^(?:https?:\/\/(?:www\.)?|git@)github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?\/issues\/(\d+)(?=[/?#]|$)/i
-  );
-  const number = match ? parsePositiveInt(match[2]) : null;
-  if (!match || number === null) {
+  const { number, repoPath } = parseGitHubRef(target, 'issues');
+  if (
+    repoPath !== undefined &&
+    repoPath.toLowerCase() !== expectedRepoPath.toLowerCase()
+  ) {
     throw new Error(
-      `Could not parse issue reference: ${target}. Expected a positive integer or a github.com/<owner>/<repo>/issues/<n> URL.`
-    );
-  }
-  const sourceRepoPath = match[1];
-  if (sourceRepoPath.toLowerCase() !== expectedRepoPath.toLowerCase()) {
-    throw new Error(
-      `Refused to use issue URL ${target}: it points to ${sourceRepoPath}, but the expected repo is ${expectedRepoPath}. If this is intentional, pass the issue number directly.`
+      `Refused to use issue URL ${target}: it points to ${repoPath}, but the expected repo is ${expectedRepoPath}. If this is intentional, pass the issue number directly.`
     );
   }
   return { number };
@@ -129,21 +119,19 @@ export async function issueCommand(
   target: string | undefined,
   options: { title?: string; prompt?: PromptContext } = {}
 ): Promise<void> {
-  p.intro('🐛 Venfork Issue');
-
   if (!action || !target) {
-    p.log.error(
-      `Usage: venfork ${issueUsage(action)} <number-or-url> [--title <text>]`
+    throw new UsageError(
+      `Missing issue number or URL. Usage: venfork ${issueUsage(action)} <number-or-url> [--title <text>]`
     );
-    p.outro('');
-    throw new CommandExitError(1);
   }
 
   if (action !== 'stage' && action !== 'pull') {
-    p.log.error(`Unknown action '${action}'. Expected one of: stage, pull.`);
-    p.outro('');
-    throw new CommandExitError(1);
+    throw new UsageError(
+      `Unknown action '${action}'. Expected one of: stage, pull.`
+    );
   }
+
+  p.intro('🐛 Venfork Issue');
 
   const s = p.spinner();
   const repoDir = process.cwd();
@@ -320,8 +308,7 @@ export async function issueCommand(
 
     p.outro(`✨ Issue pulled: ${created.url}`);
   } catch (error) {
-    if (error instanceof CommandExitError) throw error;
-    if (error instanceof MissingInputError) throw error;
+    if (isEntryReported(error)) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Issue command failed');
