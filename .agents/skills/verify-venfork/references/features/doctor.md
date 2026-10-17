@@ -3,7 +3,7 @@ command: doctor
 entry: src/commands/doctor.ts
 shared: [constants, cron, divergence, json-output, managed-commit, mirror-commit, net, push-token, semver]
 config:
-  read: [mode, upstreamUrl, publicForkUrl, schedule, preserve, invalidPreserve, shippedBranches, pulledPrs, shippedIssues, pulledIssues]
+  read: [mode, upstreamUrl, publicForkUrl, schedule, scheduleAuth, preserve, invalidPreserve, shippedBranches, pulledPrs, shippedIssues, pulledIssues]
   written: []
 tests:
   unit: [tests/unit/doctor.test.ts, tests/unit/doctor-args.test.ts, tests/unit/node-smoke.test.ts, tests/unit/json-output.test.ts]
@@ -12,8 +12,6 @@ tests:
 ---
 
 ## What exists
-
-Pending #85 stack: the GitHub App secret check; update this file when it lands.
 
 - Eleven checks, always in this order: `repo`, `remotes`, `mode`, `invariant`, `divergence`, `preserve`, `workflow`, `transport`, `token`, `last-run`, `cron-age`. Each is `{ id, ok: true | false | 'skipped', detail, fix? }`.
 - `--json` prints one line on stdout: `{ "schemaVersion": 1, "ok": true, "result": { "checks": [...], "links": {...}, "healthy": true } }`; `healthy` is false when any check is `false`. The human report still goes to stderr. Without `--json` stdout stays empty. `links` holds the four link maps, or `null` when the config is unreadable.
@@ -24,13 +22,13 @@ Pending #85 stack: the GitHub App secret check; update this file when it lands.
 - `invariant`: "upstream (+0)", "upstream + 1 managed commit", "N upstream commit(s) not synced yet" (still ok), or false for stacked managed commits ("Run `venfork sync` to fold") or real divergence.
 - `preserve` runs the same tip builder as sync, so it fails where sync would.
 - `workflow`: missing, stale, unpinned (pre-0.11) or pinned newer than this CLI.
-- `transport` reads origin's push URL and runs `git ls-remote --exit-code <url> HEAD` through netExec (the user's ssh command with BatchMode, or the gh helper for HTTPS; at most 30 s). Exit 0, or 2 for an empty repo, is `true`. Else `false`: SSH fix "`gh config set git_protocol https` and re-clone, or load an SSH key" (the host key fix when ssh says "Host key verification failed"), HTTPS fix "`gh auth login` (or set GH_TOKEN)". With a schedule set, HTTPS is also `false` when `gh auth status --hostname github.com` lists token scopes without `workflow` (fix `gh auth refresh -s workflow`); a token with no listed scopes passes. Not a GitHub origin: `skipped`.
-- `token`, `last-run`, `cron-age` are `true` "schedule disabled" when no schedule is on. With a schedule they need gh and a GitHub origin, else `skipped`.
+- `transport` reads origin's push URL and runs `git ls-remote --exit-code <url> HEAD` through netExec (the user's ssh command with BatchMode, or gh as the only github.com credential helper for HTTPS; at most 30 s). Exit 0, or 2 for an empty repo, is `true`. Else `false`: SSH fix "`gh config set git_protocol https` and re-clone, or load an SSH key" (the host key fix when ssh says "Host key verification failed"), HTTPS fix "`gh auth login` (or set GH_TOKEN)". With a schedule set, HTTPS is also `false` when `gh auth status --hostname github.com` lists token scopes without `workflow` (fix `gh auth refresh -s workflow`); a token with no listed scopes passes. It does not skip without gh auth (an HTTPS probe then fails). Not a GitHub origin: `skipped` ("origin is not a GitHub repository"); no origin: `skipped` ("origin missing").
+- `token`, `last-run`, `cron-age` are `true` "schedule disabled" when no schedule is on. With a schedule they need a valid cron, a GitHub origin and gh auth, else `skipped` with the reason. `token` in token mode needs the `VENFORK_PUSH_TOKEN` secret; in App mode (`scheduleAuth: 'app'`) it needs `VENFORK_APP_CLIENT_ID` and `VENFORK_APP_PRIVATE_KEY`, and it is `false` when the public fork has another owner than the mirror. A leftover `VENFORK_PUSH_TOKEN` in App mode is a note, not a failure.
 - No typed error escapes: every problem is a check row.
 
 ## How a user reaches it
 
-`venfork doctor`, `venfork doctor --json`. Run inside the mirror clone. No prompt.
+`venfork doctor`, `venfork doctor --json`. Run inside the mirror clone. No prompt; `--no-input` is accepted and changes nothing. Outside a git repository doctor does not fail with `not-in-repository`: its `repo` check is false and it exits 1.
 
 ## How to drive it
 
@@ -39,7 +37,7 @@ venfork doctor --json > "$T/d0.json"; echo $?                                 # 
 venfork schedule set "0 * * * *" </dev/null >/dev/null 2>&1
 venfork doctor --json | jq '.result.checks[] | select(.id == "invariant" or .id == "workflow" or .id == "token")'   # +1 managed, up to date, skipped
 venfork doctor --json > "$T/d1.json"; venfork doctor --json | diff - "$T/d1.json"   # stable: no output
-vf_origin_commit src/hot.txt x; venfork doctor --json | jq -c '[.ok, [.result.checks[] | select(.ok == false) | .id]]'; echo $?   # [true,["invariant","divergence"]]; 1
+vf_origin_commit src/hot.txt x; venfork doctor --json | jq -c '[.ok, [.result.checks[] | select(.ok == false) | .id]]'; echo "${PIPESTATUS[0]}"   # [true,["invariant","divergence"]]; 1
 (cd "$VF_ROOT" && venfork doctor --json | jq '.result.checks[0]')            # repo false: not a git repository
 git remote set-url --push upstream "$VF_UPSTREAM"; venfork doctor --json | jq '.result.checks[1]'   # remotes: push URL not DISABLE
 git remote set-url --push upstream DISABLE

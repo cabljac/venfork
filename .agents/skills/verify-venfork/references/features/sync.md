@@ -20,13 +20,13 @@ tests:
 - Commits that touch only preserved paths on origin are folded into the managed commit, not divergence.
 - `sync <branch>` for a pulled PR (`pulledPrs[branch]` or the name `upstream-pr/<n>`) refetches `pull/<n>/head`, pushes it to origin with a lease and rewrites `pulledPrs[branch]`. Any other branch name is synced as the default branch.
 - `--json` prints one envelope line on stdout. Default branch: `result` is `{ kind: 'default-branch', status: 'pushed' | 'up-to-date', branch, upstreamTip, origin: { tip, pushed }, public?: { tip, pushed } }` (`public` absent in no-public mode). Pulled PR: `{ kind: 'pulled-pr', status: 'pushed' | 'up-to-date' | 'push-failed', branch, prNumber, head }`. A failure is `ok: false` with `error.code`, for example `sync-divergence`.
-- Every git fetch, push and ls-remote runs through `netExec`, which puts `-c credential.https://github.com.helper= -c credential.https://github.com.helper=!gh auth git-credential` after `git`. An HTTPS github.com remote then authenticates with gh only: the empty entry clears the user's helpers for that URL, so none is asked or stores the token. Local-path remotes never reach the helper.
+- Every git fetch, push and ls-remote runs through `netExec`, which puts `-c credential.https://github.com.helper= -c credential.https://github.com.helper=!gh auth git-credential` after `git`. An HTTPS github.com remote then authenticates with gh only: the empty entry clears the user's helpers for that URL, so no user helper is asked for the token or writes it. Other hosts keep the user's helpers and never reach gh. Local-path remotes never reach a helper. `tests/integration/net-credential.test.ts` pins this with fake helpers (gh fails or is missing: fail fast, no prompt; gh is the only github.com helper; the token is not stored; other hosts use the user's helper), and `tests/unit/net.test.ts` pins the flag order.
 - `--report-issues` opens or refreshes a `venfork-sync-blocked` issue on divergence and closes it on success (gh only).
-- Errors: `SyncDivergenceError` (origin or public has non-upstream commits), `ConfigError` (bad config JSON, invalid preserve entry, bad cron), `GitError` "origin/main moved since this sync fetched it" (stale lease), `PinDowngradeError` (origin pins a newer venfork), `UnmigratedMirrorError` (unpinned workflow with `GITHUB_ACTIONS=true`), plain error when the config branch is missing but origin carries a managed commit.
+- Errors: `SyncDivergenceError` (origin or public has non-upstream commits), `ConfigError` (bad config JSON, invalid preserve entry, bad cron), `GitError` "origin/main moved since this sync fetched it" (stale lease), `PinDowngradeError` (origin pins a newer venfork), `UnmigratedMirrorError` (unpinned workflow with `GITHUB_ACTIONS=true`), plain error when the config branch is missing but origin carries a managed commit, `NotInRepositoryError` outside a git repository. `sync a b` is a usage error (exit 2).
 
 ## How a user reaches it
 
-`venfork sync`, `venfork sync develop`, `venfork sync upstream-pr/12`, `venfork sync --report-issues` (the generated workflow), `venfork sync --json`. No prompt.
+`venfork sync`, `venfork sync develop`, `venfork sync upstream-pr/12`, `venfork sync --report-issues` (the generated workflow), `venfork sync --json`. No prompt; `--no-input` is accepted and changes nothing.
 
 ## How to drive it
 
@@ -38,13 +38,13 @@ vf_upstream_commit src/new.txt new && venfork sync </dev/null 2>&1 | grep Update
 venfork sync </dev/null 2>&1 | grep -c "already up to date"                # 2, and no new push
 venfork sync --json </dev/null 2>/dev/null | jq -c '[.ok, .result.status]'      # [true,"up-to-date"]
 vf_origin_commit src/hotfix.txt hot; venfork sync </dev/null 2>&1 | grep "Sync aborted"  # SyncDivergenceError, exit 1
-venfork sync --json </dev/null 2>/dev/null | jq -r .error.code; echo $?          # sync-divergence, 1
+venfork sync --json </dev/null 2>/dev/null | jq -r .error.code; echo "${PIPESTATUS[0]}" # sync-divergence, 1
 ```
 
 - Concurrent lease: build the stale copy (README), `vf_upstream_commit`, then `vf_origin_commit` a teammate commit, swap the fetch URL, `venfork sync` exits 1 with "origin/main moved since this sync fetched it". The teammate commit stays on origin.
 - Pulled PR: `git -C "$VF_PUBLIC" push -q "$VF_UPSTREAM" <branch>:refs/pull/1/head`, then `venfork sync upstream-pr/1`. A second run pushes nothing to the branch.
-- Pin guard: after `schedule set`, `vf_origin_commit .github/workflows/venfork-sync.yml "$(git -C "$VF_ORIGIN" show main:.github/workflows/venfork-sync.yml | sed s/venfork@0.11.0/venfork@9.9.9/)" "$(printf 'chore: venfork-managed mirror commit\n\nVenfork-Managed: 1')"`, `vf_upstream_commit src/n.txt n`, `venfork sync`: exit 1, "origin pins venfork 9.9.9, you are running 0.11.0". Use the version `venfork --version` prints.
-- Cancel: there is no prompt, so there is no 130 path.
+- Pin guard: after `schedule set`, `vf_origin_commit .github/workflows/venfork-sync.yml "$(git -C "$VF_ORIGIN" show main:.github/workflows/venfork-sync.yml | sed "s/venfork@$(venfork --version)/venfork@9.9.9/")" "$(printf 'chore: venfork-managed mirror commit\n\nVenfork-Managed: 1')"`, `vf_upstream_commit src/n.txt n`, `venfork sync`: exit 1, "origin pins venfork 9.9.9, you are running <the version `venfork --version` prints>".
+- Cancel: there is no prompt. `venfork sync --json` killed with SIGINT prints the `cancelled` envelope and exits 130 (`tests/integration/cli.test.ts`); SIGTERM exits 143. To drive it, put a `git` wrapper first on `PATH` that sleeps on `fetch`, start `venfork sync --json &`, then `kill -INT` it.
 
 ## What proves it
 

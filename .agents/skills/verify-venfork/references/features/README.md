@@ -11,9 +11,10 @@ One file per `src/commands/<name>.ts`. Open only the file for the command you ch
 | `stage.md` | `venfork stage [branch] <name>` | only with `--pr` |
 | `pull-request.md` | `venfork pull pr` | yes (`sync upstream-pr/<n>` does not) |
 | `issue.md` | `venfork stage issue`, `venfork pull issue` | yes |
-| `doctor.md` | `venfork doctor` | no (gh checks skip) |
+| `doctor.md` | `venfork doctor` | no (`transport` skips for a non-GitHub origin; `token`, `last-run`, `cron-age` need a schedule, gh and a GitHub origin) |
 | `workflows.md` | `venfork workflows` | no |
 | `preserve.md` | `venfork preserve` | no |
+| `help.md` | `venfork help`, `--help`, `--version`, bare `venfork` | no |
 
 Cross-cutting: `leak-invariants.md` (what must never reach public or upstream), `multi-command-journeys.md`.
 
@@ -21,8 +22,15 @@ Cross-cutting: `leak-invariants.md` (what must never reach public or upstream), 
 
 - Every drive starts from `SKILL.md` Launch: `. "$T/vf.env"; cd "$VF_WORK"`. Default branch is `main`.
 - `$VF_PUBLIC` is empty with `--no-public`. Stage then pushes to `$VF_UPSTREAM`.
-- Exit codes: 0 success (and "no" at a TTY confirm), 1 a runtime failure or a failing `doctor` check (the message prints as `Error: ...` or after a red `■`), 2 a usage error (`UsageError`: unknown command or option, missing or unexpected argument, malformed flag value, flags that cannot be combined, bare `venfork`) or missing input or consent (`MissingInputError`), 130 a prompt that hit EOF or was cancelled. Input valid in form that fails against the repos (a missing branch, divergence, a flag that contradicts `venfork-config`) is exit 1.
-- Typed errors live in `src/errors.ts`. The CLI prints only `.message`, so match on the message text.
+- Exit codes: 0 success (and "no" at a confirm at a terminal), 1 a runtime failure or a failing `doctor` check (the message prints as `Error: ...` or after a red `■`), 2 a usage error (`UsageError`: unknown command or option, missing or unexpected argument, malformed flag value, flags that cannot be combined, bare `venfork`) or missing input or consent (`MissingInputError`), 130 a cancel, 143 a SIGTERM under `--json`. Input valid in form that fails against the repos (a missing branch, divergence, a flag that contradicts `venfork-config`) is exit 1.
+- Exit 130 has three causes: a prompt that is cancelled (Ctrl-C, Esc) or whose input ends (`Cancelled: input ended at a prompt`); a terminal that closes during the run (EIO on stdin, stdout or stderr, `src/shared/closed-output.ts`); a SIGINT (without `--json`, Node's default handler ends the run and the shell reports 130). Under `--json`, `src/index.ts` prints the `cancelled` envelope on a SIGINT (exit 130) or a SIGTERM (exit 143). `setup` handles both signals itself: it removes its temp dir, then exits 130. A reader that closes the pipe early (`venfork help | head -1`, EPIPE) keeps the exit code so far and prints no stack.
+- Prompts: venfork prompts only when stdin and stderr are both a TTY (prompts render on stderr), `CI` is unset (or empty, `false`, `0`), `VENFORK_NONINTERACTIVE` is not `1` and there is no `--no-input` or `--json` (`canPrompt` in `src/shared/prompt.ts`). At a terminal, `venfork stage feat 2>/dev/null` exits 2 naming `--yes`; it does not wait on a hidden prompt (`tests/integration/cli.test.ts`, "stage with stderr redirected at a TTY"). Every command accepts `--no-input`; on one that never prompts it is a no-op.
+- Outside a git repository, a failed `sync`, `stage`, `pull`, `schedule`, `workflows` or `preserve` is `NotInRepositoryError` (code `not-in-repository`, exit 1; `outsideRepositoryError` in `src/dispatch.ts`). A usage or missing-input error keeps exit 2. `doctor` reports it as its `repo` check, and `setup` and `clone` run outside a repo.
+- Typed errors live in `src/errors.ts`. Without `--json` the CLI prints only `.message`. With `--json`, match on `error.code`; it is stable, the message is not. The codes (`ErrorCode` in `src/errors.ts`; `describeError` in `src/shared/json-output.ts` maps a failed `git` or `gh` subprocess to `git` or `github`, else `internal`):
+  - exit 2: `usage`, `missing-input` (with `error.flag`).
+  - exit 130 or 143: `cancelled`.
+  - exit 1: `auth`, `git`, `github`, `precondition`, `remote-not-found`, `not-in-repository`, `branch-not-found`, `sync-divergence`, `config`, `redaction`, `mirror-reference`, `stage-leak`, `pin-downgrade`, `unmigrated-mirror`, `command-failed`, `runtime`, `internal`.
+- Network ops: every git fetch, push and ls-remote runs through `netExec` (`src/shared/net.ts`): no stdin, a hard timeout, ssh `BatchMode`, and gh as the only credential helper for `https://github.com` (see `sync.md`).
 - "Concurrent lease" drives use a stale copy of origin: fetch from the copy, push to the real origin.
 
 ```bash
