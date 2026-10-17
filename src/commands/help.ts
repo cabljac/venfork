@@ -4,7 +4,7 @@ import { stdoutUi, type Ui } from '../shared/ui.js';
 const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   [
     'setup',
-    `venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public] [--yes] [--no-input]
+    `venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public] [--yes] [--no-input] [--json]
   Create private mirror + public fork for vendor workflow
   <upstream>: GitHub HTTPS/SSH URL, or shorthand owner/repo (e.g. facebook/react)
 
@@ -20,6 +20,7 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   • --yes, -y          Answer the personal-account confirm with yes
   • --no-input         Never prompt: [name] defaults to <repo>-private; a missing
                        <upstream> or an unconfirmed personal account exits 2
+  • --json             Print one JSON envelope on stdout; implies --no-input
 
   Creates:
   • Private mirror (yourname/project-private) - internal work
@@ -28,7 +29,7 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'clone',
-    `venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--no-input]
+    `venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--no-input] [--json]
   Clone an existing vendor setup and configure remotes automatically
   <vendor-repo>: URL or owner/repo for the private mirror
 
@@ -43,7 +44,8 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   • --upstream <url>   Provide the upstream URL explicitly (skips auto-detect/prompt)
   • --public-fork <url> Provide the public fork URL or owner/repo (skips auto-detect/prompt);
                        not with --no-public
-  • --no-input         Never prompt; a URL that would be asked for exits 2`,
+  • --no-input         Never prompt; a URL that would be asked for exits 2
+  • --json             Print one JSON envelope on stdout; implies --no-input`,
   ],
   [
     '--version',
@@ -74,13 +76,14 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'schedule',
-    `venfork schedule <status|set <cron> [--app|--token]|disable>
+    `venfork schedule <status|set <cron> [--app|--token]|disable> [--json]
   Manage scheduled sync config stored in venfork-config
   Set writes/removes ${SYNC_WORKFLOW_PATH} on the private mirror default branch
   --app mints a one-hour push token from a GitHub App on each run
     (secrets VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY)
   --token pushes with the VENFORK_PUSH_TOKEN secret (the default)
-  Without either flag, set keeps the auth mode already configured`,
+  Without either flag, set keeps the auth mode already configured
+  --json prints the schedule after the action as one JSON envelope on stdout`,
   ],
   [
     'stage',
@@ -119,19 +122,21 @@ venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json
   ],
   [
     'workflows',
-    `venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...]
+    `venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...] [--json]
   Configure workflow allowlist/blocklist policy in venfork-config
   allow/block add files to their list; unallow/unblock remove them;
-  clear empties both lists`,
+  clear empties both lists
+  --json prints the policy after the action as one JSON envelope on stdout`,
   ],
   [
     'preserve',
-    `venfork preserve <list|add|remove|clear> [path ...]
+    `venfork preserve <list|add|remove|clear> [path ...] [--json]
   Carry mirror-only files (e.g. caller workflows) forward across \`venfork sync\`
   Each entry is a single repo-relative file (no globs, no directories), read from
   the previous origin tip on every sync
   Upstream wins on collision; missing source aborts sync until the file is committed
-  \`venfork preserve remove <path>\` also removes an invalid entry`,
+  \`venfork preserve remove <path>\` also removes an invalid entry
+  --json prints the list after the action as one JSON envelope on stdout`,
   ],
 ];
 

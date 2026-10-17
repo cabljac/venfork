@@ -1,5 +1,6 @@
 import { UsageError } from './errors.js';
 import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
+import { JSON_FLAG } from './shared/json-output.js';
 
 /** A `venfork workflows` action. */
 export type WorkflowsAction =
@@ -13,10 +14,12 @@ export type WorkflowsAction =
 export type ParsedWorkflowsArgs = {
   action: WorkflowsAction;
   workflows: string[];
+  /** Print the `--json` envelope on stdout. */
+  json: boolean;
 };
 
 const USAGE =
-  'venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...]';
+  'venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...] [--json]';
 
 const LIST_ACTIONS: readonly WorkflowsAction[] = [
   'allow',
@@ -31,15 +34,21 @@ const LIST_ACTIONS: readonly WorkflowsAction[] = [
 export function parseWorkflowsCliArgs(
   workflowsArgs: string[]
 ): ParsedWorkflowsArgs {
+  let json = false;
   const [actionRaw = 'status', ...rest] = scanArgs(
     workflowsArgs,
     USAGE,
-    (arg) => (arg === NO_INPUT_FLAG ? 0 : undefined)
+    (arg) => {
+      if (arg === NO_INPUT_FLAG) return 0;
+      if (arg !== JSON_FLAG) return undefined;
+      json = true;
+      return 0;
+    }
   );
 
   if (actionRaw === 'status' || actionRaw === 'clear') {
     if (rest.length > 0) throw unexpectedArgument(rest[0], USAGE);
-    return { action: actionRaw, workflows: [] };
+    return { action: actionRaw, workflows: [], json };
   }
 
   const action = LIST_ACTIONS.find((candidate) => candidate === actionRaw);
@@ -55,7 +64,7 @@ export function parseWorkflowsCliArgs(
         `Usage: venfork workflows ${action} <workflow-file> [more-workflow-files]`
       );
     }
-    return { action, workflows: values };
+    return { action, workflows: values, json };
   }
 
   throw new UsageError(`Usage: ${USAGE}`);

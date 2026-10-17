@@ -1,8 +1,13 @@
 import { rm } from 'node:fs/promises';
+import path from 'node:path';
 import { $ } from 'execa';
 import { checkCloneInputs, githubRepoInput } from '../clone-args.js';
 import { fetchVenforkConfig } from '../config.js';
-import { CommandExitError, isEntryReported } from '../errors.js';
+import {
+  CommandExitError,
+  isEntryReported,
+  PreconditionError,
+} from '../errors.js';
 import { ghGitProtocol } from '../git.js';
 import { isCancel, type PromptContext, promptText } from '../shared/prompt.js';
 import * as p from '../shared/ui.js';
@@ -49,6 +54,15 @@ function validateUpstream(value: string): string | undefined {
   return undefined;
 }
 
+/** What `venfork clone` set up, reported as the `--json` result. */
+export interface CloneResult {
+  mode: 'standard' | 'no-public';
+  /** Absolute path of the new checkout. */
+  directory: string;
+  /** Fetch URL of each configured remote; `public` is absent in no-public mode. */
+  remotes: { origin: string; public?: string; upstream: string };
+}
+
 /**
  * Clone command: Clone vendor repository and configure all remotes. A run
  * that fails or is cancelled after cloning removes the clone.
@@ -57,6 +71,7 @@ function validateUpstream(value: string): string | undefined {
  * @param options.upstreamUrl - Legacy mirrors only: upstream URL, skips detection.
  * @param options.publicForkUrl - Legacy mirrors only: public fork URL or owner/repo, skips detection.
  * @param options.prompt - `--no-input`: never prompt.
+ * @returns The new checkout and its remotes, for `--json`.
  */
 export async function cloneCommand(
   vendorRepoUrl?: string,
@@ -67,7 +82,7 @@ export async function cloneCommand(
     /** `--no-input`. */
     prompt?: PromptContext;
   } = {}
-): Promise<void> {
+): Promise<CloneResult> {
   const {
     vendorCloneUrl,
     upstreamUrl: upstreamFlag,
@@ -96,9 +111,12 @@ export async function cloneCommand(
       () => false
     );
     if (dirExists) {
-      p.log.error(`Directory '${vendorRepoName}' already exists.`);
+      const error = new PreconditionError(
+        `Directory '${vendorRepoName}' already exists.`
+      );
+      p.log.error(error.message);
       p.outro('❌ Clone failed');
-      throw new CommandExitError(1);
+      throw new CommandExitError(1, error);
     }
 
     // Step 2: Clone vendor repository (gh respects git_protocol and accepts owner/repo)
@@ -122,12 +140,12 @@ export async function cloneCommand(
       const configMode: 'standard' | 'no-public' =
         config.mode === 'no-public' ? 'no-public' : 'standard';
       if (options.noPublic && configMode === 'standard') {
-        throw new Error(
+        throw new PreconditionError(
           'Refusing to clone with --no-public: the venfork-config branch records mode=standard. To convert an existing setup, re-run `venfork setup` instead.'
         );
       }
       if (publicForkFlag && configMode === 'no-public') {
-        throw new Error(
+        throw new PreconditionError(
           'Refusing to clone with --public-fork: the venfork-config branch records mode=no-public.'
         );
       }
@@ -135,12 +153,12 @@ export async function cloneCommand(
         publicForkFlag &&
         !sameRepo(publicForkFlag, config.publicForkUrl ?? '')
       ) {
-        throw new Error(
+        throw new PreconditionError(
           `Refusing to override venfork-config: --public-fork='${options.publicForkUrl}' but config records publicForkUrl='${config.publicForkUrl ?? '(missing)'}'.`
         );
       }
       if (upstreamFlag && !sameRepo(upstreamFlag, config.upstreamUrl)) {
-        throw new Error(
+        throw new PreconditionError(
           `Refusing to override venfork-config: --upstream='${options.upstreamUrl}' but config records upstreamUrl='${config.upstreamUrl}'.`
         );
       }
@@ -287,6 +305,9 @@ export async function cloneCommand(
     s.stop('Default repository set');
 
     // Step 6: Show configuration
+    const originUrl = (
+      await $({ cwd: vendorRepoName })`git remote get-url origin`
+    ).stdout.trim();
     const remotesOutput = await $({ cwd: vendorRepoName })`git remote -v`;
     const remotesText = remotesOutput.stdout;
 
@@ -301,13 +322,22 @@ export async function cloneCommand(
   # Do your work...
   venfork stage feature-branch`
     );
+    return {
+      mode: noPublic ? 'no-public' : 'standard',
+      directory: path.resolve(vendorRepoName),
+      remotes: {
+        origin: originUrl,
+        ...(!noPublic && publicForkUrl ? { public: publicForkUrl } : {}),
+        upstream: upstreamUrl,
+      },
+    };
   } catch (error) {
     if (clonedDir) await removePartialClone(clonedDir);
     if (isEntryReported(error)) throw error;
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Clone failed');
-    throw new CommandExitError(1);
+    throw new CommandExitError(1, error);
   }
 }
 

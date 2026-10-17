@@ -1,13 +1,13 @@
 ---
 command: workflows
 entry: src/commands/workflows.ts
-shared: [mirror-commit, managed-commit]
+shared: [json-output, mirror-commit, managed-commit]
 config:
   read: [enabledWorkflows, disabledWorkflows]
   written: [enabledWorkflows, disabledWorkflows]
 tests:
-  unit: [tests/unit/commands.test.ts, tests/unit/workflows-args.test.ts]
-  integration: [tests/integration/tip-builder.test.ts, tests/integration/integrity.test.ts]
+  unit: [tests/unit/commands.test.ts, tests/unit/workflows-args.test.ts, tests/unit/json-output.test.ts]
+  integration: [tests/integration/cli.test.ts, tests/integration/tip-builder.test.ts, tests/integration/integrity.test.ts]
   e2e: []
 ---
 
@@ -19,11 +19,12 @@ tests:
 - The command writes only `venfork-config` (leased, up to 3 retries). It never moves `main`. The next `sync` applies it.
 - In the managed commit, a non-empty allow list wins: only listed top-level `.github/workflows/*.yml|yaml` files stay. Else blocked basenames are removed. Subdirectories and the sync workflow are never removed.
 - A non-empty list alone is enough to put a managed commit on origin, with no schedule or preserve list.
-- Errors: usage errors (exit 2: "Usage: venfork workflows allow <workflow-file> ...", an unknown action), and "venfork-config branch not found or invalid" (exit 1). Removing a name that is not listed succeeds silently.
+- Errors: usage errors (exit 2: "Usage: venfork workflows allow <workflow-file> ...", an unknown action), and "venfork-config branch not found or invalid" (exit 1, `ConfigError` reason `missing`). Removing a name that is not listed succeeds silently.
+- `--json` on every action prints one envelope line on stdout. `result` is the policy after the action: `{ mode: 'allow' | 'block' | 'none', enabledWorkflows, disabledWorkflows }`. `mode` is `allow` when the allowlist is set, `block` when only the block list is set.
 
 ## How a user reaches it
 
-`venfork workflows`, `venfork workflows status`, `venfork workflows allow ci.yml lint.yml`, `venfork workflows block deploy.yml`, `venfork workflows unallow|unblock <file>...`, `venfork workflows clear`. No prompt.
+`venfork workflows`, `venfork workflows status`, `venfork workflows allow ci.yml lint.yml`, `venfork workflows block deploy.yml`, `venfork workflows unallow|unblock <file>...`, `venfork workflows clear`, each with optional `--json`. No prompt.
 
 ## How to drive it
 
@@ -37,6 +38,7 @@ venfork workflows allow lint.yml </dev/null >/dev/null 2>&1; venfork sync </dev/
 git -C "$VF_ORIGIN" ls-tree --name-only main .github/workflows/                          # lint.yml only
 venfork workflows clear </dev/null >/dev/null 2>&1; venfork sync </dev/null >/dev/null 2>&1   # origin == upstream (+0)
 venfork workflows allow </dev/null 2>&1 | head -1                                         # exit 2, usage
+venfork workflows block ci.yml --json </dev/null 2>/dev/null | jq -c .result              # {"mode":"block","enabledWorkflows":[],"disabledWorkflows":["ci.yml"]}
 ```
 
 - Cancel: there is no prompt, so there is no 130 path.

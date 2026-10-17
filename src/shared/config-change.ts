@@ -1,12 +1,18 @@
 import {
   applyPatchAndNormalize,
+  configNotFoundError,
   readVenforkConfigFromRepoWithSha,
   restoreVenforkConfig,
   type VenforkConfig,
   type VenforkConfigPatch,
   writeVenforkConfigAt,
 } from '../config.js';
-import { ConfigError, SyncDivergenceError, VenforkError } from '../errors.js';
+import {
+  ConfigError,
+  PreconditionError,
+  SyncDivergenceError,
+  VenforkError,
+} from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { checkDivergence } from './divergence.js';
 import {
@@ -46,7 +52,7 @@ export async function applyConfigChange(
     allowInvalidCron: options.allowInvalidCron,
   });
   if (!read) {
-    throw new Error('venfork-config branch not found or invalid');
+    throw configNotFoundError();
   }
   const { config: current, sha: readSha } = read;
   const next = applyPatchAndNormalize(current, patch);
@@ -55,7 +61,7 @@ export async function applyConfigChange(
     repoDir
   );
   if (!upstreamTip) {
-    throw new Error(
+    throw new PreconditionError(
       `upstream/${defaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
     );
   }

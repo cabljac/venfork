@@ -1,12 +1,12 @@
 ---
 command: clone
 entry: src/commands/clone.ts
-shared: [prompt]
+shared: [json-output, prompt]
 config:
   read: [mode, upstreamUrl, publicForkUrl]
   written: []
 tests:
-  unit: [tests/unit/commands.test.ts, tests/unit/clone-args.test.ts]
+  unit: [tests/unit/commands.test.ts, tests/unit/clone-args.test.ts, tests/unit/json-output.test.ts]
   integration: [tests/integration/cli.test.ts]
   e2e: []
 ---
@@ -14,17 +14,18 @@ tests:
 ## What exists
 
 - Needs gh auth first (`AuthenticationError`).
-- Refuses a missing repo ("Missing vendor repository") or an invalid one ("Invalid vendor repository") with exit 2, before gh auth. An existing `./<name>` directory ("Directory '<name>' already exists.") exits 1.
-- `gh repo clone <owner/name> <name>`, then reads `venfork-config` from the mirror. When it exists it is authoritative: `--no-public` on a standard config, `--public-fork` on a no-public config, and an `--upstream` or `--public-fork` naming another repo are refused (exit 1). A flag naming the recorded repo in another URL form is accepted.
+- Refuses a missing repo ("Missing vendor repository") or an invalid one ("Invalid vendor repository") with exit 2, before gh auth. An existing `./<name>` directory ("Directory '<name>' already exists.", `PreconditionError`) exits 1.
+- `gh repo clone <owner/name> <name>`, then reads `venfork-config` from the mirror. When it exists it is authoritative: `--no-public` on a standard config, `--public-fork` on a no-public config, and an `--upstream` or `--public-fork` naming another repo are refused (exit 1, `PreconditionError`). A flag naming the recorded repo in another URL form is accepted.
 - Legacy mirror without a config: guesses the public fork by stripping `-private` (`gh repo view`), then the upstream from the fork's parent. Each failed guess prompts for a URL; an empty answer is rejected by `validate`, and the fork answer must be a GitHub URL or `owner/repo`. `--no-public` skips the fork; `--public-fork <url>` (URL or `owner/repo`) skips the fork guess and its prompt, and the parent lookup then runs on that fork; `--upstream` skips the parent lookup. `--public-fork` with `--no-public` and an invalid `--public-fork` exit 2 before cloning.
 - Adds `public` (standard mode) and `upstream` with push URL `DISABLE`. URLs follow `gh config get git_protocol`. Runs `gh repo set-default`.
 - A cancelled URL prompt exits 130 (`CommandExitError(130)`), and so does a prompt that hits stdin EOF.
 - Never prompts without a TTY on stdin, with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`: a URL prompt exits 2 (`MissingInputError`) naming `--public-fork <url>` for the public fork URL and `--upstream <url>` for the upstream URL. `--yes` is refused: clone has no confirm. Any failure or cancel after the clone removes the cloned directory, so the rerun with the named flag works.
 - It never writes `venfork-config` and never pushes.
+- `--json` implies `--no-input` and prints one envelope line on stdout. `result` is `{ mode, directory, remotes: { origin, public?, upstream } }`: `directory` is the absolute checkout path, `remotes` the fetch URLs, `public` absent in no-public mode. A URL that only a prompt could give is `missing-input` with `flag` (exit 2).
 
 ## How a user reaches it
 
-`venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--no-input]`. `<vendor-repo>` is the private mirror as a GitHub URL or `owner/repo`; `--upstream` and `--public-fork` take the same forms, and a malformed one exits 2 before gh auth.
+`venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--no-input] [--json]`. `<vendor-repo>` is the private mirror as a GitHub URL or `owner/repo`; `--upstream` and `--public-fork` take the same forms, and a malformed one exits 2 before gh auth.
 
 ## How to drive it
 
@@ -39,7 +40,7 @@ venfork clone a/b-private </dev/null 2>&1 | grep "gh stub"               # exit 
 ```
 
 - Already current: a second clone into the same directory is refused, which is the idempotence guard.
-- The fixture's gh stub fails `gh repo clone`, so the legacy paths need a gh that clones the fixture origin. `tests/integration/cli.test.ts` ("clone on a legacy mirror without venfork-config") deletes origin's `venfork-config` branch and uses such a stub: `clone acme/legacy-private --public-fork other-org/legacy` exits 0 with `public` = `git@github.com:other-org/legacy.git` and `upstream` = the fixture upstream (push `DISABLE`), and the same clone without `--public-fork` and without a TTY exits 2 with "Pass --public-fork <url>.".
+- The fixture's gh stub fails `gh repo clone`, so the legacy paths need a gh that clones the fixture origin. `tests/integration/cli.test.ts` ("clone on a legacy mirror without venfork-config") deletes origin's `venfork-config` branch and uses such a stub: `clone acme/legacy-private --public-fork other-org/legacy` exits 0 with `public` = `git@github.com:other-org/legacy.git` and `upstream` = the fixture upstream (push `DISABLE`), and the same clone without `--public-fork` and without a TTY exits 2 with "Pass --public-fork <url>.". With `--json` the first prints `{ mode: 'standard', directory, remotes }` and the second a `missing-input` envelope with `flag: '--public-fork <url>'`.
 - Cancel at a URL prompt needs a TTY; `tests/unit/commands.test.ts` pins the exit-130 paths and the `validate` rules.
 
 ## What proves it

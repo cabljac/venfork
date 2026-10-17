@@ -1,6 +1,8 @@
 import {
+  configNotFoundError,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
+  type VenforkConfig,
   type VenforkConfigPatch,
 } from '../config.js';
 import { CommandExitError, isEntryReported } from '../errors.js';
@@ -39,15 +41,42 @@ const LIST_EDITS: Record<
   },
 };
 
+/** The workflow policy after `venfork workflows`, reported as the `--json` result. */
+export interface WorkflowsResult {
+  /**
+   * `allow` when the allowlist is set (it overrides the block list),
+   * `block` when only the block list is set, else `none`.
+   */
+  mode: 'allow' | 'block' | 'none';
+  enabledWorkflows: string[];
+  disabledWorkflows: string[];
+}
+
+function workflowsResult(config: VenforkConfig): WorkflowsResult {
+  const enabledWorkflows = config.enabledWorkflows ?? [];
+  const disabledWorkflows = config.disabledWorkflows ?? [];
+  return {
+    mode:
+      enabledWorkflows.length > 0
+        ? 'allow'
+        : disabledWorkflows.length > 0
+          ? 'block'
+          : 'none',
+    enabledWorkflows,
+    disabledWorkflows,
+  };
+}
+
 /**
  * Workflows command: shows or edits the workflow allowlist and block list in
  * venfork-config. `allow`/`block` add files, `unallow`/`unblock` remove
  * them, `clear` empties both.
+ * @returns The policy after the action, for `--json`.
  */
 export async function workflowsCommand(
   action: WorkflowsAction,
   workflows: string[]
-): Promise<void> {
+): Promise<WorkflowsResult> {
   p.intro('🧩 Venfork Workflows');
   const repoDir = process.cwd();
 
@@ -55,7 +84,7 @@ export async function workflowsCommand(
     if (action === 'status') {
       const config = await readVenforkConfigFromRepo(repoDir);
       if (!config) {
-        throw new Error('venfork-config branch not found or invalid');
+        throw configNotFoundError();
       }
       const allowlist = config.enabledWorkflows ?? [];
       const blocklist = config.disabledWorkflows ?? [];
@@ -81,18 +110,18 @@ export async function workflowsCommand(
         p.note(lines.join('\n'), 'Workflow Policy');
       }
       p.outro('✨ Workflows status shown');
-      return;
+      return workflowsResult(config);
     }
 
     if (action === 'clear') {
-      await updateVenforkConfig(repoDir, {
+      const cleared = await updateVenforkConfig(repoDir, {
         enabledWorkflows: null,
         disabledWorkflows: null,
       });
       p.outro(
         '✨ Workflow policy cleared. Run `venfork sync` to apply on the private mirror default branch.'
       );
-      return;
+      return workflowsResult(cleared);
     }
 
     const names = normalizeWorkflowList(workflows);
@@ -108,10 +137,11 @@ export async function workflowsCommand(
     p.outro(
       '✨ Workflow policy updated. Run `venfork sync` to apply on the private mirror default branch.'
     );
+    return workflowsResult(updated);
   } catch (error) {
     if (isEntryReported(error)) throw error;
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Workflows command failed');
-    throw new CommandExitError(1);
+    throw new CommandExitError(1, error);
   }
 }

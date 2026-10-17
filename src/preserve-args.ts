@@ -1,12 +1,15 @@
 import { UsageError } from './errors.js';
 import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
+import { JSON_FLAG } from './shared/json-output.js';
 
 export type ParsedPreserveArgs = {
   action: 'list' | 'add' | 'remove' | 'clear';
   paths: string[];
+  /** Print the `--json` envelope on stdout. */
+  json: boolean;
 };
 
-const USAGE = 'venfork preserve <list|add|remove|clear> [path ...]';
+const USAGE = 'venfork preserve <list|add|remove|clear> [path ...] [--json]';
 
 /**
  * Parse `venfork preserve ...` argv after the `preserve` token.
@@ -19,13 +22,17 @@ const USAGE = 'venfork preserve <list|add|remove|clear> [path ...]';
 export function parsePreserveCliArgs(
   preserveArgs: string[]
 ): ParsedPreserveArgs {
-  const [actionRaw = 'list', ...rest] = scanArgs(preserveArgs, USAGE, (arg) =>
-    arg === NO_INPUT_FLAG ? 0 : undefined
-  );
+  let json = false;
+  const [actionRaw = 'list', ...rest] = scanArgs(preserveArgs, USAGE, (arg) => {
+    if (arg === NO_INPUT_FLAG) return 0;
+    if (arg !== JSON_FLAG) return undefined;
+    json = true;
+    return 0;
+  });
 
   if (actionRaw === 'list' || actionRaw === 'clear') {
     if (rest.length > 0) throw unexpectedArgument(rest[0], USAGE);
-    return { action: actionRaw, paths: [] };
+    return { action: actionRaw, paths: [], json };
   }
 
   if (actionRaw === 'add' || actionRaw === 'remove') {
@@ -35,7 +42,7 @@ export function parsePreserveCliArgs(
         `Usage: venfork preserve ${actionRaw} <path> [more-paths]`
       );
     }
-    return { action: actionRaw, paths: values };
+    return { action: actionRaw, paths: values, json };
   }
 
   throw new UsageError(`Usage: ${USAGE}`);

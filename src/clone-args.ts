@@ -15,11 +15,13 @@ export type ParsedCloneArgs = {
   publicForkUrl?: string;
   /** `--no-input`; clone has no confirm, so `yes` is always false. */
   prompt: PromptContext;
+  /** Print the `--json` envelope on stdout. */
+  json: boolean;
 };
 
 /** Usage line for `venfork clone`. */
 export const CLONE_USAGE =
-  'venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--no-input]';
+  'venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--no-input] [--json]';
 
 /**
  * Parse `venfork clone ...` argv after the `clone` token.
@@ -33,7 +35,7 @@ export function parseCloneCliArgs(args: string[]): ParsedCloneArgs {
   let noPublic = false;
   let upstreamUrl: string | undefined;
   let publicForkUrl: string | undefined;
-  const promptFlags = parsePromptFlags({ allowYes: false });
+  const promptFlags = parsePromptFlags({ allowYes: false, allowJson: true });
 
   const positional = scanArgs(args, CLONE_USAGE, (a, i) => {
     if (promptFlags.onOption(a) !== undefined) return 0;
@@ -62,6 +64,7 @@ export function parseCloneCliArgs(args: string[]): ParsedCloneArgs {
     upstreamUrl: upstreamUrl?.trim() || undefined,
     publicForkUrl: publicForkUrl?.trim() || undefined,
     prompt: promptFlags.prompt,
+    json: promptFlags.json,
   };
   checkCloneInputs(parsed);
   return parsed;

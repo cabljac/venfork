@@ -18,10 +18,12 @@ export type ParsedSetupArgs = {
   noPublic: boolean;
   /** `--yes` / `--no-input`. */
   prompt: PromptContext;
+  /** Print the `--json` envelope on stdout. */
+  json: boolean;
 };
 
 const USAGE =
-  'venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public] [--yes] [--no-input]';
+  'venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public] [--yes] [--no-input] [--json]';
 
 /**
  * Parse `venfork setup ...` argv after the `setup` token.
@@ -30,7 +32,7 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
   let organization: string | undefined;
   let publicForkRepoName: string | undefined;
   let noPublic = false;
-  const promptFlags = parsePromptFlags({ allowYes: true });
+  const promptFlags = parsePromptFlags({ allowYes: true, allowJson: true });
 
   const positional = scanArgs(setupArgs, USAGE, (a, i) => {
     if (promptFlags.onOption(a) !== undefined) return 0;
@@ -69,6 +71,7 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
     publicForkRepoName: trimmedForkName,
     noPublic,
     prompt: promptFlags.prompt,
+    json: promptFlags.json,
   };
 }
 
