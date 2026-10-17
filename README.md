@@ -105,7 +105,7 @@ venfork sync upstream-pr/1234
 
 ## Commands
 
-### `venfork setup <upstream> [name] [--org <organization>] [--fork-name <repo>] [--no-public]`
+### `venfork setup <upstream> [name] [--org <organization>] [--fork-name <repo>] [--no-public] [--yes] [--no-input]`
 
 Creates the complete vendor workflow setup:
 
@@ -130,6 +130,8 @@ Creates the complete vendor workflow setup:
 - `--org <organization>` - (Optional) Create repos under organization instead of personal account
 - `--fork-name <repo>` - (Optional) Public fork repo name under that org/user (default: same basename as upstream)
 - `--no-public` - (Optional) Skip the public-fork hop; stage pushes directly to upstream
+- `--yes`, `-y` - (Optional) Answer the personal-account confirm with yes
+- `--no-input` - (Optional) Never prompt. A missing `name` defaults to `{repo}-private` (the choice is logged on stderr). A missing `upstream`, or a personal account without `--yes`, exits 2. See [Non-interactive use](#non-interactive-use).
 
 **Examples:**
 ```bash
@@ -172,7 +174,7 @@ venfork setup my-org/foo my-foo-private --org my-org --no-public
 
 Pure failures (for example name taken by a **different** repo) still abort setup. If recovery sync stops due to divergent default branches, fix or move those commits, then run **`venfork sync`** again from inside the private mirror.
 
-### `venfork clone <vendor-repo> [--no-public] [--upstream <url>]`
+### `venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--no-input]`
 
 Clone an existing vendor setup and automatically configure all remotes.
 
@@ -190,6 +192,8 @@ Clone an existing vendor setup and automatically configure all remotes.
 **Options** (only meaningful for **legacy mirrors** without a `venfork-config` branch — when config is present it's authoritative and the flags will error on conflict):
 - `--no-public` - Declare a no-public layout (origin + upstream only). Use when the original setup was created with `venfork setup --no-public` but the config branch is missing.
 - `--upstream <url>` - Provide the upstream URL explicitly. Useful with `--no-public` (no public fork to derive it from) or to skip the auto-detect prompt.
+
+`--no-input` never prompts: a URL that clone would ask for exits 2 and names the flag that supplies it. `clone` has no confirm, so it does not take `--yes`. A clone that fails or is cancelled after the repository was cloned removes the cloned directory, so you can rerun it with the named flag.
 
 **Use this when:**
 - A teammate has already run `venfork setup`
@@ -216,6 +220,7 @@ venfork clone git@github.com:acme-corp/awesome-project-private.git
 **Interactive prompts:**
 - If public fork cannot be auto-detected, you'll be prompted for the URL
 - If upstream cannot be auto-detected (no parent), you'll be prompted for the URL
+- Without a terminal (see [Non-interactive use](#non-interactive-use)) these prompts exit 2 instead: pass `--upstream <url>`, or `--no-public --upstream <url>` when the mirror has no public fork
 
 ### `venfork sync [branch] [--report-issues]`
 
@@ -256,7 +261,7 @@ venfork sync develop   # Sync develop branch with upstream/develop
 - Workflow allow/block entries match file basenames exactly (no glob patterns)
 - A preserved file that upstream adds is replaced by upstream's version. If upstream later deletes that path again, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork preserve remove <path>` to let it go
 
-### `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing]`
+### `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input]`
 
 Push a branch to the public fork, making it visible and ready for PR to upstream. `venfork stage branch <name>` is the explicit form of the same command; use it for a branch named `issue` or `branch`. With `--pr`, also opens the upstream PR for you using your internal review PR's body.
 
@@ -272,6 +277,8 @@ Push a branch to the public fork, making it visible and ready for PR to upstream
 - `--base <branch>` - Override the upstream base branch (default: upstream's default branch).
 - `--internal-pr <n>` - Pin a specific internal-review PR number (skips the most-recent-open lookup). Useful when multiple PRs target the same branch.
 - `--no-update-existing` - Do not update an already-open upstream PR body when staging. By default, if an upstream PR for the branch already exists, `venfork stage --pr` refreshes its body with the latest translated content.
+- `--yes`, `-y` - Answer the "Push to public fork?" (or "Push to upstream?") confirm with yes. Required when venfork cannot prompt.
+- `--no-input` - Never prompt. Without `--yes`, the confirm exits 2 and nothing is pushed. See [Non-interactive use](#non-interactive-use).
 
 **Examples:**
 ```bash
@@ -287,6 +294,9 @@ venfork stage feature-auth --draft
 # Override title or base
 venfork stage feature-auth --pr --title "Add OAuth"
 venfork stage feature-auth --pr --base develop
+
+# From a script or CI: confirm up front
+venfork stage feature-auth --pr --yes
 ```
 
 **What it does (without `--pr`):**
@@ -377,7 +387,7 @@ venfork sync upstream-pr/1234
 
 In that case it refetches `pull/<n>/head` from upstream and force-with-lease pushes the result to origin. The default-branch sync (the +1-managed-commit flow) is unaffected.
 
-### `venfork stage issue <number-or-url> [--title <text>]` and `venfork pull issue <number-or-url> [--title <text>]`
+### `venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input]` and `venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input]`
 
 Move *issue* context between the private mirror and upstream. The command names follow the direction: `stage` goes outward (mirror to upstream), `pull` comes inward (upstream to mirror). The shape matches `stage --pr` and `pull pr`, but for issues instead of PRs.
 
@@ -388,6 +398,8 @@ A branch named `issue` or `branch` cannot use the bare `venfork stage <name>` fo
 
 **Flags:**
 - `--title <text>` - Override the destination issue's title.
+- `--yes`, `-y` - Open the issue without the "Open the issue on ...?" confirm.
+- `--no-input` - Never prompt. Without `--yes`, the confirm exits 2 and no issue is opened. See [Non-interactive use](#non-interactive-use).
 
 **Examples:**
 ```bash
@@ -586,6 +598,38 @@ So `venfork doctor --json > health.json` writes clean JSON while progress still 
 
 When stderr is a terminal, venfork draws styled output with colors and spinners. When stderr is not a terminal (a pipe, a file, CI), `NO_COLOR` is set to a non-empty value, or `TERM` is `dumb`, it prints plain lines with no ANSI escape codes and no spinner animation. Each line starts with a level prefix: `info:`, `ok:`, `step:`, `warn:`, `error:`. A spinner prints one `step:` line when it starts and one `done:` (or `error:`) line when it stops.
 
+## Non-interactive use
+
+venfork never waits on a prompt that nobody can answer. It does not prompt when any of these is true:
+
+- stdin is not a terminal (a pipe, `/dev/null`, a CI runner, an agent)
+- stderr is not a terminal (`2>log`, `2>/dev/null`), because prompts render on stderr and a hidden prompt would wait forever
+- `CI` is set to anything except an empty string, `false` or `0`
+- `VENFORK_NONINTERACTIVE=1` is set
+- the command got `--no-input`
+
+When venfork cannot prompt:
+
+- A prompt with a default uses the default and logs it on stderr. Today that is only the `setup` mirror name (`{repo}-private`).
+- A prompt without a default exits 2. The error on stderr names the argument or flag that supplies the value, for example `the <upstream> argument` or `--upstream <url>`.
+- A confirm exits 2 and names `--yes`. Nothing is pushed or created.
+
+`--yes` (`-y`) answers every confirm of that command with yes, with or without a terminal: the `setup` personal-account confirm, the `stage` push confirm, and the `stage issue` and `pull issue` confirms. It is the only way to give consent without a prompt. Every command accepts `--no-input`, so a wrapper can always pass it; on a command that never prompts (`sync`, `doctor`, `pull pr`, `schedule`, `workflows`, `preserve`) it changes nothing. `--yes` is accepted only where a confirm exists: `setup`, `stage`, `stage issue` and `pull issue`.
+
+```bash
+# In CI: never prompt, and confirm the push explicitly
+venfork stage feat/auth --pr --yes --no-input
+```
+
+**Exit codes:**
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success, or you answered "no" to a confirm at a terminal |
+| `1` | Runtime failure, usage error, or `venfork doctor` found a failing check |
+| `2` | Missing input or consent: venfork could not prompt and no flag supplied the answer |
+| `130` | Cancelled at a prompt (Ctrl-C, Esc, or input ended), or the terminal closed during the run |
+
 ## Environment Variables
 
 ### `NO_COLOR`
@@ -631,13 +675,11 @@ venfork setup git@github.com:client/project.git
 
 ### `VENFORK_NONINTERACTIVE`
 
-Set `VENFORK_NONINTERACTIVE=1` to auto-confirm prompts in `venfork stage --pr`, `venfork stage issue`, and `venfork pull issue`. Useful when calling venfork from CI or scripts where stdin isn't a TTY.
+Set `VENFORK_NONINTERACTIVE=1` to make venfork never prompt, as if every command got `--no-input`. It does **not** answer confirms: a confirm without `--yes` exits 2. Pass `--yes` to give consent. See [Non-interactive use](#non-interactive-use).
 
 ```bash
-VENFORK_NONINTERACTIVE=1 venfork stage feat/auth --pr
+VENFORK_NONINTERACTIVE=1 venfork stage feat/auth --pr --yes
 ```
-
-The setup-time personal-account confirmation is intentionally **not** bypassed — that one's a safety net you almost certainly want when scripting setup.
 
 ### `VENFORK_GIT_TIMEOUT`
 

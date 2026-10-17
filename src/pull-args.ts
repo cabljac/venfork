@@ -1,9 +1,12 @@
 import {
   consumeValue,
+  NO_INPUT_FLAG,
+  parsePromptFlags,
   scanArgs,
   unexpectedArgument,
   unknownOption,
 } from './shared/args.js';
+import type { PromptContext } from './shared/prompt.js';
 
 /** Parsed `venfork pull pr ...` arguments. */
 export type ParsedPullPrArgs = {
@@ -20,6 +23,8 @@ export type ParsedPullIssueArgs = {
   /** Issue number or URL. */
   ref: string;
   title?: string;
+  /** `--yes` / `--no-input`. */
+  prompt: PromptContext;
 };
 
 export type ParsedPullArgs = ParsedPullPrArgs | ParsedPullIssueArgs;
@@ -27,7 +32,8 @@ export type ParsedPullArgs = ParsedPullPrArgs | ParsedPullIssueArgs;
 const PULL_USAGE = 'venfork pull <pr|issue> <number-or-url>';
 const PR_USAGE =
   'venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push]';
-const ISSUE_USAGE = 'venfork pull issue <number-or-url> [--title <text>]';
+const ISSUE_USAGE =
+  'venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input]';
 
 /**
  * Parse `venfork pull ...` argv after the `pull` token.
@@ -40,6 +46,8 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
   let noPush: string | undefined;
   let branchNameFlag: string | undefined;
   let titleFlag: string | undefined;
+  let promptFlag: string | undefined;
+  const promptFlags = parsePromptFlags({ allowYes: true });
 
   const targetUsage = args.includes('pr')
     ? PR_USAGE
@@ -47,6 +55,10 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
       ? ISSUE_USAGE
       : PULL_USAGE;
   const [sub, ...rest] = scanArgs(args, targetUsage, (a, i) => {
+    if (promptFlags.onOption(a) !== undefined) {
+      if (a !== NO_INPUT_FLAG) promptFlag ??= a;
+      return 0;
+    }
     if (a === '--no-push') {
       noPush = a;
       return 0;
@@ -67,7 +79,8 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
   });
 
   if (sub === 'pr') {
-    if (titleFlag) throw unknownOption(titleFlag, PR_USAGE);
+    const stray = titleFlag ?? promptFlag;
+    if (stray) throw unknownOption(stray, PR_USAGE);
     if (rest.length > 1) throw unexpectedArgument(rest[1], PR_USAGE);
     if (rest.length === 0) {
       throw new Error(`Missing PR number or URL. Usage: ${PR_USAGE}`);
@@ -81,7 +94,7 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
     if (rest.length === 0) {
       throw new Error(`Missing issue number or URL. Usage: ${ISSUE_USAGE}`);
     }
-    return { kind: 'issue', ref: rest[0], title };
+    return { kind: 'issue', ref: rest[0], title, prompt: promptFlags.prompt };
   }
   if (sub === undefined) {
     throw new Error(`Missing pull target. Usage: ${PULL_USAGE}`);

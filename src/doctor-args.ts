@@ -1,3 +1,5 @@
+import { NO_INPUT_FLAG } from './shared/args.js';
+
 /** Parsed flags for `venfork doctor`. */
 export type ParsedDoctorArgs = {
   /** Run the health checks (always true for `doctor`). */
@@ -14,7 +16,7 @@ export function parseDoctorCliArgs(args: string[]): ParsedDoctorArgs {
   for (const arg of args) {
     if (arg === '--json') {
       json = true;
-    } else {
+    } else if (arg !== NO_INPUT_FLAG) {
       throw new Error(
         `Unknown option '${arg}'. Usage: venfork doctor [--json]`
       );

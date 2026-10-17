@@ -4,7 +4,7 @@ import { stdoutUi } from '../shared/ui.js';
 const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   [
     'setup',
-    `venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public]
+    `venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public] [--yes] [--no-input]
   Create private mirror + public fork for vendor workflow
   <upstream>: GitHub HTTPS/SSH URL, or shorthand owner/repo (e.g. facebook/react)
 
@@ -16,6 +16,9 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
                        configured; \`venfork stage\` later pushes branches directly to upstream.
                        Use when you own the upstream repo (no need to round-trip through a fork).
                        Mutually exclusive with --fork-name.
+  • --yes, -y          Answer the personal-account confirm with yes
+  • --no-input         Never prompt: [name] defaults to <repo>-private; a missing
+                       <upstream> or an unconfirmed personal account exits 2
 
   Creates:
   • Private mirror (yourname/project-private) - internal work
@@ -24,7 +27,7 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'clone',
-    `venfork clone <vendor-repo> [--no-public] [--upstream <url>]
+    `venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--no-input]
   Clone an existing vendor setup and configure remotes automatically
   <vendor-repo>: URL or owner/repo for the private mirror
 
@@ -36,7 +39,8 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
 
   Options (only meaningful when venfork-config is absent):
   • --no-public        Declare a no-public layout (origin + upstream only)
-  • --upstream <url>   Provide the upstream URL explicitly (skips auto-detect/prompt)`,
+  • --upstream <url>   Provide the upstream URL explicitly (skips auto-detect/prompt)
+  • --no-input         Never prompt; a URL that would be asked for exits 2`,
   ],
   [
     '--version',
@@ -75,9 +79,9 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'stage',
-    `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing]
+    `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input]
 venfork stage branch <name> [same options]
-venfork stage issue <number-or-url> [--title <text>]
+venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input]
   Push a branch (or an issue) from the mirror outward, to the public fork or upstream
   Branch names \`issue\` and \`branch\` need the explicit form: venfork stage branch issue
   Branch: push to public fork for PR to upstream
@@ -89,6 +93,8 @@ venfork stage issue <number-or-url> [--title <text>]
   Options:
   • --internal-pr <n>      Pin a specific internal review PR number (skips most-recent-open lookup)
   • --no-update-existing   Do not update an already-open upstream PR body when staging
+  • --yes, -y              Push (and open the PR or issue) without the confirm
+  • --no-input             Never prompt; without --yes the confirm exits 2
   Issue: read the internal mirror issue, strip venfork:internal blocks, open the
     upstream counterpart, record linkage in venfork-config
   This is when your work becomes visible to the client`,
@@ -96,12 +102,13 @@ venfork stage issue <number-or-url> [--title <text>]
   [
     'pull',
     `venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push]
-venfork pull issue <number-or-url> [--title <text>]
+venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input]
   Bring upstream content into the private mirror
   • pr: fetch pull/<n>/head from upstream into a new branch (default: upstream-pr/<n>)
     and push it to origin so the team can review it. Refresh later with: venfork sync <branch>
   • issue: read the upstream issue, open an internal triage issue on the mirror,
-    record linkage. No comment sync; the linkage is one-shot.`,
+    record linkage. No comment sync; the linkage is one-shot.
+    --yes opens it without the confirm; --no-input without --yes exits 2.`,
   ],
   [
     'workflows',
@@ -132,15 +139,17 @@ const SUBCOMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'pull issue',
-    `venfork pull issue <number-or-url> [--title <text>]
+    `venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input]
   Read an upstream issue and open an internal triage issue on the mirror
-  Records linkage in venfork-config. No comment sync; the linkage is one-shot.`,
+  Records linkage in venfork-config. No comment sync; the linkage is one-shot.
+  --yes opens it without the confirm; --no-input without --yes exits 2`,
   ],
   [
     'stage issue',
-    `venfork stage issue <number-or-url> [--title <text>]
+    `venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input]
   Read an internal mirror issue, strip venfork:internal blocks,
-  open the upstream counterpart, record linkage in venfork-config`,
+  open the upstream counterpart, record linkage in venfork-config
+  --yes opens it without the confirm; --no-input without --yes exits 2`,
   ],
 ];
 
@@ -212,7 +221,9 @@ venfork pull pr 1234
   Priority: --org flag, then VENFORK_ORG, then your personal account (after a prompt)
   Example: export VENFORK_ORG=my-company
 
-VENFORK_NONINTERACTIVE=1 - Auto-confirm the prompts that allow it (not every prompt)
+VENFORK_NONINTERACTIVE=1 - Never prompt, as with --no-input (it does not confirm;
+  pass --yes for that). venfork also never prompts without a TTY on stdin or when
+  CI is set. A prompt that cannot be shown exits 2 naming the flag to pass.
 
 VENFORK_GIT_TIMEOUT - Cap in ms for each network git/gh operation (default 600000)
 

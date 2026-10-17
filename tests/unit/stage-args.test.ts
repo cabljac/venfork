@@ -155,7 +155,12 @@ describe('parseStageCliArgs', () => {
 describe('parseStageCliArgs issue', () => {
   test('parses `issue <n>`', () => {
     const parsed: ParsedStageArgs = parseStageUnion(['issue', '7']);
-    expect(parsed).toEqual({ kind: 'issue', ref: '7', title: undefined });
+    expect(parsed).toEqual({
+      kind: 'issue',
+      ref: '7',
+      title: undefined,
+      prompt: { yes: false, noInput: false },
+    });
   });
 
   test('parses --title in both forms', () => {
@@ -163,11 +168,13 @@ describe('parseStageCliArgs issue', () => {
       kind: 'issue',
       ref: '7',
       title: 'Override',
+      prompt: { yes: false, noInput: false },
     });
     expect(parseStageUnion(['issue', '7', '--title=Override'])).toEqual({
       kind: 'issue',
       ref: '7',
       title: 'Override',
+      prompt: { yes: false, noInput: false },
     });
   });
 
@@ -257,5 +264,27 @@ describe('parseStageCliArgs missing branch', () => {
       'Missing branch name. Usage: venfork stage <branch>'
     );
     expect(() => parseStageUnion(['--pr'])).toThrow('Missing branch name');
+  });
+});
+
+describe('parseStageCliArgs prompt flags', () => {
+  test('stage branch reads --yes, -y and --no-input', () => {
+    expect(parseStageUnion(['feat', '--yes']).prompt).toEqual({
+      yes: true,
+      noInput: false,
+    });
+    expect(parseStageUnion(['-y', '--no-input', 'feat']).prompt).toEqual({
+      yes: true,
+      noInput: true,
+    });
+  });
+
+  test('stage issue reads --yes and --no-input', () => {
+    expect(parseStageUnion(['issue', '7', '--yes', '--no-input'])).toEqual({
+      kind: 'issue',
+      ref: '7',
+      title: undefined,
+      prompt: { yes: true, noInput: true },
+    });
   });
 });

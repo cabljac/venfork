@@ -1,4 +1,4 @@
-import { scanArgs, unexpectedArgument } from './shared/args.js';
+import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
 
 /** A `venfork workflows` action. */
 export type WorkflowsAction =
@@ -33,7 +33,7 @@ export function parseWorkflowsCliArgs(
   const [actionRaw = 'status', ...rest] = scanArgs(
     workflowsArgs,
     USAGE,
-    () => undefined
+    (arg) => (arg === NO_INPUT_FLAG ? 0 : undefined)
   );
 
   if (actionRaw === 'status' || actionRaw === 'clear') {

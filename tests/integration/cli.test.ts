@@ -6,12 +6,16 @@ import {
   readFile,
   rename,
   rm,
+  stat,
   writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { $ } from 'execa';
-import { createMirrorFixture } from '../harness/mirror-fixture.js';
+import {
+  createMirrorFixture,
+  type MirrorFixture,
+} from '../harness/mirror-fixture.js';
 
 const repoRoot = path.resolve(import.meta.dir, '..', '..');
 let tmp: string;
@@ -59,6 +63,68 @@ function runCliIn(cwd: string, ...args: string[]) {
   })`node ${entry} ${args}`;
 }
 
+/**
+ * Runs argv on a pty, waits for $MARKER in its output, then closes the pty
+ * so the child's stdin ends at a TTY. Prints the output and `EXIT=<code>`.
+ */
+const PTY_EOF_SCRIPT = `
+import fcntl, os, select, struct, subprocess, sys, termios, time
+marker = os.environ['MARKER'].encode()
+master, slave = os.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 100, 0, 0))
+proc = subprocess.Popen(sys.argv[1:], stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+os.close(slave)
+buf = b''
+deadline = time.time() + 20
+while marker not in buf and time.time() < deadline:
+    if select.select([master], [], [], 0.2)[0]:
+        try:
+            chunk = os.read(master, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+time.sleep(0.3)
+while select.select([master], [], [], 0)[0]:
+    try:
+        chunk = os.read(master, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    buf += chunk
+os.close(master)
+try:
+    code = proc.wait(timeout=10)
+except subprocess.TimeoutExpired:
+    proc.kill()
+    code = 'HUNG'
+sys.stdout.write(buf.decode(errors='replace'))
+print('\\nEXIT=%s' % code)
+`;
+
+/**
+ * Runs argv with stdin and stdout on a pty and stderr in $ERRFILE, and
+ * waits up to 15 s for it to exit. Prints `EXIT=<code>` or `EXIT=HUNG`.
+ */
+const PTY_STDERR_FILE_SCRIPT = `
+import fcntl, os, struct, subprocess, sys, termios
+master, slave = os.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 100, 0, 0))
+with open(os.environ['ERRFILE'], 'wb') as err:
+    proc = subprocess.Popen(sys.argv[1:], stdin=slave, stdout=slave, stderr=err, close_fds=True)
+    os.close(slave)
+    try:
+        code = proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        code = 'HUNG'
+os.close(master)
+print('EXIT=%s' % code)
+`;
+
 describe('built CLI entry point', () => {
   test('--version prints the package version', async () => {
     const pkg = JSON.parse(
@@ -69,23 +135,6 @@ describe('built CLI entry point', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe(pkg.version);
-  });
-
-  test('input that ends at a prompt exits 130 instead of 0', async () => {
-    const result = await $({
-      cwd: tmp,
-      reject: false,
-      stdin: { file: '/dev/null' },
-      env: { PATH: authedPath },
-    })`node ${entry} setup a/b --org c`;
-
-    expect(result.exitCode).toBe(130);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('Private mirror repo name?');
-    expect(result.stderr.endsWith('Cancelled: input ended at a prompt')).toBe(
-      true
-    );
-    expect(result.stderr).not.toContain('\x1b[?25h');
   });
 
   test('a command that finishes is not reported as an abandoned prompt', async () => {
@@ -100,6 +149,30 @@ describe('built CLI entry point', () => {
     expect(result.stderr).toBe('');
   });
 
+  test.skipIf(Bun.which('python3') === null)(
+    'EOF at a TTY confirm exits 130',
+    async () => {
+      const childEnv: Record<string, string | undefined> = {
+        ...process.env,
+        PATH: authedPath,
+        MARKER: 'Continue with personal account?',
+      };
+      delete childEnv.CI;
+      delete childEnv.VENFORK_NONINTERACTIVE;
+      delete childEnv.VENFORK_ORG;
+      const result = await $({
+        cwd: tmp,
+        reject: false,
+        timeout: 30000,
+        env: childEnv,
+        extendEnv: false,
+      })`python3 -c ${PTY_EOF_SCRIPT} node ${entry} setup a/b b-private`;
+
+      expect(result.stdout).toContain('Continue with personal account?');
+      expect(result.stdout.trim().split('\n').at(-1)).toBe('EXIT=130');
+    }
+  );
+
   test('setup without gh auth exits 1 with the AuthenticationError message', async () => {
     const result = await runCli('setup');
 
@@ -107,6 +180,299 @@ describe('built CLI entry point', () => {
     expect(result.all).toContain(
       'GitHub CLI is not authenticated. Please run: gh auth login'
     );
+  });
+});
+
+/**
+ * Runs the CLI the way a script or agent does: stdin is an open pipe that
+ * never sends input, and CI and VENFORK_NONINTERACTIVE are unset unless
+ * `env` sets them, so only the missing TTY stops the prompt.
+ */
+function runCliWithoutTty(
+  cwd: string,
+  args: string[],
+  env: Record<string, string> = {}
+) {
+  const childEnv: Record<string, string | undefined> = {
+    ...process.env,
+    PATH: authedPath,
+    ...env,
+  };
+  if (!('CI' in env)) delete childEnv.CI;
+  if (!('VENFORK_NONINTERACTIVE' in env)) {
+    delete childEnv.VENFORK_NONINTERACTIVE;
+  }
+  delete childEnv.VENFORK_ORG;
+  return $({
+    cwd,
+    reject: false,
+    stdin: 'pipe',
+    timeout: 5000,
+    env: childEnv,
+    extendEnv: false,
+  })`node ${entry} ${args}`;
+}
+
+async function cutFeatureBranch(fx: MirrorFixture): Promise<void> {
+  await fx.git(fx.work, 'checkout', '--quiet', '-b', 'feature');
+  await writeFile(path.join(fx.work, 'src-feature.txt'), 'feature\n');
+  await fx.git(fx.work, 'add', 'src-feature.txt');
+  await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: feature work');
+}
+
+async function hasBranch(repo: string, branch: string): Promise<boolean> {
+  const result = await $({
+    cwd: repo,
+    reject: false,
+  })`git rev-parse --verify --quiet refs/heads/${branch}`;
+  return result.exitCode === 0;
+}
+
+describe('no TTY: fail fast instead of prompting', () => {
+  test('setup without an upstream exits 2 naming the <upstream> argument', async () => {
+    const result = await runCliWithoutTty(tmp, ['setup', '--org', 'acme']);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('Pass the <upstream> argument.');
+  });
+
+  test('setup without a mirror name uses <repo>-private and says so', async () => {
+    const result = await runCliWithoutTty(tmp, ['setup', 'a/b', '--org', 'c']);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('Private mirror repo name? b-private');
+    expect(result.stderr).not.toContain('Cancelled: input ended at a prompt');
+  });
+
+  test('setup on a personal account exits 2 naming --yes', async () => {
+    const result = await runCliWithoutTty(tmp, ['setup', 'a/b', 'b-private']);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('Continue with personal account?');
+    expect(result.stderr).toContain('Pass --yes.');
+  });
+
+  test('stage without --yes exits 2 naming --yes and pushes nothing; with --yes it pushes', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await cutFeatureBranch(fx);
+      const publicFork = fx.publicFork ?? '';
+
+      const refused = await runCliWithoutTty(fx.work, ['stage', 'feature']);
+      expect(refused.timedOut).toBe(false);
+      expect(refused.exitCode).toBe(2);
+      expect(refused.stdout).toBe('');
+      expect(refused.stderr).toContain('Push to public fork?');
+      expect(refused.stderr).toContain('Pass --yes.');
+      expect(await hasBranch(publicFork, 'feature')).toBe(false);
+
+      const staged = await runCliWithoutTty(fx.work, [
+        'stage',
+        'feature',
+        '--yes',
+      ]);
+      expect(staged.exitCode).toBe(0);
+      expect(staged.stdout).toBe('');
+      expect(await fx.fileAt(publicFork, 'feature', 'src-feature.txt')).toBe(
+        'feature\n'
+      );
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('stage without --yes and no TTY exits 2 before fetching', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await cutFeatureBranch(fx);
+      await fx.git(
+        fx.work,
+        'remote',
+        'set-url',
+        'upstream',
+        path.join(tmp, 'no-such-upstream.git')
+      );
+
+      const result = await runCliWithoutTty(fx.work, ['stage', 'feature']);
+
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain('Push to public fork?');
+      expect(result.stderr).toContain('Pass --yes.');
+      expect(result.stderr).not.toContain('git fetch upstream failed');
+      expect(result.stderr).toContain(
+        'cancelled: Not staged: the push confirm needs --yes'
+      );
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('stage issue without --yes and no TTY exits 2 naming --yes before reading the issue', async () => {
+    const fx = await createMirrorFixture();
+    const logDir = await mkdtemp(path.join(tmp, 'gh-log-'));
+    const ghLog = path.join(logDir, 'gh.log');
+    const bin = path.join(logDir, 'bin');
+    await mkdir(bin);
+    await writeFile(
+      path.join(bin, 'gh'),
+      `#!/bin/sh\necho "$*" >> ${JSON.stringify(ghLog)}\n[ "$1 $2" = "auth status" ] && exit 0\nexit 1\n`
+    );
+    await chmod(path.join(bin, 'gh'), 0o755);
+    try {
+      await fx.git(
+        fx.work,
+        'remote',
+        'set-url',
+        'origin',
+        'git@github.com:acme/project-private.git'
+      );
+      await fx.git(
+        fx.work,
+        'remote',
+        'set-url',
+        'upstream',
+        'git@github.com:client/project.git'
+      );
+
+      const result = await runCliWithoutTty(fx.work, ['stage', 'issue', '7'], {
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+      });
+
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('Open the issue on client/project?');
+      expect(result.stderr).toContain('Pass --yes.');
+      const calls = await readFile(ghLog, 'utf8').catch(() => '');
+      expect(calls).not.toContain('issue view');
+      expect(calls).not.toContain('issue create');
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('clone exit 2 on a legacy mirror leaves no directory, and the rerun with the named flag succeeds', async () => {
+    const fx = await createMirrorFixture();
+    const root = await mkdtemp(path.join(tmp, 'legacy-clone-'));
+    try {
+      const repos = path.join(root, 'repos');
+      await $`git clone --quiet --bare ${fx.upstream} ${path.join(repos, 'acme', 'proj-private.git')}`;
+      const bin = path.join(root, 'bin');
+      await mkdir(bin);
+      await writeFile(
+        path.join(bin, 'gh'),
+        [
+          '#!/bin/sh',
+          'case "$1 $2" in',
+          '  "auth status") exit 0;;',
+          '  "config get") echo ssh; exit 0;;',
+          '  "repo set-default") exit 0;;',
+          '  "repo clone")',
+          '    src="$3"; dst="$4"; shift 4; [ "$1" = "--" ] && shift',
+          '    exec git clone -q "$@" "$GHSTUB_REPOS/$src.git" "$dst";;',
+          'esac',
+          'exit 1',
+          '',
+        ].join('\n')
+      );
+      await chmod(path.join(bin, 'gh'), 0o755);
+      const work = path.join(root, 'work');
+      await mkdir(work);
+      const env = {
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+        GHSTUB_REPOS: repos,
+      };
+
+      const refused = await runCliWithoutTty(
+        work,
+        ['clone', 'acme/proj-private'],
+        env
+      );
+      expect(refused.timedOut).toBe(false);
+      expect(refused.exitCode).toBe(2);
+      expect(refused.stderr).toContain('--upstream <url>');
+      expect(
+        await stat(path.join(work, 'proj-private')).then(
+          () => true,
+          () => false
+        )
+      ).toBe(false);
+
+      const cloned = await runCliWithoutTty(
+        work,
+        [
+          'clone',
+          'acme/proj-private',
+          '--no-public',
+          '--upstream',
+          'git@github.com:client/proj.git',
+        ],
+        env
+      );
+      expect(cloned.stderr).not.toContain('already exists');
+      expect(cloned.exitCode).toBe(0);
+      const remote = await $({
+        cwd: path.join(work, 'proj-private'),
+      })`git remote get-url upstream`;
+      expect(remote.stdout.trim()).toBe('git@github.com:client/proj.git');
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test.skipIf(Bun.which('python3') === null)(
+    'stage with stderr redirected at a TTY exits 2 instead of a hidden prompt',
+    async () => {
+      const fx = await createMirrorFixture();
+      try {
+        await cutFeatureBranch(fx);
+        const errFile = path.join(fx.root, 'stage-stderr.txt');
+        const childEnv: Record<string, string | undefined> = {
+          ...process.env,
+          PATH: authedPath,
+          ERRFILE: errFile,
+        };
+        delete childEnv.CI;
+        delete childEnv.VENFORK_NONINTERACTIVE;
+        const result = await $({
+          cwd: fx.work,
+          reject: false,
+          timeout: 30000,
+          env: childEnv,
+          extendEnv: false,
+        })`python3 -c ${PTY_STDERR_FILE_SCRIPT} node ${entry} stage feature`;
+
+        expect(result.stdout.trim().split('\n').at(-1)).toBe('EXIT=2');
+        expect(await readFile(errFile, 'utf8')).toContain('Pass --yes.');
+        expect(await hasBranch(fx.publicFork ?? '', 'feature')).toBe(false);
+      } finally {
+        await fx.cleanup();
+      }
+    }
+  );
+
+  test('VENFORK_NONINTERACTIVE=1 no longer confirms: stage exits 2 naming --yes', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await cutFeatureBranch(fx);
+
+      const result = await runCliWithoutTty(fx.work, ['stage', 'feature'], {
+        VENFORK_NONINTERACTIVE: '1',
+      });
+
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('Pass --yes.');
+      expect(await hasBranch(fx.publicFork ?? '', 'feature')).toBe(false);
+    } finally {
+      await fx.cleanup();
+    }
   });
 });
 

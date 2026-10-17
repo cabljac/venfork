@@ -8,6 +8,7 @@ describe('parseCloneCliArgs', () => {
         vendorRepoUrl: 'git@github.com:acme/proj-private.git',
         noPublic: false,
         upstreamUrl: undefined,
+        prompt: { yes: false, noInput: false },
       }
     );
   });
@@ -17,6 +18,7 @@ describe('parseCloneCliArgs', () => {
       vendorRepoUrl: 'acme/proj-private',
       noPublic: true,
       upstreamUrl: undefined,
+      prompt: { yes: false, noInput: false },
     });
   });
 
@@ -32,6 +34,7 @@ describe('parseCloneCliArgs', () => {
       vendorRepoUrl: 'acme/proj-private',
       noPublic: true,
       upstreamUrl: 'git@github.com:acme/proj.git',
+      prompt: { yes: false, noInput: false },
     });
   });
 
@@ -45,6 +48,7 @@ describe('parseCloneCliArgs', () => {
       vendorRepoUrl: 'acme/proj-private',
       noPublic: false,
       upstreamUrl: 'git@github.com:acme/proj.git',
+      prompt: { yes: false, noInput: false },
     });
   });
 
@@ -71,6 +75,7 @@ describe('parseCloneCliArgs', () => {
       vendorRepoUrl: 'acme/proj-private',
       noPublic: true,
       upstreamUrl: 'git@github.com:acme/proj.git',
+      prompt: { yes: false, noInput: false },
     });
   });
 });
@@ -96,6 +101,24 @@ describe('parseCloneCliArgs strictness', () => {
   test('missing value at the end of argv throws', () => {
     expect(() => parseCloneCliArgs(['a/b', '--upstream'])).toThrow(
       '--upstream requires a value'
+    );
+  });
+});
+
+describe('parseCloneCliArgs prompt flags', () => {
+  test('--no-input reaches the parsed prompt context', () => {
+    expect(parseCloneCliArgs(['a/b', '--no-input']).prompt).toEqual({
+      yes: false,
+      noInput: true,
+    });
+  });
+
+  test('rejects --yes and -y: clone has no confirm', () => {
+    expect(() => parseCloneCliArgs(['a/b', '--yes'])).toThrow(
+      "Unknown option '--yes'. Usage: venfork clone"
+    );
+    expect(() => parseCloneCliArgs(['a/b', '-y'])).toThrow(
+      "Unknown option '-y'"
     );
   });
 });

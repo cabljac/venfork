@@ -8,6 +8,7 @@ import {
   BranchNotFoundError,
   CommandExitError,
   GitError,
+  MissingInputError,
   RemoteNotFoundError,
 } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
@@ -23,7 +24,12 @@ import {
 } from '../shared/managed-commit.js';
 import { resolveCommit } from '../shared/mirror-commit.js';
 import { netExec, netFailureReason, netFetch } from '../shared/net.js';
-import { confirmOrAutoYes, isCancel } from '../shared/prompt.js';
+import {
+  assertCanConfirm,
+  isCancel,
+  type PromptContext,
+  promptConfirm,
+} from '../shared/prompt.js';
 import {
   findInternalPr,
   type InternalPrInfo,
@@ -241,18 +247,29 @@ export interface StagingPlan {
   recordedUrls: string[];
 }
 
+function stageConfirmMessage(noPublic: boolean, createPr: boolean): string {
+  if (noPublic) {
+    return createPr ? 'Push to upstream and open the PR?' : 'Push to upstream?';
+  }
+  return createPr
+    ? 'Push to public fork and open the upstream PR?'
+    : 'Push to public fork?';
+}
+
 /**
  * Resolves remotes and the default branch for a staging push, fetches
  * upstream and origin, and refuses branches that are not upstream work:
  * `venfork-config`, anything that is not a local branch, upstream's default
  * branch, and a branch with no history in common with upstream. Also
  * refuses while the config holds invalid preserve entries, as sync does.
+ * Refuses before the fetch when the push confirm could not be answered.
  * Throws `BranchNotFoundError` / `RemoteNotFoundError` so callers can render
  * a single failure path.
  */
 async function planStaging(
   requested: string,
-  cwd: string
+  cwd: string,
+  consent: { createPr: boolean; prompt?: PromptContext }
 ): Promise<StagingPlan> {
   const branch = requested.replace(/^refs\/heads\//, '');
   if (branch.replace(/^origin\//, '') === CONFIG_BRANCH) {
@@ -313,6 +330,10 @@ async function planStaging(
   }
   const pushOwner = pushRepoPath.split('/')[0] ?? '';
 
+  assertCanConfirm(
+    stageConfirmMessage(noPublic, consent.createPr),
+    consent.prompt
+  );
   await netFetch('upstream', cwd);
   await netFetch('origin', cwd);
   const upstreamDefaultBranch = await getDefaultBranch('upstream');
@@ -531,6 +552,8 @@ export interface StageOptions {
    * `gh pr edit` so addressing internal feedback re-publishes upstream.
    */
   noUpdateExisting?: boolean;
+  /** `--yes` / `--no-input` for the push confirm. */
+  prompt?: PromptContext;
 }
 
 /**
@@ -610,7 +633,10 @@ export async function stageCommand(
   const repoDir = process.cwd();
   try {
     s.start('Verifying branch and fetching upstream and origin');
-    const plan = await planStaging(branch, repoDir);
+    const plan = await planStaging(branch, repoDir, {
+      createPr,
+      prompt: options.prompt,
+    });
     s.stop('Branch verified');
     if (createPr) {
       if (!plan.upstreamRepoPath) {
@@ -719,17 +745,13 @@ export async function stageCommand(
       p.note(translatedBody || '(empty)', 'Upstream PR body preview');
     }
 
-    const shouldStage = await confirmOrAutoYes({
-      message: plan.noPublic
-        ? createPr
-          ? 'Push to upstream and open the PR?'
-          : 'Push to upstream?'
-        : createPr
-          ? 'Push to public fork and open the upstream PR?'
-          : 'Push to public fork?',
-      initialValue: false,
-      allowNonInteractive: createPr,
-    });
+    const shouldStage = await promptConfirm(
+      {
+        message: stageConfirmMessage(plan.noPublic, createPr),
+        initialValue: false,
+      },
+      options.prompt
+    );
 
     if (isCancel(shouldStage)) {
       p.cancel('Operation cancelled');
@@ -843,6 +865,10 @@ export async function stageCommand(
     p.outro('✨ Stage complete!');
   } catch (error) {
     if (error instanceof CommandExitError) throw error;
+    if (error instanceof MissingInputError) {
+      s.cancel('Not staged: the push confirm needs --yes');
+      throw error;
+    }
     s.stop('Error occurred');
     p.log.error(error instanceof Error ? error.message : String(error));
     p.outro('❌ Stage failed');

@@ -1,9 +1,11 @@
 import {
   consumeValue,
   parsePositiveInt,
+  parsePromptFlags,
   scanArgs,
   unexpectedArgument,
 } from './shared/args.js';
+import type { PromptContext } from './shared/prompt.js';
 
 /** Parsed `venfork stage [branch] <name> ...` arguments. */
 export type ParsedStageBranchArgs = {
@@ -29,6 +31,8 @@ export type ParsedStageBranchArgs = {
    * internal review feedback re-publishes upstream.
    */
   noUpdateExisting: boolean;
+  /** `--yes` / `--no-input`. */
+  prompt: PromptContext;
 };
 
 /** Parsed `venfork stage issue ...` arguments. */
@@ -38,12 +42,14 @@ export type ParsedStageIssueArgs = {
   ref: string;
   /** Override the upstream issue title. */
   title?: string;
+  /** `--yes` / `--no-input`. */
+  prompt: PromptContext;
 };
 
 export type ParsedStageArgs = ParsedStageBranchArgs | ParsedStageIssueArgs;
 
 const USAGE =
-  'venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing]';
+  'venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input]';
 
 /**
  * Parse `venfork stage ...` argv after the `stage` token.
@@ -58,8 +64,10 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   let base: string | undefined;
   let internalPrNumber: number | undefined;
   let noUpdateExisting = false;
+  const promptFlags = parsePromptFlags({ allowYes: true });
 
   const positional = scanArgs(stageArgs, USAGE, (a, i) => {
+    if (promptFlags.onOption(a) !== undefined) return 0;
     if (a === '--pr') {
       createPr = true;
       return 0;
@@ -115,7 +123,7 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
       );
     }
     if (rest.length > 1) throw unexpectedArgument(rest[1], USAGE);
-    return { kind: 'issue', ref: rest[0], title };
+    return { kind: 'issue', ref: rest[0], title, prompt: promptFlags.prompt };
   }
 
   let branch = first;
@@ -143,5 +151,6 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     base,
     internalPrNumber,
     noUpdateExisting,
+    prompt: promptFlags.prompt,
   };
 }

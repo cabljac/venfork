@@ -1,3 +1,5 @@
+import type { PromptContext } from './prompt.js';
+
 /**
  * Read the value of `--flag value` or `--flag=value` at `args[i]`.
  * `consumed` is the number of extra argv entries the value used.
@@ -60,6 +62,48 @@ export function scanArgs(
     i += consumed;
   }
   return positional;
+}
+
+/**
+ * `--no-input`. Every command accepts it, so a wrapper can always pass it;
+ * on a command that never prompts it changes nothing.
+ */
+export const NO_INPUT_FLAG = '--no-input';
+
+/** The prompt flags one command parse has seen so far. */
+export interface PromptFlagParser {
+  /** The `--yes` / `--no-input` state, filled in as options are read. */
+  prompt: PromptContext;
+  /**
+   * A {@link scanArgs} option handler for `--no-input` and, when allowed,
+   * `--yes`/`-y`. Returns 0 for a prompt flag, `undefined` otherwise.
+   */
+  onOption(arg: string): 0 | undefined;
+}
+
+/**
+ * Shared parsing of the prompt flags for a command that prompts. Pass
+ * `allowYes: false` for a command with no confirm, so `--yes` stays an
+ * unknown option there.
+ */
+export function parsePromptFlags(options: {
+  allowYes: boolean;
+}): PromptFlagParser {
+  const prompt: PromptContext = { yes: false, noInput: false };
+  return {
+    prompt,
+    onOption(arg) {
+      if (arg === NO_INPUT_FLAG) {
+        prompt.noInput = true;
+        return 0;
+      }
+      if (options.allowYes && (arg === '--yes' || arg === '-y')) {
+        prompt.yes = true;
+        return 0;
+      }
+      return undefined;
+    },
+  };
 }
 
 /** Parse a plain positive decimal integer, or null. */

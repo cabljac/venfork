@@ -85,9 +85,8 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
 
     // 2. Run `venfork setup`. With `--org GITHUB_ORG` (the mirror/fork org)
     //    venfork creates the fork+mirror under that org. The personal-account
-    //    prompt does not fire because GITHUB_ORG !== gh user. We still pipe
-    //    `y\n` defensively in case someone overrides VENFORK_E2E_ORG to
-    //    match the gh user.
+    //    prompt does not fire because GITHUB_ORG !== gh user; --yes covers a
+    //    VENFORK_E2E_ORG override that matches the gh user.
     await runVenfork(
       [
         'setup',
@@ -97,11 +96,11 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
         GITHUB_ORG,
         '--fork-name',
         names.fork,
+        '--yes',
       ],
       {
         cwd: tmpRoot,
         env: { VENFORK_ORG: GITHUB_ORG },
-        input: 'y\n',
       }
     );
 
@@ -398,11 +397,8 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     ].join('\n');
     await $`gh pr create --repo ${GITHUB_ORG}/${names.mirrorBare} --base ${defaultBranch} --head ${featureBranch} --title ${'feat: add feature.txt'} --body ${internalBody}`;
 
-    // Drive `venfork stage --pr`, auto-confirming via env var (clack's
-    // confirm doesn't reliably accept piped `y\n` in non-TTY mode).
-    await runVenfork(['stage', featureBranch, '--pr', '--draft'], {
+    await runVenfork(['stage', featureBranch, '--pr', '--draft', '--yes'], {
       cwd: localMirrorPath,
-      env: { VENFORK_NONINTERACTIVE: '1' },
     });
 
     // Find the upstream PR. gh's --head filter on cross-repo PRs is
@@ -511,9 +507,8 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     });
 
     // Stage the internal issue upstream.
-    await runVenfork(['stage', 'issue', String(internal.number)], {
+    await runVenfork(['stage', 'issue', String(internal.number), '--yes'], {
       cwd: localMirrorPath,
-      env: { VENFORK_NONINTERACTIVE: '1' },
     });
 
     // Find the upstream issue. Don't use gh's `--search` — its index is
@@ -548,10 +543,12 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     const upstreamComment = `Follow-up detail ${RUN_ID}`;
     await $`gh issue comment ${upstreamReport.number} --repo ${UPSTREAM_OWNER}/${names.upstream} --body ${upstreamComment}`;
 
-    await runVenfork(['pull', 'issue', String(upstreamReport.number)], {
-      cwd: localMirrorPath,
-      env: { VENFORK_NONINTERACTIVE: '1' },
-    });
+    await runVenfork(
+      ['pull', 'issue', String(upstreamReport.number), '--yes'],
+      {
+        cwd: localMirrorPath,
+      }
+    );
 
     // The mirror should now have an issue whose title carries the
     // [upstream #N] prefix and whose body references the upstream URL.
@@ -597,8 +594,9 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
           '--org',
           GITHUB_ORG,
           '--no-public',
+          '--yes',
         ],
-        { cwd: tmpRoot, env: { VENFORK_ORG: GITHUB_ORG }, input: 'y\n' }
+        { cwd: tmpRoot, env: { VENFORK_ORG: GITHUB_ORG } }
       );
       await runVenfork(['schedule', 'set', '*/5 * * * *'], {
         cwd: mirrorPath,

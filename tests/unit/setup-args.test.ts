@@ -13,6 +13,7 @@ describe('parseSetupCliArgs', () => {
       organization: undefined,
       publicForkRepoName: undefined,
       noPublic: false,
+      prompt: { yes: false, noInput: false },
     });
   });
 
@@ -25,6 +26,7 @@ describe('parseSetupCliArgs', () => {
       organization: 'acme',
       publicForkRepoName: undefined,
       noPublic: false,
+      prompt: { yes: false, noInput: false },
     });
   });
 
@@ -35,6 +37,7 @@ describe('parseSetupCliArgs', () => {
       organization: 'corp',
       publicForkRepoName: undefined,
       noPublic: false,
+      prompt: { yes: false, noInput: false },
     });
   });
 
@@ -54,6 +57,7 @@ describe('parseSetupCliArgs', () => {
       organization: 'o',
       publicForkRepoName: 'p-public',
       noPublic: false,
+      prompt: { yes: false, noInput: false },
     });
 
     expect(
@@ -64,6 +68,7 @@ describe('parseSetupCliArgs', () => {
       organization: undefined,
       publicForkRepoName: 'other-fork',
       noPublic: false,
+      prompt: { yes: false, noInput: false },
     });
   });
 
@@ -75,6 +80,7 @@ describe('parseSetupCliArgs', () => {
       organization: 'from-env',
       publicForkRepoName: undefined,
       noPublic: false,
+      prompt: { yes: false, noInput: false },
     });
   });
 
@@ -86,6 +92,7 @@ describe('parseSetupCliArgs', () => {
       organization: 'flag',
       publicForkRepoName: undefined,
       noPublic: false,
+      prompt: { yes: false, noInput: false },
     });
   });
 
@@ -120,6 +127,7 @@ describe('parseSetupCliArgs', () => {
       organization: undefined,
       publicForkRepoName: undefined,
       noPublic: true,
+      prompt: { yes: false, noInput: false },
     });
   });
 
@@ -173,5 +181,18 @@ describe('parseSetupCliArgs strictness', () => {
     expect(() => parseSetupCliArgs(['a/b', '--fork-name'])).toThrow(
       '--fork-name requires a value'
     );
+  });
+});
+
+describe('parseSetupCliArgs prompt flags', () => {
+  test('--yes, -y and --no-input reach the parsed prompt context', () => {
+    expect(parseSetupCliArgs(['a/b', '--yes']).prompt).toEqual({
+      yes: true,
+      noInput: false,
+    });
+    expect(parseSetupCliArgs(['-y', 'a/b', '--no-input']).prompt).toEqual({
+      yes: true,
+      noInput: true,
+    });
   });
 });

@@ -1,3 +1,5 @@
+import { NO_INPUT_FLAG } from './shared/args.js';
+
 /** Parsed `venfork sync` arguments. */
 export type ParsedSyncArgs = {
   branch?: string;
@@ -6,7 +8,7 @@ export type ParsedSyncArgs = {
 };
 
 /**
- * Parse `venfork sync [branch] [--report-issues]` argv after the `sync` token.
+ * Parse `venfork sync [branch] [--report-issues] [--no-input]` argv after the `sync` token.
  */
 export function parseSyncCliArgs(args: string[]): ParsedSyncArgs {
   let branch: string | undefined;
@@ -14,6 +16,8 @@ export function parseSyncCliArgs(args: string[]): ParsedSyncArgs {
   for (const arg of args) {
     if (arg === '--report-issues') {
       reportIssues = true;
+    } else if (arg === NO_INPUT_FLAG) {
+      // Accepted on every command; sync never prompts.
     } else if (arg.startsWith('-')) {
       throw new Error(
         `Unknown option '${arg}'. Usage: venfork sync [branch] [--report-issues]`

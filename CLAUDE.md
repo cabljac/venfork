@@ -91,7 +91,7 @@ Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/n
 
 - `VENFORK_ORG` — default org for created repos (`--org` flag overrides; no org → prompts before using personal account).
 - `VENFORK_GIT_TIMEOUT` — ms cap per network op (default 600000).
-- `VENFORK_NONINTERACTIVE=1` — auto-confirm prompts that explicitly opt in (`allowNonInteractive`); does **not** blanket-yes every prompt.
+- `VENFORK_NONINTERACTIVE=1` - never prompt, like `--no-input`; it does not confirm (only `--yes` does). venfork also never prompts without a TTY on stdin and stderr or with `CI` set (not `false`/`0`); a prompt it cannot show exits 2 (`MissingInputError`) naming the flag. Every command accepts `--no-input` (a no-op where nothing prompts).
 - `VENFORK_PUSH_TOKEN` — token used by the generated sync workflow for pushes.
 - `VENFORK_APP_CLIENT_ID` / `VENFORK_APP_PRIVATE_KEY` - repo secrets the generated workflow mints its push token from when `scheduleAuth` is `app` (`schedule set --app`).
 - `VENFORK_E2E_APP_CLIENT_ID` / `VENFORK_E2E_APP_PRIVATE_KEY` - GitHub App credentials that enable the App variant of the e2e dispatch tier.

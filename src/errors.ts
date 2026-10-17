@@ -221,3 +221,21 @@ export class CommandExitError extends VenforkError {
     this.name = 'CommandExitError';
   }
 }
+
+/**
+ * Thrown when a value or a consent is needed but venfork cannot prompt for
+ * it (see `canPrompt` in src/shared/prompt.ts). `src/index.ts` exits 2.
+ */
+export class MissingInputError extends VenforkError {
+  constructor(
+    /** The flag or argument that supplies the answer, e.g. `--yes`. */
+    public readonly flag: string,
+    /** The question that could not be asked. */
+    public readonly question: string
+  ) {
+    super(
+      `Cannot ask "${question}": venfork does not prompt without a TTY on stdin, in CI, with --no-input or with VENFORK_NONINTERACTIVE=1. Pass ${flag}.`
+    );
+    this.name = 'MissingInputError';
+  }
+}

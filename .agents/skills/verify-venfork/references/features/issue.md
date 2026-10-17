@@ -17,13 +17,13 @@ tests:
 - The issue argument is a positive integer or a same-repo issue URL; a URL for another repo is refused.
 - `stage issue <internal-#>`: `gh issue view` on the mirror, redact title and body with `stripInternalBlocks` (`RedactionError` on an unmatched close marker or a stray venfork comment), then `assertNoMirrorReference` on both (`MirrorReferenceError`). Preview, confirm "Open the issue on <upstream>?", `gh issue create` upstream, write `shippedIssues[<internal-#>]`.
 - `pull issue <upstream-#>`: reads the upstream issue and its comments, builds `[upstream #N] <title>` and a body with an "Upstream comments" section, confirm, `gh issue create` on the mirror, write `pulledIssues[<new internal-#>]`.
-- `VENFORK_NONINTERACTIVE=1` answers both confirms yes. A "no" exits 0; a cancel or EOF exits 130.
+- `--yes` answers both confirms. Without a TTY on stdin, with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`, a confirm without `--yes` exits 2 naming `--yes` (`MissingInputError`) before it reads the issue, and opens nothing. At a TTY a "no" exits 0; a cancel or EOF exits 130.
 - One-shot: no later comment or state sync. A failed config write only warns.
 - `stage issue` with a branch-only flag (`--pr`, `--draft`, `--base`, `--internal-pr`, `--no-update-existing`) is a parser error. Bare `stage issue` points at `venfork stage branch issue`. The old `venfork issue ...` exits 1 and names both new forms.
 
 ## How a user reaches it
 
-`venfork stage issue <n-or-url> [--title <t>]`, `venfork pull issue <n-or-url> [--title <t>]`.
+`venfork stage issue <n-or-url> [--title <t>] [--yes] [--no-input]`, `venfork pull issue <n-or-url> [--title <t>] [--yes] [--no-input]`. `pull pr` never prompts: it accepts `--no-input` (a no-op) and refuses `--yes`.
 
 ## How to drive it
 
@@ -38,7 +38,7 @@ venfork issue stage 1 </dev/null 2>&1                                           
 ```
 
 - Redaction without GitHub: `(cd "$(dirname "$VF_CLI")/.." && bun -e "import { stripInternalBlocks } from './src/shared/redaction.ts'; console.log(stripInternalBlocks('pub <!-- venfork:internal -->secret<!-- /venfork:internal --> end'))")` prints `pub  end`. A body with `<!-- venfork:intenral -->` throws `RedactionError`.
-- Already current, cancel at the confirm and the config lease are not reachable on the fixture; the remote check fails first.
+- Already current, cancel at the confirm, the exit-2 confirm and the config lease are not reachable on the fixture; the remote check fails first. `tests/unit/commands.test.ts` pins `--yes` and the exit-2 path.
 
 ## What proves it
 
