@@ -1,7 +1,7 @@
 ---
 command: stage
 entry: src/commands/stage.ts
-shared: [stage-gate, deny-list, redaction, confirm, divergence, managed-commit, mirror-commit, net, repo, worktree, constants]
+shared: [stage-gate, deny-list, redaction, prompt, divergence, managed-commit, mirror-commit, net, repo, worktree, constants]
 config:
   read: [mode, upstreamUrl, publicForkUrl, preserve, invalidPreserve]
   written: [shippedBranches]

@@ -14,6 +14,7 @@ import {
 } from '../git.js';
 import { pathExists } from '../shared/fs.js';
 import { netExec, runNetOp, seedMirrorInChunks } from '../shared/net.js';
+import { isCancel, promptConfirm, promptText } from '../shared/prompt.js';
 import {
   githubUrlForProtocol,
   normalizeGitHubRepoInput,
@@ -143,18 +144,18 @@ export async function setupCommand(
 
   // Prompt for upstream URL only if not provided
   if (!finalUpstreamUrl) {
-    const response = await p.text({
+    const response = await promptText({
       message: 'Upstream repository URL or owner/repo?',
       placeholder: 'invertase/react-native-firebase',
       validate: validateUpstreamInput,
     });
 
-    if (p.isCancel(response)) {
+    if (isCancel(response)) {
       p.cancel('Operation cancelled');
       throw new CommandExitError(130);
     }
 
-    finalUpstreamUrl = normalizeGitHubRepoInput(response as string);
+    finalUpstreamUrl = normalizeGitHubRepoInput(response);
   } else {
     finalUpstreamUrl = normalizeGitHubRepoInput(finalUpstreamUrl);
   }
@@ -170,7 +171,7 @@ export async function setupCommand(
   // Prompt for private mirror name only if not provided
   if (!finalPrivateMirrorName) {
     const defaultName = `${parseRepoName(finalUpstreamUrl)}-private`;
-    const response = await p.text({
+    const response = await promptText({
       message: 'Private mirror repo name?',
       placeholder: defaultName,
       defaultValue: defaultName,
@@ -181,12 +182,12 @@ export async function setupCommand(
       },
     });
 
-    if (p.isCancel(response)) {
+    if (isCancel(response)) {
       p.cancel('Operation cancelled');
       throw new CommandExitError(130);
     }
 
-    finalPrivateMirrorName = response as string;
+    finalPrivateMirrorName = response;
   }
 
   const config = {
@@ -221,12 +222,12 @@ export async function setupCommand(
       `Repos will be created under your personal account (username: ${username})`
     );
 
-    const confirmed = await p.confirm({
+    const confirmed = await promptConfirm({
       message: 'Continue with personal account?',
       initialValue: false,
     });
 
-    if (p.isCancel(confirmed)) {
+    if (isCancel(confirmed)) {
       p.outro('❌ Setup cancelled');
       throw new CommandExitError(130);
     }

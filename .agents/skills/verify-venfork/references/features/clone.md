@@ -1,7 +1,7 @@
 ---
 command: clone
 entry: src/commands/clone.ts
-shared: []
+shared: [prompt]
 config:
   read: [mode, upstreamUrl, publicForkUrl]
   written: []

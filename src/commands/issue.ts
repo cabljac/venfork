@@ -3,11 +3,11 @@ import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
 import { CommandExitError, RemoteNotFoundError } from '../errors.js';
 import { parsePositiveInt } from '../shared/args.js';
-import { confirmOrAutoYes } from '../shared/confirm.js';
 import {
   assertNoMirrorReference,
   mirrorDenyList,
 } from '../shared/deny-list.js';
+import { confirmOrAutoYes, isCancel } from '../shared/prompt.js';
 import {
   translateInternalBody,
   translateInternalTitle,
@@ -201,9 +201,9 @@ export async function issueCommand(
         initialValue: false,
         allowNonInteractive: true,
       });
-      if (p.isCancel(ok) || !ok) {
+      if (isCancel(ok) || !ok) {
         p.outro('Stage cancelled');
-        throw new CommandExitError(p.isCancel(ok) ? 130 : 0);
+        throw new CommandExitError(isCancel(ok) ? 130 : 0);
       }
 
       s.start('Opening upstream issue');
@@ -270,9 +270,9 @@ export async function issueCommand(
       initialValue: false,
       allowNonInteractive: true,
     });
-    if (p.isCancel(ok) || !ok) {
+    if (isCancel(ok) || !ok) {
       p.outro('Pull cancelled');
-      throw new CommandExitError(p.isCancel(ok) ? 130 : 0);
+      throw new CommandExitError(isCancel(ok) ? 130 : 0);
     }
 
     s.start('Opening internal issue');

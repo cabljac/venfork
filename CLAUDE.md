@@ -50,7 +50,7 @@ Never run the real-GitHub e2e unless the user asks. It needs the test org (`memc
 
 CLI entry `src/index.ts` parses `argv[0]` as the command and dispatches via a switch. Each command has a dedicated arg parser (`src/<command>-args.ts`) returning a typed options object, then calls the matching `*Command` function in `src/commands/<command>.ts` (re-exported through the `src/commands.ts` barrel). To add/modify a command: touch the arg parser, the command impl, the `index.ts` switch, and `showHelp()`.
 
-`src/commands/` holds one file per command. Helpers shared by several commands live in `src/shared/`: `net.ts` (network-op safety), `managed-commit.ts` (managed-commit detection), `mirror-commit.ts` (building the managed commit), `divergence.ts`, `redaction.ts`, `worktree.ts` (temporary detached worktrees), `confirm.ts`, `constants.ts`. The rest are focused modules:
+`src/commands/` holds one file per command. Helpers shared by several commands live in `src/shared/`: `net.ts` (network-op safety), `managed-commit.ts` (managed-commit detection), `mirror-commit.ts` (building the managed commit), `divergence.ts`, `redaction.ts`, `worktree.ts` (temporary detached worktrees), `prompt.ts` (every interactive prompt), `constants.ts`. The rest are focused modules:
 
 - **`config.ts`** — the source of truth for persisted state. All cross-run state lives in `VenforkConfig` (`.venfork/config.json`) on an **orphan `venfork-config` branch** in the private mirror — never on a working branch. It tracks `upstreamUrl`, `publicForkUrl`, `mode`, `schedule`, `scheduleAuth` (top level; `'app'` or absent for token auth), workflow allow/block lists, the `preserve` allowlist, and link maps (`shippedBranches`, `pulledPrs`, `shippedIssues`, `pulledIssues`). Mutate via `updateVenforkConfig` with a `VenforkConfigPatch` (shallow-merge; `null` deletes an entry or clears a field). Read with `fetchVenforkConfig` (clones only the config branch to a temp dir) or `readVenforkConfigFromRepo`.
 - **`git.ts`** — thin git/gh wrappers (`checkGhAuth`, `getRemotes`, `getDefaultBranch`, `ghRepoExists`, `ghRepoIsForkOf`, …).
@@ -102,4 +102,4 @@ Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/n
 - Review and PR shape: use `.agents/skills/review-venfork/` for adversarial review and `.github/pull_request_template.md` for PR bodies.
 - Known traps live in `docs/agents/gotchas.md`; append there after a correction.
 - `gh repo clone` is used for fetching, so SSH-vs-HTTPS transport follows the user's `gh config get git_protocol`.
-- Invariants (remote refs, pushes via net.ts, import boundary, `gh pr|issue create|edit` only in `src/shared/upstream-publish.ts`, process.exit) are enforced by scripts/lint-invariants.ts.
+- Invariants (remote refs, pushes via net.ts, import boundary, `gh pr|issue create|edit` only in `src/shared/upstream-publish.ts`, process.exit, clack prompts only in `src/shared/prompt.ts`) are enforced by scripts/lint-invariants.ts.

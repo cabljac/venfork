@@ -287,6 +287,61 @@ export const noProcessExit: Rule = ({ file, text }) => {
   }));
 };
 
+/** The one module that may ask the user anything. */
+export const PROMPT_MODULE = 'src/shared/prompt.ts';
+
+const CLACK_PROMPTS = [
+  'text',
+  'confirm',
+  'select',
+  'multiselect',
+  'password',
+  'groupMultiselect',
+  'selectKey',
+  'group',
+];
+
+const CLACK_IMPORT =
+  /\bimport\s+(\*\s*as\s+[\w$]+|\{[^}]*\})\s*from\s*['"]@clack\/prompts['"]/g;
+
+/** Rule 6: only {@link PROMPT_MODULE} calls the clack prompt functions. */
+export const promptsViaModule: Rule = ({ file, text }) => {
+  if (file === PROMPT_MODULE) return [];
+  const { code, bare } = scan(text);
+  const message = (name: string) =>
+    `clack \`${name}\` outside ${PROMPT_MODULE}; ask through its helpers`;
+  const found: Finding[] = [];
+  for (const m of code.matchAll(CLACK_IMPORT)) {
+    const clause = m[1];
+    if (clause.startsWith('*')) {
+      const ns = clause.replace(/^\*\s*as\s+/, '').replace(/\$/g, '\\$');
+      const call = new RegExp(
+        String.raw`(?<![\w$.])${ns}\s*\.\s*(${CLACK_PROMPTS.join('|')})\s*\(`,
+        'g'
+      );
+      for (const c of bare.matchAll(call)) {
+        found.push({
+          file,
+          line: lineOf(text, c.index),
+          message: message(c[1]),
+        });
+      }
+      continue;
+    }
+    for (const spec of clause.slice(1, -1).split(',')) {
+      const name = spec.trim().split(/\s+as\s+/)[0];
+      if (CLACK_PROMPTS.includes(name)) {
+        found.push({
+          file,
+          line: lineOf(text, m.index),
+          message: message(name),
+        });
+      }
+    }
+  }
+  return found;
+};
+
 /** Every invariant rule, keyed by the name printed in findings. */
 export const rules: Record<string, Rule> = {
   'remote-refs': remoteRefs,
@@ -294,6 +349,7 @@ export const rules: Record<string, Rule> = {
   'import-boundary': importBoundary,
   'deny-list-coverage': denyListCoverage,
   'no-process-exit': noProcessExit,
+  'prompts-via-module': promptsViaModule,
 };
 
 /** Runs every rule over the given sources. */

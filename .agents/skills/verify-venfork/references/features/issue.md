@@ -1,7 +1,7 @@
 ---
 command: stage issue, pull issue
 entry: src/commands/issue.ts
-shared: [args, confirm, deny-list, redaction, repo]
+shared: [args, prompt, deny-list, redaction, repo]
 config:
   read: []
   written: [shippedIssues, pulledIssues]

@@ -1,7 +1,7 @@
 ---
 command: setup
 entry: src/commands/setup.ts
-shared: [net, fs]
+shared: [net, fs, prompt]
 config:
   read: [mode, upstreamUrl, publicForkUrl]
   written: [version, mode, upstreamUrl, publicForkUrl]

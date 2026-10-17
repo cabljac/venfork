@@ -4,7 +4,9 @@ import {
   denyListCoverage,
   importBoundary,
   noProcessExit,
+  PROMPT_MODULE,
   PUBLISH_HELPER,
+  promptsViaModule,
   pushViaNet,
   remoteRefs,
 } from '../../scripts/lint-invariants';
@@ -163,5 +165,35 @@ describe('noProcessExit', () => {
     expect(noProcessExit(src('src/index.ts', 'process.exit(1);'))).toEqual([]);
     const comment = '// never call process.exit(1) here';
     expect(noProcessExit(src('src/commands/x.ts', comment))).toEqual([]);
+  });
+});
+
+describe('promptsViaModule', () => {
+  test('flags prompt calls and named prompt imports outside the prompt module', () => {
+    const text = [
+      "import * as p from '@clack/prompts';",
+      "import { confirm as ask, log } from '@clack/prompts';",
+      "const name = await p.text({ message: 'Name?' });",
+      "const ok = await p .confirm({ message: 'Go?' });",
+      "await p.select({ message: 'Pick', options: [] });",
+    ].join('\n');
+    const found = promptsViaModule(src('src/commands/x.ts', text));
+    expect(found.map((f) => f.line).sort()).toEqual([2, 3, 4, 5]);
+  });
+
+  test('allows the prompt module, other clack calls, comments and strings', () => {
+    const call = [
+      "import * as p from '@clack/prompts';",
+      'await p.text({ message });',
+    ].join('\n');
+    expect(promptsViaModule(src(PROMPT_MODULE, call))).toEqual([]);
+    const text = [
+      "import * as p from '@clack/prompts';",
+      "p.log.info('run p.confirm( later');",
+      '// p.text({ message })',
+      'if (p.isCancel(v)) p.cancel();',
+      'other.text({ message });',
+    ].join('\n');
+    expect(promptsViaModule(src('src/commands/x.ts', text))).toEqual([]);
   });
 });
