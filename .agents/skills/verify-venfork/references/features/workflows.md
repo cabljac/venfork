@@ -19,12 +19,12 @@ tests:
 - The command writes only `venfork-config` (leased, up to 3 retries). It never moves `main`. The next `sync` applies it.
 - In the managed commit, a non-empty allow list wins: only listed top-level `.github/workflows/*.yml|yaml` files stay. Else blocked basenames are removed. Subdirectories and the sync workflow are never removed.
 - A non-empty list alone is enough to put a managed commit on origin, with no schedule or preserve list.
-- Errors: usage errors (exit 2: "Usage: venfork workflows allow <workflow-file> ...", an unknown action), and "venfork-config branch not found or invalid" (exit 1, `ConfigError` reason `missing`). Removing a name that is not listed succeeds silently.
+- Errors: usage errors (exit 2: "Usage: venfork workflows allow <workflow-file> ...", an unknown action), "venfork-config branch not found or invalid" (exit 1, `ConfigError` reason `missing`) and `NotInRepositoryError` outside a git repository (exit 1, `not-in-repository`). Removing a name that is not listed succeeds silently.
 - `--json` on every action prints one envelope line on stdout. `result` is the policy after the action: `{ mode: 'allow' | 'block' | 'none', enabledWorkflows, disabledWorkflows }`. `mode` is `allow` when the allowlist is set, `block` when only the block list is set.
 
 ## How a user reaches it
 
-`venfork workflows`, `venfork workflows status`, `venfork workflows allow ci.yml lint.yml`, `venfork workflows block deploy.yml`, `venfork workflows unallow|unblock <file>...`, `venfork workflows clear`, each with optional `--json`. No prompt.
+`venfork workflows`, `venfork workflows status`, `venfork workflows allow ci.yml lint.yml`, `venfork workflows block deploy.yml`, `venfork workflows unallow|unblock <file>...`, `venfork workflows clear`, each with optional `--json`. No prompt; `--no-input` is accepted and changes nothing.
 
 ## How to drive it
 

@@ -18,7 +18,7 @@ On a fixture made with the default seed, the managed SHA after step 2 is the sam
 ## 2. Stage, then pull it back as an upstream PR
 
 1. `git checkout -q -b feat upstream/main && echo f > src/feat.txt && git add . && git commit -qm "feat: add feat"`.
-2. `venfork stage feat </dev/null; echo $?` - 130, and `git -C "$VF_PUBLIC" rev-parse -q --verify refs/heads/feat` fails.
+2. `venfork stage feat </dev/null; echo $?` - 2 ("Pass --yes.": no TTY, so no prompt), and `git -C "$VF_PUBLIC" rev-parse -q --verify refs/heads/feat` fails.
 3. `vf_yes stage feat; echo $?` - 0. `git -C "$VF_PUBLIC" rev-parse feat^{tree}` equals `git rev-parse feat^{tree}`.
 4. Open the "upstream PR": `git -C "$VF_PUBLIC" push -q "$VF_UPSTREAM" feat:refs/pull/1/head`.
 5. `venfork sync upstream-pr/1 </dev/null 2>&1 | grep "synced with upstream PR #1"` - one line. `vf_tip "$VF_ORIGIN" upstream-pr/1` equals `vf_tip "$VF_PUBLIC" feat`.

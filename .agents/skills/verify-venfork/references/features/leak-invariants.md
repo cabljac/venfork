@@ -4,15 +4,18 @@ Nothing from the private mirror reaches the public fork or upstream unless the u
 Each row names what must never leak, the gate, and the drive that proves the gate holds.
 Run the drives from `$VF_WORK` after Launch. Each refusal exits 1 and leaves no ref on `$VF_PUBLIC`.
 
-| Must never leak | Gate | Where |
-|---|---|---|
-| The managed commit and `.github/workflows/venfork-sync.yml` | sync pushes public to the upstream tip only; stage drops managed commits and refuses the path (`StageLeakError`) | `src/commands/sync.ts`, `src/shared/stage-gate.ts` |
-| `.venfork/` and the config branch | stage refuses `venfork-config` by name, `.venfork/` paths (any case) and config-shaped JSON | `src/commands/stage.ts`, `src/shared/stage-gate.ts` |
-| Preserved files, by path or by content | `StageLeakError` for an added or changed preserved path, an exact copy anywhere, or a near copy (case, whitespace, line endings, more than half the long lines) | `src/shared/stage-gate.ts` |
-| Mirror names | `assertNoMirrorReference` with `mirrorDenyList` (origin URL, `owner/name`, Pages URL, repo name, `venfork`) on branch name, author, committer, message, PR and issue title/body; `MirrorReferenceError` | `src/shared/deny-list.ts` |
-| Internal blocks | `stripInternalBlocks` on PR and issue bodies and titles; `RedactionError` on a broken marker; marker-shaped text in files and messages is refused even with `VENFORK_ALLOW_SELF_REFERENCE=1` | `src/shared/redaction.ts` |
-| Bot commits and tags | stage refuses commits authored or committed by `venfork-bot`; pushes with `--no-follow-tags` | `src/shared/stage-gate.ts`, `src/commands/stage.ts` |
-| Pushes to upstream from the clone | `upstream` push URL is `DISABLE`; only no-public stage pushes upstream, by URL | `src/commands/setup.ts`, `src/commands/stage.ts` |
+| Must never leak | Gate | `error.code` | Where |
+|---|---|---|---|
+| The managed commit and `.github/workflows/venfork-sync.yml` | sync pushes public to the upstream tip only; stage drops managed commits and refuses the path (`StageLeakError`) | `stage-leak` | `src/commands/sync.ts`, `src/shared/stage-gate.ts` |
+| `.venfork/` and the config branch | stage refuses `venfork-config` by name, `.venfork/` paths (any case) and config-shaped JSON | `precondition` (name), `stage-leak` (path), `mirror-reference` (JSON) | `src/commands/stage.ts`, `src/shared/stage-gate.ts` |
+| Preserved files, by path or by content | `StageLeakError` for an added or changed preserved path, an exact copy anywhere, or a near copy (case, whitespace, line endings, more than half the long lines); a cherry-pick that fails on a preserved path | `stage-leak` | `src/shared/stage-gate.ts`, `src/commands/stage.ts` |
+| Mirror history the gate cannot read in full | a reflog or mirror-only history over the scan cap, a directory where venfork writes a file, a blob over 100 MB | `stage-leak` | `src/shared/stage-gate.ts` |
+| Mirror names | `assertNoMirrorReference` with `mirrorDenyList` (origin URL, `owner/name`, Pages URL, repo name, `venfork`) on branch name, author, committer, message, file name and content, PR and issue title/body; `MirrorReferenceError` | `mirror-reference` | `src/shared/deny-list.ts`, `src/shared/stage-gate.ts` |
+| Internal blocks | `stripInternalBlocks` on PR and issue bodies and titles; `RedactionError` on a broken marker; marker-shaped text in files and messages is refused even with `VENFORK_ALLOW_SELF_REFERENCE=1` | `redaction` (bodies, titles), `mirror-reference` (files, messages) | `src/shared/redaction.ts` |
+| Bot commits and tags | stage refuses commits authored or committed by `venfork-bot`; pushes with `--no-follow-tags` | `mirror-reference` | `src/shared/stage-gate.ts`, `src/commands/stage.ts` |
+| Pushes to upstream from the clone | `upstream` push URL is `DISABLE`; only no-public stage pushes upstream, by URL | - | `src/commands/setup.ts`, `src/commands/stage.ts` |
+
+With `--json`, match a refusal on `error.code`, not on the message.
 
 ## How to prove each one holds
 
@@ -24,10 +27,12 @@ git -C "$VF_PUBLIC" ls-tree -r --name-only main | grep -c -e venfork-sync -e INT
 git fetch -q origin
 git checkout -q -b c1 origin/main && cp docs/INTERNAL.md src/notes.md && git add . && git commit -qm "docs: notes"
 venfork stage c1 </dev/null 2>&1 | grep -o "Refusing to stage.*"          # content of docs/INTERNAL.md
+venfork stage c1 --yes --json </dev/null 2>/dev/null | jq -r .error.code   # stage-leak
 git checkout -q -b c2 upstream/main && mkdir -p .venfork && echo '{}' > .venfork/x.json && git add . && git commit -qm "chore: x"
 venfork stage c2 </dev/null 2>&1 | grep -o "Refusing to stage.*"          # mirror-only path .venfork/x.json
 git checkout -q -b c3 upstream/main && echo r > src/r.txt && git add . && git commit -qm "see $VF_ORIGIN"
 venfork stage c3 </dev/null 2>&1 | grep -o "Refusing to publish.*"        # message contains the origin path
+venfork stage c3 --yes --json </dev/null 2>/dev/null | jq -r .error.code   # mirror-reference
 git checkout -q -b c4 origin/main && echo c > src/c.txt && git add . && git commit -qm "feat: c"
 vf_yes stage c4 >/dev/null 2>&1                                              # cut from origin/main, carries the managed commit
 git -C "$VF_PUBLIC" ls-tree -r --name-only c4 | grep -c -e venfork-sync -e INTERNAL   # 0: managed commit dropped

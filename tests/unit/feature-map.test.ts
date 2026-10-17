@@ -32,7 +32,7 @@ const FRONTMATTER_KEYS = ['command', 'entry', 'shared', 'config', 'tests'];
 
 function commandNames(): string[] {
   return readdirSync(commandsDir)
-    .filter((file) => file.endsWith('.ts') && file !== 'help.ts')
+    .filter((file) => file.endsWith('.ts'))
     .map((file) => file.slice(0, -'.ts'.length))
     .sort();
 }
