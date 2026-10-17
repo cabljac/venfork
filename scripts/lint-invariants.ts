@@ -179,35 +179,64 @@ export const remoteRefs: Rule = ({ file, text }) => {
   return found;
 };
 
-const GIT_PUSH = new RegExp(String.raw`^git\s+${GIT_GLOBALS}push\b`);
+/** Git subcommands that talk to a remote. */
+const NET_SUBCOMMAND = String.raw`(push|fetch|ls-remote|clone|pull|remote\s+(?:set-head|update|show)|submodule\s+update(?=[^\n]*\s--remote\b)|archive(?=[^\n]*\s--remote\b))\b`;
+const GIT_NET = new RegExp(String.raw`^git\s+${GIT_GLOBALS}${NET_SUBCOMMAND}`);
+/** A git template whose subcommand is an interpolation, so its target cannot be told. */
+const GIT_DYNAMIC = new RegExp(
+  String.raw`^git\s+(?:(?:-[cC]\s+${ARG}|--[\w-]+(?:=${ARG})?)\s+)*\$\{[^}]*\}(?:\s+(?:\$\{[^}]*\}|[^-\s]\S*)|\s*$)`
+);
+/** Marks a dynamic git template, on the line before it, as local-only. */
+export const LOCAL_GIT_MARKER = 'lint-invariants: local-git';
+
+function markedLocal(text: string, start: number): boolean {
+  const lineStart = text.lastIndexOf('\n', start - 1);
+  const before = text.slice(0, Math.max(lineStart, 0));
+  const previous = before.slice(before.lastIndexOf('\n') + 1);
+  const current = text.slice(lineStart + 1, start);
+  return `${previous}\n${current}`.includes(LOCAL_GIT_MARKER);
+}
+
+/** gh subcommands that call GitHub. */
+const GH_NET = /^gh\s+(api|repo\s+(?:clone|view))\b/;
 const Q = '[\'"`]';
-/** An argv array whose first argument, after any git global options, is `push`. */
-const ARGV_PUSH = new RegExp(
-  String.raw`\[\s*(?:(?:${Q}-[cC]${Q}\s*,\s*[^,\]]+|${Q}--[\w-]+(?:=[^'"\`]*)?${Q})\s*,\s*)*${Q}push${Q}\s*[,\]]`,
+/** An argv array whose first argument, after any git global options, is a network subcommand. */
+const ARGV_NET = new RegExp(
+  String.raw`\[\s*(?:(?:${Q}-[cC]${Q}\s*,\s*[^,\]]+|${Q}--[\w-]+(?:=[^'"\`]*)?${Q})\s*,\s*)*${Q}(push|fetch|ls-remote)${Q}\s*[,\]]`,
   'g'
 );
 
-/** Rule 2: every `git push` runs as a netExec template (src/shared/net.ts). */
-export const pushViaNet: Rule = ({ file, text }) => {
+/**
+ * Rule 2: every git network op, every git template whose subcommand is an
+ * interpolation, and every `gh api` / `gh repo clone|view` runs as a
+ * netExec template (src/shared/net.ts), which adds the fail-fast env, the
+ * timeout and gh credentials.
+ */
+export const networkViaNet: Rule = ({ file, text }) => {
   const { code, templates } = scan(text);
   const found: Finding[] = [];
   for (const t of templates) {
-    if (!GIT_PUSH.test(body(text, t))) continue;
+    const raw = body(text, t);
+    const match = GIT_NET.exec(raw) ?? GH_NET.exec(raw);
+    const dynamic =
+      !match && GIT_DYNAMIC.test(raw) && !markedLocal(text, t.start);
+    if (!match && !dynamic) continue;
     const tag = tagName(code, t.start);
-    if (tag !== '' && tag !== 'netExec') {
-      found.push({
-        file,
-        line: lineOf(text, t.start),
-        message: `git push run through \`${tag}\`; use netExec from src/shared/net.ts`,
-      });
-    }
+    if (tag === '' || tag === 'netExec') continue;
+    const what = match
+      ? `${raw.startsWith('gh') ? 'gh' : 'git'} ${match[1].replace(/\s+/g, ' ')}`
+      : 'git with a dynamic subcommand';
+    found.push({
+      file,
+      line: lineOf(text, t.start),
+      message: `${what} run through \`${tag}\`; use netExec from src/shared/net.ts`,
+    });
   }
-  for (const m of code.matchAll(ARGV_PUSH)) {
+  for (const m of code.matchAll(ARGV_NET)) {
     found.push({
       file,
       line: lineOf(text, m.index),
-      message:
-        'git push as an argv array bypasses netExec; push with a netExec template',
+      message: `git ${m[1]} as an argv array bypasses netExec; run it as a netExec template`,
     });
   }
   return found;
@@ -361,7 +390,7 @@ export const clackViaUi: Rule = ({ file, text }) => {
 /** Every invariant rule, keyed by the name printed in findings. */
 export const rules: Record<string, Rule> = {
   'remote-refs': remoteRefs,
-  'push-via-net': pushViaNet,
+  'network-via-net': networkViaNet,
   'import-boundary': importBoundary,
   'deny-list-coverage': denyListCoverage,
   'no-process-exit': noProcessExit,

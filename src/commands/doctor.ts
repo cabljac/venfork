@@ -11,7 +11,7 @@ import {
   UNMIGRATED_MIRROR_STEPS,
 } from '../errors.js';
 import { checkGhAuth, getDefaultBranch, getRemotes } from '../git.js';
-import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
+import { gitNetTimeoutMs, SYNC_WORKFLOW_PATH } from '../shared/constants.js';
 import {
   cronMaxIntervalMinutes,
   isValidCronExpression,
@@ -33,7 +33,7 @@ import {
   pinnedVenforkVersion,
 } from '../shared/semver.js';
 import * as p from '../shared/ui.js';
-import { parseRepoPath } from '../utils.js';
+import { githubUrlTransport, parseRepoPath } from '../utils.js';
 import { VENFORK_VERSION } from '../version.js';
 import { generateSyncWorkflow, type SyncAuth } from '../workflow.js';
 
@@ -160,6 +160,93 @@ function appSecretsCheck(
   };
 }
 
+/** Fix for an SSH origin that cannot authenticate to GitHub. */
+export const SSH_TRANSPORT_FIX =
+  '`gh config set git_protocol https` and re-clone, or load an SSH key';
+
+/** Fix for an SSH origin whose host key ssh does not know. */
+export const SSH_HOST_KEY_FIX =
+  "add GitHub's host key: run `ssh -T git@github.com` once and accept it after checking the fingerprint against GitHub's published ones";
+
+/** Fix for an HTTPS origin that gh cannot authenticate. */
+export const HTTPS_TRANSPORT_FIX = '`gh auth login` (or set GH_TOKEN)';
+
+const TRANSPORT_PROBE_TIMEOUT_MS = 30_000;
+
+/**
+ * True when `gh auth status` lists the token's scopes and `workflow` is not
+ * among them. A token that lists no scopes (fine-grained, `GH_TOKEN`) is
+ * not judged.
+ */
+async function ghTokenLacksWorkflowScope(cwd: string): Promise<boolean> {
+  const status = await netExec(cwd, {
+    bufferOutput: true,
+  })`gh auth status --hostname github.com`;
+  const output = `${status.stdout ?? ''}\n${status.stderr ?? ''}`;
+  const scopes = /Token scopes:\s*(.*)/i.exec(output)?.[1];
+  return scopes !== undefined && !/['"]?workflow['"]?/.test(scopes);
+}
+
+/**
+ * The `transport` check: whether git can reach origin on GitHub. Probes the
+ * push URL with `git ls-remote` through netExec, so ssh runs as git runs it
+ * (the user's ssh command, BatchMode) and HTTPS uses the gh credential
+ * helper. With the sync workflow in use, an HTTPS origin also needs a gh
+ * token with the `workflow` scope, or the managed commit's push is refused.
+ *
+ * @param originUrl origin's push URL, as git resolves it.
+ * @param cwd Mirror checkout, for the user's ssh command.
+ * @param workflowInUse The mirror carries the sync workflow.
+ */
+async function transportCheck(
+  originUrl: string,
+  cwd: string,
+  workflowInUse: boolean
+): Promise<DoctorCheck> {
+  const id = 'transport';
+  const transport = githubUrlTransport(originUrl);
+  if (!transport) {
+    return { id, ok: 'skipped', detail: 'origin is not a GitHub repository' };
+  }
+  const probe = await netExec(cwd, {
+    bufferOutput: true,
+    timeoutMs: Math.min(gitNetTimeoutMs(), TRANSPORT_PROBE_TIMEOUT_MS),
+  })`git ls-remote --exit-code ${originUrl} HEAD`;
+  // --exit-code exits 2 when origin answers but has no HEAD (an empty repo).
+  if (!probe.timedOut && (probe.exitCode === 0 || probe.exitCode === 2)) {
+    if (transport === 'ssh') {
+      return { id, ok: true, detail: 'origin uses ssh; git reaches it' };
+    }
+    if (workflowInUse && (await ghTokenLacksWorkflowScope(cwd))) {
+      return {
+        id,
+        ok: false,
+        detail:
+          'origin uses https, but the gh token lacks the workflow scope, so pushing the sync workflow is refused',
+        fix: 'gh auth refresh -s workflow',
+      };
+    }
+    return {
+      id,
+      ok: true,
+      detail: 'origin uses https; gh supplies the github.com credentials',
+    };
+  }
+  const reason = oneLine(netFailureReason(probe));
+  const fix =
+    transport === 'https'
+      ? HTTPS_TRANSPORT_FIX
+      : /host key verification failed/i.test(reason)
+        ? SSH_HOST_KEY_FIX
+        : SSH_TRANSPORT_FIX;
+  return {
+    id,
+    ok: false,
+    detail: `origin uses ${transport}, but git cannot reach it: ${reason}`,
+    fix,
+  };
+}
+
 /** First git error line of a multi-line stderr, so table rows stay one line. */
 function oneLine(text: string): string {
   const lines = text
@@ -177,9 +264,11 @@ function formatAge(minutes: number): string {
 
 /**
  * Runs every health check against the mirror clone in `cwd`. Reads only,
- * apart from fetching the remotes and the venfork-config branch. GitHub
- * checks (token, last-run, cron-age) report `'skipped'` when gh is not
- * authenticated or origin is not a GitHub repository.
+ * apart from fetching the remotes and the venfork-config branch, and the
+ * `transport` probe (`git ls-remote` on origin). The gh checks (token,
+ * last-run, cron-age) report `'skipped'` when gh is not authenticated or
+ * origin is not a GitHub repository; `transport` skips only for an origin
+ * that is not on GitHub, and otherwise probes whether gh is logged in.
  */
 export async function runDoctorChecks(
   options: DoctorOptions = {}
@@ -215,6 +304,7 @@ async function collectChecks(
     'divergence',
     'preserve',
     'workflow',
+    'transport',
     'token',
     'last-run',
     'cron-age',
@@ -635,6 +725,17 @@ async function collectChecks(
       );
     }
   }
+
+  const originUrl = remotes.origin?.push || remotes.origin?.fetch || '';
+  checks.push(
+    originUrl
+      ? await transportCheck(
+          originUrl,
+          cwd,
+          Boolean(config.schedule?.enabled && config.schedule.cron)
+        )
+      : { id: 'transport', ok: 'skipped', detail: 'origin missing' }
+  );
 
   const schedule = config.schedule;
   const scheduleActive = Boolean(schedule?.enabled && schedule.cron);

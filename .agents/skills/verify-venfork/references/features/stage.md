@@ -7,7 +7,7 @@ config:
   written: [shippedBranches]
 tests:
   unit: [tests/unit/commands.test.ts, tests/unit/stage-args.test.ts, tests/unit/json-output.test.ts, tests/unit/redaction.test.ts, tests/unit/synthetic-body.test.ts, tests/unit/deny-list.test.ts]
-  integration: [tests/integration/cli.test.ts, tests/integration/stage.test.ts, tests/integration/stage-gate.test.ts, tests/integration/stage-gate-content.test.ts, tests/integration/stage-gate-review.test.ts, tests/integration/stage-gate-followups.test.ts, tests/integration/stage-publish-followups.test.ts, tests/integration/integrity.test.ts, tests/integration/deny-list.test.ts]
+  integration: [tests/integration/cli.test.ts, tests/integration/stage.test.ts, tests/integration/stage-gate.test.ts, tests/integration/stage-gate-content.test.ts, tests/integration/stage-gate-review.test.ts, tests/integration/stage-gate-followups.test.ts, tests/integration/stage-publish-followups.test.ts, tests/integration/integrity.test.ts, tests/integration/deny-list.test.ts, tests/integration/net-credential.test.ts]
   e2e: [tests/e2e/sync-flow.test.ts]
 ---
 

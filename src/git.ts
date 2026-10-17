@@ -63,12 +63,10 @@ export async function getCurrentBranch(): Promise<string> {
  * @returns GitHub username, or empty string if not authenticated
  */
 export async function getGitHubUsername(): Promise<string> {
-  try {
-    const result = await $`gh api user --jq .login`;
-    return result.stdout.trim();
-  } catch {
-    return '';
-  }
+  const result = await netExec(undefined, {
+    bufferOutput: true,
+  })`gh api user --jq .login`;
+  return result.exitCode === 0 ? String(result.stdout ?? '').trim() : '';
 }
 
 /**
@@ -143,7 +141,9 @@ export async function hasRemote(name: string): Promise<boolean> {
  * Returns true if GitHub repo `owner/name` exists and is visible to the authenticated `gh` user.
  */
 export async function ghRepoExists(fullName: string): Promise<boolean> {
-  const result = await $({ reject: false })`gh repo view ${fullName}`;
+  const result = await netExec(undefined, {
+    bufferOutput: true,
+  })`gh repo view ${fullName}`;
   return result.exitCode === 0;
 }
 
@@ -154,13 +154,14 @@ export async function ghRepoIsForkOf(
   repoFullName: string,
   upstreamFullName: string
 ): Promise<boolean> {
-  const result = await $({
-    reject: false,
-  })`gh repo view ${repoFullName} --json isFork,parent --jq '.isFork and .parent.nameWithOwner == "${upstreamFullName}"'`;
+  const filter = `.isFork and .parent.nameWithOwner == ${JSON.stringify(upstreamFullName)}`;
+  const result = await netExec(undefined, {
+    bufferOutput: true,
+  })`gh repo view ${repoFullName} --json isFork,parent --jq ${filter}`;
   if (result.exitCode !== 0) {
     return false;
   }
-  return result.stdout.trim() === 'true';
+  return String(result.stdout ?? '').trim() === 'true';
 }
 
 /**

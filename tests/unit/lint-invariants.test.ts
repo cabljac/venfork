@@ -4,11 +4,12 @@ import {
   clackViaUi,
   denyListCoverage,
   importBoundary,
+  LOCAL_GIT_MARKER,
+  networkViaNet,
   noProcessExit,
   PROMPT_MODULE,
   PUBLISH_HELPER,
   promptsViaModule,
-  pushViaNet,
   remoteRefs,
   UI_MODULE,
 } from '../../scripts/lint-invariants';
@@ -19,7 +20,7 @@ describe('scan', () => {
   test('a regex literal holding // does not hide the rest of the line', () => {
     const text =
       "const b = s.replace(/^refs\\/heads\\//, ''); await $`git push origin ${b}`;";
-    expect(pushViaNet(src('src/commands/x.ts', text))).toHaveLength(1);
+    expect(networkViaNet(src('src/commands/x.ts', text))).toHaveLength(1);
   });
 
   test('process.exit inside a string or template is not code', () => {
@@ -65,10 +66,10 @@ describe('remoteRefs', () => {
   });
 });
 
-describe('pushViaNet', () => {
+describe('networkViaNet', () => {
   test('flags git push run through a raw execa $', () => {
     const text = 'await $({ cwd, reject: false })`git push origin ${b}`;';
-    const found = pushViaNet(src('src/commands/x.ts', text));
+    const found = networkViaNet(src('src/commands/x.ts', text));
     expect(found).toHaveLength(1);
     expect(found[0].message).toContain('`$`');
   });
@@ -81,8 +82,85 @@ describe('pushViaNet', () => {
       "await execa('git', ['-C', dir, '--no-pager', 'push']);",
       "await execa('git', [`push`, 'origin']);",
     ].join('\n');
-    const found = pushViaNet(src('src/commands/x.ts', text));
+    const found = networkViaNet(src('src/commands/x.ts', text));
     expect(found.map((f) => f.line)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test('flags fetch, ls-remote, clone, pull and remote set-head outside netExec', () => {
+    const text = [
+      'await $({ cwd })`git fetch upstream ${spec}`;',
+      'await $`git ls-remote --exit-code origin x`;',
+      'await $`git clone ${url} ${dir}`;',
+      'await $`git -C ${dir} pull`;',
+      'await $`git remote set-head origin -a`;',
+      "await execa('git', ['fetch', 'origin']);",
+      "await execa('git', ['ls-remote', url]);",
+    ].join('\n');
+    const found = networkViaNet(src('src/commands/x.ts', text));
+    expect(found.map((f) => f.line)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(found[0].message).toContain('git fetch run through `$`');
+  });
+
+  test('flags remote update and show, submodule update --remote and archive --remote', () => {
+    const text = [
+      'await $`git remote update`;',
+      'await $({ cwd })`git remote show origin`;',
+      'await $`git submodule update --init --remote`;',
+      'await $`git archive --remote=${url} HEAD`;',
+    ].join('\n');
+    const found = networkViaNet(src('src/commands/x.ts', text));
+    expect(found.map((f) => f.line)).toEqual([1, 2, 3, 4]);
+  });
+
+  test('flags a git template whose subcommand is only an interpolation', () => {
+    const text = [
+      'await $({ cwd })`git ${args}`;',
+      'await $`git -C ${dir} ${sub} origin`;',
+    ].join('\n');
+    const found = networkViaNet(src('src/commands/x.ts', text));
+    expect(found.map((f) => f.line)).toEqual([1, 2]);
+    expect(found[0].message).toContain('dynamic');
+  });
+
+  test('allows a dynamic git template marked local-only on the line before', () => {
+    const text = [
+      '  const run = await $({',
+      '    cwd,',
+      `    // ${LOCAL_GIT_MARKER}: plumbing only`,
+      '  })`git -c core.hooksPath=${hooks} ${args}`;',
+    ].join('\n');
+    expect(networkViaNet(src('src/shared/x.ts', text))).toEqual([]);
+  });
+
+  test('flags gh network calls (api, repo clone, repo view) outside netExec', () => {
+    const text = [
+      'await $`gh api user --jq .login`;',
+      'await $({ reject: false })`gh repo view ${name}`;',
+      'await $`gh repo clone ${repo} ${dir}`;',
+    ].join('\n');
+    const found = networkViaNet(src('src/git.ts', text));
+    expect(found.map((f) => f.line)).toEqual([1, 2, 3]);
+    expect(found[0].message).toContain('gh api run through `$`');
+  });
+
+  test('allows local submodule and archive commands and local gh calls', () => {
+    const text = [
+      'await $`git submodule update --init`;',
+      'await $`git archive HEAD`;',
+      'await $`gh config get git_protocol --host github.com`;',
+      'await netExec(cwd, { bufferOutput: true })`gh api ${path}`;',
+    ].join('\n');
+    expect(networkViaNet(src('src/commands/x.ts', text))).toEqual([]);
+  });
+
+  test('allows local remote subcommands and gh clone through netExec', () => {
+    const text = [
+      'await $`git remote get-url origin`;',
+      'await $`git remote set-url --push upstream DISABLE`;',
+      'await netExec(cwd)`git fetch ${remote}`;',
+      'await netExec()`gh repo clone ${repo} ${dir}`;',
+    ].join('\n');
+    expect(networkViaNet(src('src/commands/x.ts', text))).toEqual([]);
   });
 
   test('allows netExec pushes, push messages and comments', () => {
@@ -92,7 +170,7 @@ describe('pushViaNet', () => {
       'await netExec(cwd)`git -C ${dir} push origin x`;',
       'throw new GitError(`git push ${b} failed`, "git push");',
     ].join('\n');
-    expect(pushViaNet(src('src/config.ts', text))).toEqual([]);
+    expect(networkViaNet(src('src/config.ts', text))).toEqual([]);
   });
 
   test('ignores the push method and push as a plain value', () => {
@@ -102,7 +180,7 @@ describe('pushViaNet', () => {
       "if (mode === 'push') run();",
       "// ['push'] in a comment",
     ].join('\n');
-    expect(pushViaNet(src('src/commands/x.ts', text))).toEqual([]);
+    expect(networkViaNet(src('src/commands/x.ts', text))).toEqual([]);
   });
 });
 

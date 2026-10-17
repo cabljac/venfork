@@ -3,6 +3,7 @@ import {
   DEFAULT_REPO_NAME,
   githubUrlForProtocol,
   githubUrlRepoPath,
+  githubUrlTransport,
   normalizeGitHubRepoInput,
   parseOwner,
   parseRepoName,
@@ -227,6 +228,29 @@ describe('parseOwner', () => {
     expect(parseOwner('https://www.github.com/facebook/react.git')).toBe(
       'facebook'
     );
+  });
+});
+
+describe('githubUrlTransport', () => {
+  test.each([
+    ['https://github.com/acme/widget.git', 'https'],
+    ['HTTPS://GitHub.com/acme/widget', 'https'],
+    ['git@github.com:acme/widget.git', 'ssh'],
+    ['ssh://git@github.com/acme/widget.git', 'ssh'],
+    ['ssh://git@ssh.github.com:443/acme/widget.git', 'ssh'],
+  ] as const)('%s uses %s', (url, transport) => {
+    expect(githubUrlTransport(url)).toBe(transport);
+  });
+
+  test.each([
+    'http://github.com/acme/widget.git',
+    'git://github.com/acme/widget.git',
+    'https://gitlab.com/acme/widget.git',
+    'git@gitlab.com:acme/widget.git',
+    '/tmp/origin.git',
+    'acme/widget',
+  ])('%s is not a GitHub https or ssh URL', (url) => {
+    expect(githubUrlTransport(url)).toBeNull();
   });
 });
 

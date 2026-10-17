@@ -89,6 +89,22 @@ export function githubUrlRepoPath(url: string): string {
 }
 
 /**
+ * The transport of a github.com URL: `'https'` for `https://`, `'ssh'` for
+ * `ssh://` and scp-like `git@github.com:` forms, null for anything else.
+ *
+ * @param url Remote URL.
+ */
+export function githubUrlTransport(url: string): GitProtocol | null {
+  const trimmed = url.trim();
+  if (!GITHUB_URL_PREFIX.test(trimmed)) return null;
+  if (/^https:\/\//i.test(trimmed)) return 'https';
+  if (/^ssh:\/\//i.test(trimmed) || /^[^@/:]+@[^/:]+:/.test(trimmed)) {
+    return 'ssh';
+  }
+  return null;
+}
+
+/**
  * Rewrites a github.com repo URL to `protocol`
  * (`https://github.com/<owner>/<repo>.git` or `git@github.com:<owner>/<repo>.git`).
  * Any other URL, a bare `owner/repo` or a local path, is returned unchanged.

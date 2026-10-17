@@ -33,7 +33,7 @@ venfork doctor --json > "$T/doctor.json"; echo $?
 ```
 
 Exit 0 and no check with `"ok": false` before you drive anything.
-On the fixture, `token`, `last-run` and `cron-age` are `true` ("schedule disabled") or `skipped` ("origin is not a GitHub repository").
+On the fixture, `transport` is `skipped` ("origin is not a GitHub repository"), and `token`, `last-run` and `cron-age` are `true` ("schedule disabled") or `skipped` (the same detail).
 Run doctor again after the drive. Compare the two files.
 
 ## Drive

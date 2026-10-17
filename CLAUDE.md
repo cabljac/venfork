@@ -72,7 +72,7 @@ Determinism rule: the managed commit's author and committer are the venfork bot 
 
 ### Health checks
 
-`venfork doctor` (`src/commands/doctor.ts`) returns `{ id, ok: true | false | 'skipped', detail, fix? }` per check and exits 1 when any check is `false`. Git checks are covered by integration tests; the gh-backed checks (`token`, `last-run`, `cron-age`) are string-mocked in `tests/unit/doctor.test.ts` and degrade to `skipped` without gh auth or a GitHub origin.
+`venfork doctor` (`src/commands/doctor.ts`) returns `{ id, ok: true | false | 'skipped', detail, fix? }` per check and exits 1 when any check is `false`. Git checks are covered by integration tests; the network checks (`transport`, `token`, `last-run`, `cron-age`) are string-mocked in `tests/unit/doctor.test.ts`. `token`, `last-run` and `cron-age` degrade to `skipped` without gh auth or a GitHub origin; `transport` skips only for a non-GitHub origin.
 
 ### Output streams
 
@@ -81,6 +81,8 @@ stdout carries only results (`--version`, help that was asked for, and the one `
 ### Network-op safety
 
 Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/net.ts`: no stdin (credential/host-key prompts fail fast instead of hanging), a hard timeout (`VENFORK_GIT_TIMEOUT`, default 600s), and `BatchMode=yes`. Use these helpers for new network calls rather than raw `$` — a misconfigured credential should error, not block on an invisible prompt.
+
+`netExec` also puts `-c credential.https://github.com.helper= -c credential.https://github.com.helper=!gh auth git-credential` right after `git` on every git command it runs, so an HTTPS github.com remote authenticates with gh (`GH_TOKEN` or `gh auth login`) without `gh auth setup-git`. The empty entry resets the helper list for `https://github.com`, so gh is the only helper there: the user's own helper (osxkeychain, store) is never asked and never stores a gh token, which would go stale. The helper is scoped to `https://github.com`, so local-path remotes and other hosts never reach it, and a missing or unauthenticated gh fails closed (`terminal prompts disabled`). Run non-network git through plain `$` so it does not get the helper. In the generated workflow, actions/checkout's `http.https://github.com/.extraheader` sends the push token on every request from the checkout, so git does not ask a helper for those fetches and pushes.
 
 ### Verifying behaviour
 
@@ -106,4 +108,4 @@ Every heavy git/gh network op goes through `netExec`/`runNetOp` in `src/shared/n
 - Review and PR shape: use `.agents/skills/review-venfork/` for adversarial review and `.github/pull_request_template.md` for PR bodies.
 - Known traps live in `docs/agents/gotchas.md`; append there after a correction.
 - `gh repo clone` is used for fetching, so SSH-vs-HTTPS transport follows the user's `gh config get git_protocol`.
-- Invariants (remote refs, pushes via net.ts, import boundary, `gh pr|issue create|edit` only in `src/shared/upstream-publish.ts`, process.exit, clack prompts only in `src/shared/prompt.ts`, `@clack/prompts` imported only in `src/shared/ui.ts` and `src/shared/prompt.ts`) are enforced by scripts/lint-invariants.ts.
+- Invariants (remote refs, git network ops, dynamic git subcommands and `gh api` / `gh repo clone|view` via net.ts, import boundary, `gh pr|issue create|edit` only in `src/shared/upstream-publish.ts`, process.exit, clack prompts only in `src/shared/prompt.ts`, `@clack/prompts` imported only in `src/shared/ui.ts` and `src/shared/prompt.ts`) are enforced by scripts/lint-invariants.ts.

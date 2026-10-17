@@ -5,19 +5,101 @@ import os from 'node:os';
 import path from 'node:path';
 
 let spawnedEnv: Record<string, string> | undefined;
+let spawnedArgv: string[] = [];
+
+/** The argv of a template whose interpolations stand alone between spaces. */
+function argvOf(strings: TemplateStringsArray, values: unknown[]): string[] {
+  return strings.raw.flatMap((part, i) => [
+    ...part.split(/\s+/).filter(Boolean),
+    ...(i < values.length ? [values[i]].flat().map(String) : []),
+  ]);
+}
 
 mock.module('execa', () => ({
   $: (options: { env?: Record<string, string> }) => {
     spawnedEnv = options.env;
-    return () => Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+    return (strings: TemplateStringsArray, ...values: unknown[]) => {
+      spawnedArgv = argvOf(strings, values);
+      return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+    };
   },
 }));
 
 import {
+  GH_CREDENTIAL_CONFIG,
   isTransientPushError,
   netExec,
   netFailureReason,
 } from '../../src/shared/net.js';
+import { GH_CREDENTIAL_ARGS } from '../harness/net-credential.js';
+
+const HELPER = 'credential.https://github.com.helper=!gh auth git-credential';
+const RESET = 'credential.https://github.com.helper=';
+
+describe('netExec gh credential helper', () => {
+  beforeEach(() => {
+    spawnedArgv = [];
+  });
+
+  test('puts the github.com helper right after git', async () => {
+    const remote = 'origin';
+    await netExec()`git fetch ${remote}`;
+    expect(spawnedArgv).toEqual([
+      'git',
+      '-c',
+      RESET,
+      '-c',
+      HELPER,
+      'fetch',
+      'origin',
+    ]);
+  });
+
+  test('comes before any other leading git option', async () => {
+    const config = ['-c', 'http.version=HTTP/1.1'];
+    const url = 'https://github.com/o/r.git';
+    await netExec()`git ${config} push ${url} main:refs/heads/main`;
+    expect(spawnedArgv).toEqual([
+      'git',
+      '-c',
+      RESET,
+      '-c',
+      HELPER,
+      '-c',
+      'http.version=HTTP/1.1',
+      'push',
+      'https://github.com/o/r.git',
+      'main:refs/heads/main',
+    ]);
+  });
+
+  test('resets the github.com helper list, then adds gh as its only helper', async () => {
+    await netExec()`git ls-remote --exit-code origin refs/heads/main`;
+    const helpers = spawnedArgv.filter((arg) =>
+      /^credential\..*helper=/.test(arg)
+    );
+    expect(helpers).toEqual([RESET, HELPER]);
+  });
+
+  test('is scoped to https://github.com', () => {
+    expect(GH_CREDENTIAL_CONFIG).toEqual(['-c', RESET, '-c', HELPER]);
+    expect(GH_CREDENTIAL_CONFIG.join(' ')).toBe(GH_CREDENTIAL_ARGS);
+  });
+
+  test('leaves gh commands unchanged', async () => {
+    const repo = 'o/r';
+    await netExec()`gh secret list --repo ${repo} --json name`;
+    expect(spawnedArgv).toEqual([
+      'gh',
+      'secret',
+      'list',
+      '--repo',
+      'o/r',
+      '--json',
+      'name',
+    ]);
+  });
+});
 
 const DEFAULT_OPTS = '-o BatchMode=yes -o ConnectTimeout=15';
 

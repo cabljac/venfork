@@ -7,7 +7,7 @@ config:
   written: [pulledPrs]
 tests:
   unit: [tests/unit/commands.test.ts, tests/unit/pull-args.test.ts, tests/unit/dispatch.test.ts, tests/unit/json-output.test.ts]
-  integration: [tests/integration/cli.test.ts]
+  integration: [tests/integration/cli.test.ts, tests/integration/net-credential.test.ts]
   e2e: [tests/e2e/sync-flow.test.ts]
 ---
 
