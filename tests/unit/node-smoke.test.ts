@@ -5,6 +5,7 @@ import {
   enginesFloorShortfall,
   nodeRangeFloor,
   nonBuiltinImports,
+  packedTarball,
   runtimeDependencyEngines,
   SKIPPED_DOCTOR_IDS,
   verifyDoctorOutput,
@@ -139,4 +140,15 @@ test('lists each non-builtin import, require and dynamic import once', () => {
     'execa',
     'left-pad',
   ]);
+});
+
+test('packedTarball finds the one tarball npm pack wrote, whatever its --json shape', () => {
+  expect(packedTarball(['venfork-0.13.0.tgz'])).toBe('venfork-0.13.0.tgz');
+  expect(packedTarball(['.DS_Store', 'venfork-0.13.0.tgz'])).toBe(
+    'venfork-0.13.0.tgz'
+  );
+  expect(() => packedTarball([])).toThrow('npm pack wrote no tarball');
+  expect(() => packedTarball(['a-1.tgz', 'b-1.tgz'])).toThrow(
+    'npm pack wrote 2 tarballs'
+  );
 });
