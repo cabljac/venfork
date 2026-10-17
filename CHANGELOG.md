@@ -1,5 +1,32 @@
 # venfork
 
+## [0.13.0](https://github.com/cabljac/venfork/compare/v0.12.0...v0.13.0) (2026-10-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **net:** venfork's git network ops to https://github.com ignore the user's git credential helpers and use only gh, so a working osxkeychain or store login no longer applies there; log in with gh (or set GH_TOKEN). doctor's transport check can now fail: an HTTPS origin while gh is not authenticated, or a scheduled mirror whose gh token lacks the workflow scope.
+* **sync,stage,pull,doctor:** doctor --json output moves into the envelope (result.checks, result.links, result.healthy).
+* **cli:** usage errors and bare `venfork` exit 2, not 1 or 0.
+* **cli:** VENFORK_NONINTERACTIVE=1 no longer auto-confirms; it only disables prompts. A prompt that cannot be shown exits 2 (MissingInputError). Pass --yes to confirm.
+* **cli:** stdout now carries only results: --version, help that was asked for, and doctor --json. Progress, spinners, prompts, warnings, errors, the human reports of doctor, schedule status, workflows status and preserve list, and git/gh subprocess output all go to stderr. When stderr is not a terminal, NO_COLOR is set or TERM is dumb, that output is plain lines prefixed info:, ok:, step:, done:, warn: or error:.
+* **deps:** venfork needs Node.js 22 or later. The generated workflow changes, so each scheduled mirror's managed commit is rewritten once on its next sync.
+
+### Features
+
+* **cli:** exit 2 on usage errors ([#111](https://github.com/cabljac/venfork/issues/111)) ([3b09742](https://github.com/cabljac/venfork/commit/3b09742871f33bb0331ed6d2849cf223957d1454))
+* **cli:** fail fast instead of prompting without a TTY ([#109](https://github.com/cabljac/venfork/issues/109)) ([e1669d3](https://github.com/cabljac/venfork/commit/e1669d32e81fa5fedff7dc40bb5b86b3f2cd39a3))
+* **cli:** send human output to stderr ([#108](https://github.com/cabljac/venfork/issues/108)) ([22a9e09](https://github.com/cabljac/venfork/commit/22a9e09e2e121fc8ba25ea605dc6ab5175fb1e32))
+* **clone:** add --public-fork for legacy mirrors ([#110](https://github.com/cabljac/venfork/issues/110)) ([abfce06](https://github.com/cabljac/venfork/commit/abfce069572198cf823c914141ab1c60bc27620f))
+* **net:** use gh credentials for every git network op ([#114](https://github.com/cabljac/venfork/issues/114)) ([acfe605](https://github.com/cabljac/venfork/commit/acfe605fdf3957e4fe1441499b6094310599c48a))
+* **setup,clone,schedule,workflows,preserve:** add --json ([#113](https://github.com/cabljac/venfork/issues/113)) ([eb38f01](https://github.com/cabljac/venfork/commit/eb38f01cbb85304e35f977f3e21d7f6a54480c80))
+* **sync,stage,pull,doctor:** add a --json result envelope ([#112](https://github.com/cabljac/venfork/issues/112)) ([389268f](https://github.com/cabljac/venfork/commit/389268f154f8a6e9bda24048846ac52ea7546bf5))
+
+
+### Miscellaneous Chores
+
+* **deps:** upgrade @clack/prompts to 1.x ([#107](https://github.com/cabljac/venfork/issues/107)) ([de8b89d](https://github.com/cabljac/venfork/commit/de8b89d16407bbfc33dd00d9b994ce663e98ed04))
+
 ## [0.12.0](https://github.com/cabljac/venfork/compare/v0.11.0...v0.12.0) (2026-10-13)
 
 
