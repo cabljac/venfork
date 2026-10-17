@@ -3,13 +3,11 @@
   "workspaces": {
     "": {
       "name": "venfork",
-      "dependencies": {
-        "@clack/prompts": "^1.8.1",
-        "execa": "^9.6.1",
-      },
       "devDependencies": {
         "@biomejs/biome": "latest",
+        "@clack/prompts": "^1.8.1",
         "@types/bun": "latest",
+        "execa": "^9.6.1",
         "typescript": "^5.7.3",
       },
     },

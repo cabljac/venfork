@@ -35,6 +35,8 @@ bun run compile          # standalone binary -> dist/venfork
 bun link                 # symlink global `venfork` for manual testing
 ```
 
+`bun run build` inlines every runtime dependency (`@clack/prompts`, `execa`), so `dist/index.js` imports only Node builtins and the published package has no `dependencies`: `npm install -g venfork` installs nothing else. Add runtime libraries to `devDependencies`. `bun run smoke:node` (part of verify and the release job) fails when the bundle imports a non-builtin, then packs the package, installs the tarball offline with `--omit=dev` into an empty project, checks that only `venfork` lands in `node_modules`, and runs its bin under Node.
+
 Unit tests mock `execa` with `mock.module`, which leaks across files in one bun process, so integration tests run in a separate invocation. `bunfig.toml` sets the test root to `tests/unit`, so a bare `bun test` runs only unit tests; other suites need an explicit `./` path (`bun test ./tests/integration`). Integration tests build a throwaway upstream/origin/public layout of local bare repos with `tests/harness/mirror-fixture.ts` and run commands against it with only `@clack/prompts` mocked.
 
 E2E tests hit real GitHub and are gated behind env flags (slow, opt-in):

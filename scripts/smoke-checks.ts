@@ -185,3 +185,21 @@ export function verifyDoctorOutput(
   if (failed.length > 0) return `failing checks: ${failed.join(',')}`;
   return null;
 }
+
+const REQUIRE_CALL = /\b(?:__)?require\(\s*["']([^"']+)["']\s*\)/g;
+
+/**
+ * Lists the distinct module specifiers in a bundle that are not Node
+ * builtins: ESM imports and `require` calls, the bundler's `__require` too.
+ * An empty list means the bundle runs with no installed dependencies.
+ */
+export function nonBuiltinImports(bundle: string): string[] {
+  const code = bundle.replace(/^#!.*/, '');
+  const specifiers = [
+    ...new Bun.Transpiler({ loader: 'js' })
+      .scanImports(code)
+      .map((i) => i.path),
+    ...[...code.matchAll(REQUIRE_CALL)].map((m) => m[1]),
+  ];
+  return [...new Set(specifiers)].filter((s) => !isBuiltin(s)).sort();
+}

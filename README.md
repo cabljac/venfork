@@ -61,6 +61,8 @@ bun install -g venfork
 npx venfork setup <repo-url>
 ```
 
+The npm package bundles its libraries, so it installs no other packages.
+
 ## Quick Start
 
 ```bash
