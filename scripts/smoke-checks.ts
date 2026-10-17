@@ -203,3 +203,17 @@ export function nonBuiltinImports(bundle: string): string[] {
   ];
   return [...new Set(specifiers)].filter((s) => !isBuiltin(s)).sort();
 }
+
+/**
+ * Picks the tarball `npm pack --pack-destination <dir>` wrote from that
+ * directory's entries. Reading the directory, not `npm pack --json`, keeps
+ * the smoke independent of npm's JSON shape, which npm 12 changed.
+ */
+export function packedTarball(entries: string[]): string {
+  const tarballs = entries.filter((e) => e.endsWith('.tgz'));
+  if (tarballs.length === 0) throw new Error('npm pack wrote no tarball');
+  if (tarballs.length > 1) {
+    throw new Error(`npm pack wrote ${tarballs.length} tarballs`);
+  }
+  return tarballs[0];
+}

@@ -14,6 +14,7 @@ import { createMirrorFixture } from '../tests/harness/mirror-fixture.js';
 import {
   enginesFloorShortfall,
   nonBuiltinImports,
+  packedTarball,
   runtimeDependencyEngines,
   verifyDoctorOutput,
 } from './smoke-checks.js';
@@ -57,11 +58,11 @@ try {
   const npmEnv = { npm_config_cache: path.join(tmp, 'npm-cache') };
   const packDir = path.join(tmp, 'pack');
   await mkdir(packDir);
-  const packed = await $({
+  await $({
     cwd: root,
     env: npmEnv,
-  })`npm pack --json --ignore-scripts --pack-destination ${packDir}`;
-  const [{ filename }] = JSON.parse(packed.stdout) as { filename: string }[];
+  })`npm pack --ignore-scripts --pack-destination ${packDir}`;
+  const filename = packedTarball(await readdir(packDir));
 
   const project = path.join(tmp, 'project');
   await mkdir(project);
