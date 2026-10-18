@@ -483,6 +483,15 @@ describe('setupCommand - execution tests', () => {
     expect(rmCalls[0].options).toEqual({ recursive: true, force: true });
   });
 
+  test('cleanup called and setup ends with exit code 143 when SIGTERM triggered', async () => {
+    const { result } = await startSetupCommand();
+
+    await signalHandlers.get('SIGTERM')?.();
+
+    await expect(result).rejects.toThrow(new CommandExitError(143));
+    expect(rmCalls[0]?.options).toEqual({ recursive: true, force: true });
+  });
+
   test('temp directory uses os.tmpdir()', async () => {
     await startSetupCommand();
 

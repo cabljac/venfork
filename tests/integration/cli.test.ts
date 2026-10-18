@@ -641,7 +641,7 @@ describe('clone on a legacy mirror without venfork-config', () => {
 describe('per-command help', () => {
   for (const [command, usage] of [
     ['sync', 'venfork sync [branch] [--report-issues]'],
-    ['doctor', 'venfork doctor [--json]'],
+    ['doctor', 'venfork doctor [--no-input] [--json]'],
     ['stage', 'venfork stage <branch>'],
   ]) {
     for (const flag of ['-h', '--help']) {
@@ -657,7 +657,7 @@ describe('per-command help', () => {
   }
 
   for (const [args, usage] of [
-    [['help', 'doctor'], 'venfork doctor [--json]'],
+    [['help', 'doctor'], 'venfork doctor [--no-input] [--json]'],
     [['--help', 'sync'], 'venfork sync [branch] [--report-issues]'],
     [['-h', 'stage'], 'venfork stage <branch>'],
     [['help', 'pull', 'pr'], 'venfork pull pr <pr-number-or-url>'],
@@ -676,7 +676,24 @@ describe('per-command help', () => {
       const result = await runCli(...args);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('venfork setup <upstream>');
-      expect(result.stdout).toContain('venfork doctor [--json]');
+      expect(result.stdout).toContain('venfork doctor [--no-input] [--json]');
+    }
+  });
+
+  test('full help states the prompt rule for both streams and lists exit 143', async () => {
+    const result = await runCli('help');
+
+    expect(result.stdout).toContain('terminal on stdin and stderr');
+    expect(result.stdout).not.toContain('TTY on stdin');
+    expect(result.stdout).toMatch(/^\s*143 {2}/m);
+  });
+
+  test('help version, -v and --version print the --version entry', async () => {
+    for (const target of ['version', '-v', '--version']) {
+      const result = await runCli('help', target);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Print the installed venfork version');
+      expect(result.stdout).not.toContain('venfork setup <upstream>');
     }
   });
 
@@ -778,6 +795,8 @@ describe('usage errors', () => {
 describe('usage errors exit 2 with the error on stderr', () => {
   for (const [args, message] of [
     [['frobnicate'], 'Unknown command: frobnicate'],
+    [['help', 'bogus'], 'Unknown command: bogus'],
+    [['help', 'status'], '`venfork status` is now `venfork doctor`'],
     [['setup', 'a/b', '--bogus'], "Unknown option '--bogus'"],
     [['setup', 'a/b', 'c', 'd'], "Unexpected argument 'd'"],
     [['setup', 'a/b', '--org'], '--org requires a value'],
@@ -1295,8 +1314,68 @@ describe('--json envelope on stdout, no TTY', () => {
         ok: false,
         error: { code: 'not-in-repository', message: expect.any(String) },
       });
+      expect(result.stderr).toBe(
+        'Error: Not in a git repository. Run this command from inside a git repository.'
+      );
     });
   }
+
+  for (const args of [
+    ['pull', 'pr', '12'],
+    ['sync'],
+    ['stage', 'feature', '--yes'],
+    ['schedule', 'status'],
+    ['workflows', 'status'],
+    ['preserve', 'list'],
+  ]) {
+    test(`outside a git repository, venfork ${args.join(' ')} prints only the not-in-repository error`, async () => {
+      const result = await runCliWithoutTty(tmp, args);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe(
+        'Error: Not in a git repository. Run this command from inside a git repository.'
+      );
+    });
+  }
+
+  test('setup killed with SIGTERM removes its temp dir and exits 143', async () => {
+    const root = await mkdtemp(path.join(tmp, 'setup-sigterm-'));
+    const bin = path.join(root, 'bin');
+    await mkdir(bin);
+    await writeFile(
+      path.join(bin, 'gh'),
+      '#!/bin/sh\n[ "$1 $2" = "auth status" ] && exit 0\n[ "$1 $2" = "api user" ] && echo me && exit 0\n[ "$1 $2" = "repo fork" ] && exec sleep 5\nexit 1\n'
+    );
+    await chmod(path.join(bin, 'gh'), 0o755);
+    const childEnv: Record<string, string | undefined> = {
+      ...process.env,
+      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+    };
+    delete childEnv.CI;
+    delete childEnv.VENFORK_NONINTERACTIVE;
+    delete childEnv.VENFORK_ORG;
+    const child = $({
+      cwd: root,
+      reject: false,
+      stdin: 'pipe',
+      timeout: 20000,
+      env: childEnv,
+      extendEnv: false,
+    })`node ${entry} setup acme/widget --org acme-org`;
+    await new Promise<void>((resolve) => {
+      let seen = '';
+      child.stderr?.on('data', (chunk: Buffer) => {
+        seen += chunk.toString();
+        if (seen.includes('Creating public fork')) resolve();
+      });
+    });
+    child.kill('SIGTERM');
+    const result = await child;
+
+    expect(result.exitCode).toBe(143);
+    expect(result.stderr).toContain('Setup interrupted');
+  });
 
   test('clone honours VENFORK_GIT_TIMEOUT for gh repo clone', async () => {
     const root = await mkdtemp(path.join(tmp, 'clone-timeout-'));
@@ -1364,6 +1443,7 @@ describe('--json envelope on stdout, no TTY', () => {
     ['--json', 'sync'],
     ['sync', '--json', '--help'],
     ['help', 'sync', '--json'],
+    ['help', 'bogus', '--json'],
     ['--version', '--json'],
   ]) {
     test(`venfork ${args.join(' ')} prints the usage envelope, exit 2`, async () => {
@@ -1418,6 +1498,52 @@ describe('--json envelope on stdout, no TTY', () => {
         schemaVersion: 1,
         ok: false,
         error: { code: 'cancelled', message: 'Interrupted by SIGINT' },
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('sync --json killed with SIGTERM prints a cancelled envelope, exit 143', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.git(
+        fx.work,
+        'remote',
+        'set-url',
+        'upstream',
+        'ssh://git@example.invalid/client/project.git'
+      );
+      const childEnv: Record<string, string | undefined> = {
+        ...process.env,
+        PATH: authedPath,
+        GIT_SSH_COMMAND: 'sleep 5 #',
+      };
+      delete childEnv.CI;
+      delete childEnv.VENFORK_NONINTERACTIVE;
+      const child = $({
+        cwd: fx.work,
+        reject: false,
+        stdin: 'pipe',
+        timeout: 20000,
+        env: childEnv,
+        extendEnv: false,
+      })`node ${entry} sync --json`;
+      await new Promise<void>((resolve) => {
+        let seen = '';
+        child.stderr?.on('data', (chunk: Buffer) => {
+          seen += chunk.toString();
+          if (seen.includes('Fetching from upstream')) resolve();
+        });
+      });
+      child.kill('SIGTERM');
+      const result = await child;
+
+      expect(result.exitCode).toBe(143);
+      expect(parseEnvelope(result.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: { code: 'cancelled', message: 'Interrupted by SIGTERM' },
       });
     } finally {
       await fx.cleanup();

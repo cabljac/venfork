@@ -17,7 +17,7 @@ import {
   workflowsCommand,
 } from './commands.js';
 import {
-  outsideRepositoryError,
+  assertInRepository,
   requiresGhAuth,
   setupSyncMirror,
 } from './dispatch.js';
@@ -29,7 +29,10 @@ import {
   VenforkError,
 } from './errors.js';
 import { ensureGhAuth, isGitRepository } from './git.js';
-import { parsePreserveCliArgs } from './preserve-args.js';
+import {
+  normalizePreserveArgs,
+  parsePreserveCliArgs,
+} from './preserve-args.js';
 import { parsePullCliArgs } from './pull-args.js';
 import { parseScheduleCliArgs } from './schedule-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
@@ -55,6 +58,16 @@ const RENAMED: Record<string, string> = {
     '`venfork issue` was split: use `venfork pull issue <number-or-url>` to bring an upstream issue in, or `venfork stage issue <number-or-url>` to publish a mirror issue.',
   status: '`venfork status` is now `venfork doctor`.',
 };
+
+const HELP_WORDS = ['help', '--help', '-h'];
+const VERSION_WORDS = ['--version', '-v', 'version'];
+
+/** The usage error for `venfork <command>` when no command has that name. */
+function unknownCommand(command: string): UsageError {
+  return new UsageError(
+    RENAMED[command] ?? `Unknown command: ${command}. Run \`venfork help\`.`
+  );
+}
 
 /** What one command run produced: its `--json` result and exit code. */
 interface CommandOutcome {
@@ -153,6 +166,7 @@ function parseCommand(
     }
     case 'preserve': {
       const parsed = parsePreserveCliArgs(args);
+      if (parsed.action === 'add') normalizePreserveArgs(parsed.paths);
       return resultOf(() => preserveCommand(parsed.action, parsed.paths));
     }
     case 'pull': {
@@ -173,9 +187,7 @@ function parseCommand(
       );
     }
     default:
-      throw new UsageError(
-        RENAMED[command] ?? `Unknown command: ${command}. Run \`venfork help\`.`
-      );
+      throw unknownCommand(command);
   }
 }
 
@@ -192,9 +204,9 @@ function refuseTextOutput(command: string, rest: string[]): void {
       'Put --json after the command, for example `venfork sync --json`.'
     );
   }
-  const textWords = ['help', '--help', '-h', '--version', '-v', 'version'];
   if (
-    textWords.includes(command) ||
+    HELP_WORDS.includes(command) ||
+    VERSION_WORDS.includes(command) ||
     rest.some((arg) => arg === '-h' || arg === '--help')
   ) {
     throw new UsageError(
@@ -217,18 +229,22 @@ async function main(args: string[]): Promise<void> {
   const rest = args.slice(1);
   if (json) refuseTextOutput(command, rest);
 
-  if (command === 'help' || command === '--help' || command === '-h') {
+  if (HELP_WORDS.includes(command)) {
     const [target, ...targetRest] = args.slice(1);
-    const usage = target ? commandHelp(target, targetRest) : null;
-    if (usage) {
-      console.log(usage);
-    } else {
+    if (!target || HELP_WORDS.includes(target)) {
       showHelp();
+      return;
     }
+    const usage = commandHelp(
+      VERSION_WORDS.includes(target) ? '--version' : target,
+      targetRest
+    );
+    if (!usage) throw unknownCommand(target);
+    console.log(usage);
     return;
   }
 
-  if (command === '--version' || command === '-v' || command === 'version') {
+  if (VERSION_WORDS.includes(command)) {
     console.log(VENFORK_VERSION);
     return;
   }
@@ -243,9 +259,8 @@ async function main(args: string[]): Promise<void> {
   if (requiresGhAuth(command, rest)) {
     await ensureGhAuth();
   }
-  const { result, exitCode } = await run().catch(async (error: unknown) => {
-    throw await outsideRepositoryError(command, error, isGitRepository);
-  });
+  await assertInRepository(command, isGitRepository);
+  const { result, exitCode } = await run();
   if (json) await writeEnvelope(successEnvelope(result));
   if (exitCode !== 0) process.exitCode = exitCode;
 }

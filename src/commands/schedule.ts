@@ -12,7 +12,7 @@ import {
   UsageError,
 } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
-import { SCHEDULE_USAGE } from '../schedule-args.js';
+import { checkCronExpression, SCHEDULE_USAGE } from '../schedule-args.js';
 import { applyConfigChange } from '../shared/config-change.js';
 import { SYNC_WORKFLOW_PATH } from '../shared/constants.js';
 import { isValidCronExpression } from '../shared/cron.js';
@@ -96,17 +96,8 @@ export async function scheduleCommand(
 
   try {
     if (action === 'set') {
-      const cron = value?.trim();
-      if (!cron) {
-        throw new UsageError(
-          `Missing cron expression. Usage: ${SCHEDULE_USAGE}`
-        );
-      }
-      if (!isValidCronExpression(cron)) {
-        throw new UsageError(
-          `Invalid cron expression '${cron}' (expected 5 fields), e.g. "0 */6 * * *". Usage: ${SCHEDULE_USAGE}`
-        );
-      }
+      checkCronExpression(value);
+      const cron = (value ?? '').trim();
 
       const mirrorRepo = await mirrorOriginPath(repoDir);
       const mirrorPath = mirrorRepo ?? MIRROR_PLACEHOLDER;

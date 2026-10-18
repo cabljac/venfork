@@ -15,4 +15,17 @@ describe('commandHelp', () => {
       'venfork workflows <status|allow|block|unallow|unblock|clear>'
     );
   });
+
+  test.each([
+    ['sync', []],
+    ['doctor', []],
+    ['schedule', []],
+    ['workflows', []],
+    ['preserve', []],
+    ['pull', []],
+    ['pull', ['pr']],
+  ] as const)('the %s %p usage line shows --no-input', (command, rest) => {
+    const usage = commandHelp(command, [...rest]) ?? '';
+    expect(usage.split('\n')[0]).toContain('[--no-input] [--json]');
+  });
 });

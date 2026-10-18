@@ -12,9 +12,9 @@ import {
   CommandExitError,
   isEntryReported,
   PreconditionError,
-  UsageError,
 } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
+import { normalizePreserveArgs } from '../preserve-args.js';
 import { applyConfigChange } from '../shared/config-change.js';
 import { changedFilesInCommit } from '../shared/divergence.js';
 import { hasManagedTrailer } from '../shared/managed-commit.js';
@@ -107,22 +107,6 @@ async function writeRemoval(
     );
   }
   return updated;
-}
-
-/**
- * The clean form of each `preserve add` path. Throws {@link UsageError} for
- * a path that {@link normalizePreservePath} rejects.
- */
-function normalizePreserveArgs(paths: string[]): string[] {
-  return paths.map((candidate) => {
-    const cleaned = normalizePreservePath(candidate);
-    if (!cleaned) {
-      throw new UsageError(
-        `Invalid preserve path '${candidate}': must be a clean relative path (no leading '/' or '-', no '..' / '.' / empty segments, no backslashes, NUL bytes, Windows drive prefixes, whitespace, glob characters (* ? [ ]) or leading ':'), and not the venfork sync workflow or a path under .venfork/.`
-      );
-    }
-    return cleaned;
-  });
 }
 
 /** The preserve list after `venfork preserve`, reported as the `--json` result. */

@@ -21,7 +21,7 @@ tests:
 - Sets remotes: `origin`, `public` (not with `--no-public`; a stale `public` is removed), `upstream` with push URL `DISABLE`. URLs follow `gh config get git_protocol`.
 - Recovery: when the fork or the mirror already exists on GitHub, setup skips the seed, reuses a matching local clone and runs `sync` quietly inside it.
 - Usage errors (exit 2, before gh auth): `--no-public` with `--fork-name`, invalid upstream, invalid `--fork-name`. Runtime errors (exit 1): `PreconditionError` for upstream already under the owner without `--fork-name`, an existing repo that is not a fork of upstream, a local directory that is not the expected mirror clone; `GitHubError` (gh's own message) when `gh repo fork` or `gh repo create` fails and no usable repo exists.
-- SIGINT and SIGTERM during the run: setup stops its spinner, removes its temp dir and exits 130 (`CommandExitError(130)`, code `cancelled`), with or without `--json`.
+- SIGINT and SIGTERM during the run: setup stops its spinner ("Setup interrupted"), removes its temp dir and exits 130 for SIGINT or 143 for SIGTERM (`CommandExitError`, code `cancelled`), with or without `--json`.
 - `--json` implies `--no-input` and prints one envelope line on stdout. `result` is `{ mode, mirror: { repo, url }, publicFork?: { repo, url }, upstream: { repo, url }, directory }`: `repo` is `owner/name`, `url` the `https://github.com/` page, `publicFork` absent with `--no-public`, `directory` the absolute checkout path. Failures carry `error.code` (`missing-input` with `flag`, `usage`, `auth`, `precondition`, `github`, `config`, `cancelled`).
 
 ## How a user reaches it

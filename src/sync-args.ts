@@ -11,7 +11,8 @@ export type ParsedSyncArgs = {
 };
 
 /** Usage line for `venfork sync`. */
-export const SYNC_USAGE = 'venfork sync [branch] [--report-issues] [--json]';
+export const SYNC_USAGE =
+  'venfork sync [branch] [--report-issues] [--no-input] [--json]';
 
 /**
  * Parse `venfork sync [branch] [--report-issues] [--json] [--no-input]` argv

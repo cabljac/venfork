@@ -39,7 +39,7 @@ export type ParsedPullArgs = ParsedPullPrArgs | ParsedPullIssueArgs;
 const PULL_USAGE = 'venfork pull <pr|issue> <number-or-url>';
 /** Usage line for `venfork pull pr`. */
 export const PULL_PR_USAGE =
-  'venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push] [--json]';
+  'venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push] [--no-input] [--json]';
 /** Usage line for `venfork pull issue`. */
 export const PULL_ISSUE_USAGE =
   'venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]';

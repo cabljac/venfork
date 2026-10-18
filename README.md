@@ -226,7 +226,7 @@ venfork clone git@github.com:acme-corp/awesome-project-private.git
 - An empty answer is rejected and the prompt asks again; cancelling a prompt (Ctrl-C) exits 130
 - Without a terminal (see [Non-interactive use](#non-interactive-use)) these prompts exit 2 instead and name the flag: `--public-fork <url>` for the public fork, `--upstream <url>` for upstream. Use `--no-public --upstream <url>` when the mirror has no public fork
 
-### `venfork sync [branch] [--report-issues] [--json]`
+### `venfork sync [branch] [--report-issues] [--no-input] [--json]`
 
 With `--json`, sync prints one JSON envelope on stdout (see [JSON output](#json-output)).
 
@@ -350,7 +350,7 @@ The implementation follows the spec at https://example.com/oauth.
 
 A comment that mentions venfork but is not a well-formed marker (for example a typo such as `venfork:intenral`), an unmatched close marker, or any `venfork` left in the text after stripping stops the stage before anything is pushed. An unmatched open marker drops everything after it. If you forget to add markers around other internal context, it is sent upstream, so review the preview prompt before confirming.
 
-### `venfork pull pr <pr-number-or-url> [--branch-name <override>] [--no-push] [--json]`
+### `venfork pull pr <pr-number-or-url> [--branch-name <override>] [--no-push] [--no-input] [--json]`
 
 Pull a third-party upstream PR into the private mirror so your team can review it internally before it lands. The PR's commits land on a new branch (`upstream-pr/<n>` by default) that's pushed to your mirror. With `--json`, it prints one JSON envelope on stdout (see [JSON output](#json-output)).
 
@@ -424,7 +424,7 @@ Both commands write a linkage to `venfork-config`:
 
 This is **only the linkage** — there is no *live* sync. `pull issue` snapshots the upstream body and comments into the mirror issue at pull time, but later comments and state changes do not propagate. If the upstream issue is closed, the internal one stays open until you close it manually (and vice versa). Treat the records as a "where did this go?" audit log rather than a live mirror.
 
-### `venfork doctor [--json]`
+### `venfork doctor [--no-input] [--json]`
 
 Check that a mirror is healthy, then list the links recorded in `venfork-config` (shipped branches, pulled PRs, shipped and pulled issues, with dates). `--json` prints the [JSON envelope](#json-output) with `result: { "checks": [...], "links": {...}, "healthy": true | false }`; `links` is `null` when the config cannot be read. It only reads, apart from fetching the remotes and the `venfork-config` branch.
 
@@ -444,7 +444,7 @@ Check that a mirror is healthy, then list the links recorded in `venfork-config`
 
 Each failing check prints a fix. The `token`, `last-run` and `cron-age` checks show as skipped when `gh` is not authenticated or origin is not a GitHub repository; `transport` skips only when origin is not on GitHub, and otherwise fails when git cannot reach origin (for example an HTTPS origin while gh is logged out), and the summary counts skipped checks. If `git fetch` fails, the `remotes` row shows the reason and the checks that need fresh refs are skipped. The command exits 1 when any check fails. With `--json` the envelope is still `ok: true` when a check fails, because doctor ran: read the checks, or the exit code.
 
-### `venfork schedule <status|set <cron> [--app|--token]|disable> [--json]`
+### `venfork schedule <status|set <cron> [--app|--token]|disable> [--no-input] [--json]`
 
 Manage automated sync configuration stored in `venfork-config`. With `--json`, every action prints one JSON envelope on stdout with the schedule after the action (see [JSON output](#json-output)).
 
@@ -547,7 +547,7 @@ The next scheduled run then succeeds and closes the `venfork-sync-blocked` issue
 - **Upgrades.** The workflow pins the venfork version that wrote it. Install a newer venfork locally and run `venfork sync` to move the mirror to it.
 - **Right after a release.** A release tag can exist for a few minutes before `npm publish` finishes. A local sync in that window can pin a version that npm does not have yet. The scheduled run then fails at "Install venfork" and opens the `venfork-sync-blocked` issue. The next run after the publish succeeds and closes it. To bridge the gap, set `VENFORK_INSTALL_SPEC` (see above).
 
-### `venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...] [--json]`
+### `venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...] [--no-input] [--json]`
 
 Manage which upstream workflow files should remain active in the private mirror when managed sync commit logic runs. With `--json`, every action prints one JSON envelope on stdout with the policy after the action (see [JSON output](#json-output)).
 
@@ -568,7 +568,7 @@ venfork workflows clear
 5. Precedence: if `enabledWorkflows` is non-empty, it is used and `disabledWorkflows` is ignored
 6. Changes apply to the mirror default branch on next `venfork sync` (a non-empty allow or block list is enough to put the managed commit on the mirror, with or without a schedule or a preserve list)
 
-### `venfork preserve <list|add|remove|clear> [path ...] [--json]`
+### `venfork preserve <list|add|remove|clear> [path ...] [--no-input] [--json]`
 
 Keep mirror-only files (for example a caller workflow or an internal doc) on the mirror default branch across `venfork sync`. Sync normally makes `origin/<default>` equal to upstream; preserved files ride in the single venfork-managed commit instead. With `--json`, every action prints one JSON envelope on stdout with the list after the action (see [JSON output](#json-output)); a path named `--json` goes after `--`.
 
@@ -632,7 +632,7 @@ Any command line that contains `--json` before any `--` gets the envelope, whate
 | `github` | A gh call to GitHub failed, for example creating a fork or repo, reading an issue or opening a PR; the message is gh's error |
 | `precondition` | The state on GitHub, on disk or in `venfork-config` does not allow the action, for example an existing directory, a repo that is not the expected fork, a flag that contradicts the recorded layout, a path that is not in the preserve list, or staging upstream's default branch |
 | `remote-not-found` | A required remote (`origin`, `public`, `upstream`) is missing |
-| `not-in-repository` | A command that runs in a mirror (`sync`, `stage`, `pull`, `schedule`, `workflows`, `preserve`) failed outside a git repository |
+| `not-in-repository` | A command that runs in a mirror (`sync`, `stage`, `pull`, `schedule`, `workflows`, `preserve`) was run outside a git repository |
 | `branch-not-found` | The branch does not exist |
 | `sync-divergence` | Sync stopped: origin or public has commits upstream does not have |
 | `config` | The `venfork-config` branch is missing, cannot be read, is invalid, or moved during a write |
@@ -694,7 +694,8 @@ venfork stage feat/auth --pr --yes --no-input
 | `0` | Success, or you answered "no" to a confirm at a terminal |
 | `1` | Runtime failure, or `venfork doctor` found a failing check |
 | `2` | Usage error (unknown command or option, missing or unexpected argument, malformed flag value, flags that cannot be combined, or bare `venfork` with no command), or missing input or consent: venfork could not prompt and no flag supplied the answer |
-| `130` | Cancelled at a prompt (Ctrl-C, Esc, or input ended), or the terminal closed during the run |
+| `130` | Cancelled at a prompt (Ctrl-C, Esc, or input ended), interrupted by SIGINT, or the terminal closed during the run |
+| `143` | Terminated by SIGTERM |
 
 A usage error is reported before venfork checks gh auth or touches a repo. Input that is valid in form but fails against the repos, such as a branch that does not exist, a diverged mirror, or a flag that contradicts the mirror's `venfork-config`, is a runtime failure (`1`).
 
@@ -705,7 +706,7 @@ venfork runs on a machine with no browser, no SSH key and nobody at the keyboard
 1. Give gh a token. Set `GH_TOKEN` in the environment, or run `gh auth login --with-token < token.txt` once. The token needs access to the mirror, the public fork and upstream.
 2. Use HTTPS for GitHub remotes: `gh config set git_protocol https`. Then clone the mirror, so that `gh repo clone` writes HTTPS remote URLs. A clone that already has SSH remotes keeps them.
 3. Run venfork with `--no-input` (or `--json`, which implies it). Pass `--yes` to the commands that ask for consent. With `--json`, stdout carries one JSON document. See [Non-interactive use](#non-interactive-use) and [JSON output](#json-output).
-4. Check the exit code: `0` success, `1` runtime failure or a failing doctor check, `2` usage error or missing input or consent, `130` cancelled.
+4. Check the exit code: `0` success, `1` runtime failure or a failing doctor check, `2` usage error or missing input or consent, `130` cancelled, `143` terminated by SIGTERM.
 
 ```bash
 export GH_TOKEN="$(cat /run/secrets/gh-token)"

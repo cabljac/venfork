@@ -298,14 +298,16 @@ export async function setupCommand(
   const interrupted = new Promise<never>((_, reject) => {
     interrupt = reject;
   });
-  const signalHandler = async () => {
+  const onSignal = (exitCode: number) => async () => {
     s.stop('Setup interrupted');
     await cleanup();
-    interrupt(new CommandExitError(130));
+    interrupt(new CommandExitError(exitCode));
   };
+  const onSigint = onSignal(130);
+  const onSigterm = onSignal(143);
 
-  process.on('SIGINT', signalHandler);
-  process.on('SIGTERM', signalHandler);
+  process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
   const releaseInterrupts = claimInterrupts();
 
   const steps = async (): Promise<SetupResult> => {
@@ -562,8 +564,8 @@ Upstream: ${config.upstreamUrl} (read-only)`,
   } finally {
     // Ensure cleanup and remove signal handlers
     await cleanup();
-    process.off('SIGINT', signalHandler);
-    process.off('SIGTERM', signalHandler);
+    process.off('SIGINT', onSigint);
+    process.off('SIGTERM', onSigterm);
     releaseInterrupts();
   }
 }
