@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 /** One rule violation at a 1-based line of a repo-relative file. */
@@ -387,6 +387,30 @@ export const clackViaUi: Rule = ({ file, text }) => {
   }));
 };
 
+const EM_DASH = '\u2014';
+
+/** Rule 8: no em dash (U+2014) in code, tests or docs. */
+export const noEmDash: Rule = ({ file, text }) =>
+  text.split('\n').flatMap((line, i) =>
+    line.includes(EM_DASH)
+      ? [
+          {
+            file,
+            line: i + 1,
+            message: 'em dash (U+2014); use "-" or reword',
+          },
+        ]
+      : []
+  );
+
+/** Repo-relative files and directories the text rules read, every file in them. */
+export const TEXT_ROOTS = ['src', 'tests', 'docs', 'README.md'];
+
+/** Rules over every file under {@link TEXT_ROOTS}, not only src TypeScript. */
+export const textRules: Record<string, Rule> = {
+  'no-em-dash': noEmDash,
+};
+
 /** Every invariant rule, keyed by the name printed in findings. */
 export const rules: Record<string, Rule> = {
   'remote-refs': remoteRefs,
@@ -409,6 +433,26 @@ export function lintSources(
   );
 }
 
+/** Runs every text rule over the given sources. */
+export function lintText(sources: Source[]): Array<Finding & { rule: string }> {
+  return sources.flatMap((src) =>
+    Object.entries(textRules).flatMap(([rule, check]) =>
+      check(src).map((f) => ({ ...f, rule }))
+    )
+  );
+}
+
+/** Every file under {@link TEXT_ROOTS}, as repo-relative POSIX paths. */
+export function textFiles(root: string): string[] {
+  const walk = (rel: string): string[] =>
+    statSync(path.join(root, rel)).isDirectory()
+      ? readdirSync(path.join(root, rel)).flatMap((name) =>
+          walk(path.posix.join(rel, name))
+        )
+      : [rel];
+  return TEXT_ROOTS.flatMap(walk);
+}
+
 function listTs(root: string, dir: string): string[] {
   const entries = readdirSync(path.join(root, dir), { withFileTypes: true });
   return entries.flatMap((entry) => {
@@ -424,7 +468,11 @@ if (import.meta.main) {
     file,
     text: readFileSync(path.join(root, file), 'utf8'),
   }));
-  const findings = lintSources(sources);
+  const texts = textFiles(root).map((file) => ({
+    file,
+    text: readFileSync(path.join(root, file), 'utf8'),
+  }));
+  const findings = [...lintSources(sources), ...lintText(texts)];
   for (const f of findings) {
     console.error(`${f.file}:${f.line}  [${f.rule}] ${f.message}`);
   }
@@ -432,5 +480,7 @@ if (import.meta.main) {
     console.error(`\n${findings.length} invariant violation(s).`);
     process.exit(1);
   }
-  console.log(`Invariants hold across ${sources.length} files.`);
+  console.log(
+    `Invariants hold across ${sources.length} source and ${texts.length} text files.`
+  );
 }

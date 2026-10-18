@@ -70,7 +70,7 @@ export interface VenforkConfig {
   /**
    * Repo layout. `'standard'` (default when absent) is the three-remote
    * setup with a public fork hop. `'no-public'` collapses the layout to
-   * `origin` (private mirror) + `upstream` only — used when the upstream
+   * `origin` (private mirror) + `upstream` only - used when the upstream
    * repo lives in the user's own org so the fork hop is unnecessary.
    */
   mode?: 'standard' | 'no-public';
@@ -111,7 +111,7 @@ export interface VenforkConfig {
    *
    * On sync, every listed path is read from the previous mirror tip
    * (`origin/<defaultBranch>`) and re-added to the deterministic "+1 commit"
-   * — unless upstream now contains the same path, in which case upstream wins.
+   * - unless upstream now contains the same path, in which case upstream wins.
    */
   preserve?: string[];
   /** Branch -> upstream PR linkage recorded by `venfork stage`. */
@@ -306,7 +306,7 @@ async function writeConfigBranch(
     const remoteResult = await $({ cwd: repoDir })`git remote get-url origin`;
     const originUrl = remoteResult.stdout.trim();
 
-    // Caller-supplied lease wins — it's the SHA that was actually read,
+    // Caller-supplied lease wins - it's the SHA that was actually read,
     // which is the only correct lease (a fresh ls-remote here would race
     // with a concurrent writer who pushed between our read and our push).
     // Fall back to ls-remote when no SHA is supplied, for first-time writes
@@ -481,7 +481,7 @@ export function isVenforkOwnedPath(entry: string): boolean {
  * IMPORTANT: if you change the rejection rules below, also update:
  *   - the JSDoc on `VenforkConfig.preserve` (above)
  *   - the user-facing error message in `keepCommand` (src/commands/keep.ts)
- * All three must stay in sync — users see the JSDoc when editing config by
+ * All three must stay in sync - users see the JSDoc when editing config by
  * hand, and the error message when running `venfork keep add`.
  */
 export function normalizePreservePath(value: unknown): string | null {
@@ -796,7 +796,7 @@ export async function fetchVenforkConfig(
  *
  * Capturing the SHA here is what lets `updateVenforkConfig` push back with
  * an explicit `--force-with-lease=<branch>:<sha>` against the *exact* SHA
- * we read from — the only lease that's safe under concurrent writers.
+ * we read from - the only lease that's safe under concurrent writers.
  */
 async function fetchConfigContentAndSha(
   repoDir: string
@@ -1020,7 +1020,7 @@ export function applyPatchAndNormalize(
  * Auto-retries on `--force-with-lease` failure (i.e. another venfork
  * command pushed between our read and our write). Each retry re-reads
  * the now-updated config, re-applies the same patch on top, and pushes
- * again with the fresh lease SHA — so the losing run's update is
+ * again with the fresh lease SHA - so the losing run's update is
  * preserved on top of the winning run's, instead of being dropped or
  * surfaced as a confusing error to the user. Bounded at 3 attempts so
  * pathological live-locks don't hang the CLI.

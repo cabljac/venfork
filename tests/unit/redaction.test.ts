@@ -45,7 +45,7 @@ describe('stripInternalBlocks', () => {
 
   test('drops content from an unmatched open marker to end-of-input (fail-safe)', () => {
     // A typo'd close marker shouldn't leak the intended-private content
-    // — better to drop too much than to publish secrets.
+    // - better to drop too much than to publish secrets.
     const input = 'public<!-- venfork:internal -->oops no close';
     expect(stripInternalBlocks(input)).toBe('public');
   });

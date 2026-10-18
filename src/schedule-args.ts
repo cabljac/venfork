@@ -17,7 +17,7 @@ export type ParsedScheduleArgs = {
 
 /** Usage line for `venfork schedule`. */
 export const SCHEDULE_USAGE =
-  'venfork schedule <status|set <cron> [--app|--token]|disable> [--no-input] [--json]';
+  'venfork schedule <status|set <cron> [--app|--token]|disable> [--yes] [--no-input] [--json]';
 
 /**
  * Throws {@link UsageError} when `cron` (trimmed) is missing or is not a

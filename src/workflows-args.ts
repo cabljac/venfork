@@ -19,7 +19,7 @@ export type ParsedWorkflowsArgs = {
 };
 
 const USAGE =
-  'venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...] [--no-input] [--json]';
+  'venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...] [--yes] [--no-input] [--json]';
 
 const LIST_ACTIONS: readonly WorkflowsAction[] = [
   'allow',

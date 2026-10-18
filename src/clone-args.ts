@@ -22,7 +22,7 @@ export type ParsedCloneArgs = {
 
 /** Usage line for `venfork clone`. */
 export const CLONE_USAGE =
-  'venfork clone <mirror> [--own-upstream] [--upstream <url>] [--public-fork <url>] [--no-input] [--json]';
+  'venfork clone <mirror> [--own-upstream] [--upstream <url>] [--public-fork <url>] [--yes] [--no-input] [--json]';
 
 /**
  * Parse `venfork clone ...` argv after the `clone` token.

@@ -41,7 +41,7 @@ venfork schedule disable </dev/null 2>&1 | grep "Scheduled sync disabled"   # or
 vf_origin_commit src/hot.txt x; venfork schedule set "0 * * * *" </dev/null 2>&1 | grep "Sync aborted"  # divergence, exit 1
 ```
 
-- Concurrent lease and rollback: after a `venfork sync`, make the stale copy (README) and copy the config into it (`git -C "$VF_ROOT/stale.git" fetch -q "$VF_ORIGIN" venfork-config:venfork-config`). Move the real origin with `vf_upstream_commit` + `venfork sync`, swap the fetch URL, run `venfork schedule set "30 * * * *"`. Exit 1, `venfork-config` on `$VF_ORIGIN` is back at its old SHA, `main` is unchanged.
+- Concurrent lease and rollback: after a `venfork sync`, make the stale copy (features/README.md) and copy the config into it (`git -C "$VF_ROOT/stale.git" fetch -q "$VF_ORIGIN" venfork-config:venfork-config`). Move the real origin with `vf_upstream_commit` + `venfork sync`, swap the fetch URL, run `venfork schedule set "30 * * * *"`. Exit 1, `venfork-config` on `$VF_ORIGIN` is back at its old SHA, `main` is unchanged.
 - Cancel: there is no prompt, so there is no 130 path.
 
 ## What proves it

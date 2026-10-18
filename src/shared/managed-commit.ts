@@ -7,7 +7,7 @@ import {
 } from './constants.js';
 
 /**
- * Subject line emitted on every venfork-managed "+1 commit" — both the
+ * Subject line emitted on every venfork-managed "+1 commit" - both the
  * scheduled-workflow case and the preserve-only case. Generalized from the
  * original "scheduled sync workflow" wording because the same commit can now
  * carry preserve content with no workflow involvement; an honest subject

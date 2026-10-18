@@ -1,16 +1,19 @@
 /** biome-ignore-all lint/suspicious/noTemplateCurlyInString: fixtures are TypeScript source held in strings */
 import { describe, expect, test } from 'bun:test';
+import path from 'node:path';
 import {
   clackViaUi,
   denyListCoverage,
   importBoundary,
   LOCAL_GIT_MARKER,
   networkViaNet,
+  noEmDash,
   noProcessExit,
   PROMPT_MODULE,
   PUBLISH_HELPER,
   promptsViaModule,
   remoteRefs,
+  textFiles,
   UI_MODULE,
 } from '../../scripts/lint-invariants';
 
@@ -302,5 +305,27 @@ describe('clackViaUi', () => {
       "import * as p from '../shared/ui.js';",
     ].join('\n');
     expect(clackViaUi(src('src/commands/x.ts', other))).toEqual([]);
+  });
+});
+
+describe('noEmDash', () => {
+  test('flags each line that holds an em dash, in any file', () => {
+    const text = ['one - fine', 'two \u2014 not', 'three'].join('\n');
+    expect(noEmDash(src('docs/reference/x.md', text))).toEqual([
+      {
+        file: 'docs/reference/x.md',
+        line: 2,
+        message: 'em dash (U+2014); use "-" or reword',
+      },
+    ]);
+  });
+
+  test('reads src, tests, the README and docs', () => {
+    const files = textFiles(path.resolve(import.meta.dir, '../..'));
+    expect(files).toContain('README.md');
+    expect(files).toContain('docs/reference/commands.md');
+    expect(files).toContain('src/index.ts');
+    expect(files).toContain('tests/unit/lint-invariants.test.ts');
+    expect(files).not.toContain('CHANGELOG.md');
   });
 });

@@ -27,7 +27,7 @@ export type ParsedKeepArgs = {
 };
 
 const USAGE =
-  'venfork keep <list|add|remove|clear> [path ...] [--no-input] [--json]';
+  'venfork keep <list|add|remove|clear> [path ...] [--yes] [--no-input] [--json]';
 
 /**
  * Parse `venfork keep ...` argv after the `keep` token.

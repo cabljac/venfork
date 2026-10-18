@@ -68,7 +68,7 @@ export async function ensureDeleteRepoScope(): Promise<void> {
 }
 
 /**
- * Throws if the upstream and mirror/fork would land under the same owner —
+ * Throws if the upstream and mirror/fork would land under the same owner -
  * GitHub rejects same-owner forks ("A single user account cannot own both a
  * parent and fork").
  */
@@ -273,7 +273,7 @@ export async function readWorkflowFromOrigin(
 /**
  * Spawns the built venfork CLI with the given args and cwd.
  *
- * stdout/stderr are inherited for visibility. stdin is piped — when `input` is
+ * stdout/stderr are inherited for visibility. stdin is piped - when `input` is
  * provided it's written verbatim, then the pipe closes. This lets us answer
  * known-up-front interactive prompts (e.g. the "Continue with personal
  * account?" confirm in `venfork setup` when `--org` matches the gh user).

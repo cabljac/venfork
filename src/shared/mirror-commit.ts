@@ -271,7 +271,7 @@ export async function buildMirrorTip(args: {
         }
         if (upstreamEntries.length > 0) {
           p.log.warn(
-            `preserved file '${preservePath}' now exists upstream — using upstream version`
+            `preserved file '${preservePath}' now exists upstream - using upstream version`
           );
           continue;
         }

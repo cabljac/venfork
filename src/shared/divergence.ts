@@ -12,13 +12,13 @@ import {
 /**
  * Lists the file paths changed by a single commit. Returns an empty array on
  * git error or for empty commits. Shared by `isPreservedCommit` and the
- * divergence-check file collection — both want the same name-only output.
+ * divergence-check file collection - both want the same name-only output.
  *
  * Uses `diff-tree -m --first-parent` instead of `git show` so merge commits
  * are diffed against their *first parent* (everything the merge brought in
  * from the side branch), not the default combined-diff (`--cc`) which only
  * surfaces conflict-resolution files. Without this, a clean merge that
- * touches a preserved file would show zero changed files — which would
+ * touches a preserved file would show zero changed files - which would
  * make `isPreservedCommit` return false and abort sync on a benign merge.
  */
 export async function changedFilesInCommit(
@@ -37,7 +37,7 @@ export async function changedFilesInCommit(
 /**
  * Returns true when every file in `changedFiles` is in the preserve allowlist.
  * Used by sync's divergence check to allow user-authored mirror-only commits
- * (e.g. a caller workflow) ahead of upstream — as long as every changed file
+ * (e.g. a caller workflow) ahead of upstream - as long as every changed file
  * is something the user has explicitly opted into preserving.
  *
  * Takes pre-computed `changedFiles` AND a pre-built `allowed` Set so the
@@ -241,7 +241,7 @@ export function formatDivergenceReport(
         .join('\n')}${more(origin.files.length)}`
     );
     // Only suggest preserve for paths the validator would actually
-    // accept — otherwise the copy/paste command line would fail.
+    // accept - otherwise the copy/paste command line would fail.
     // If every divergent path is invalid for preserve, suppress the hint
     // entirely (rebase/force-sync below still apply).
     const validForPreserve: string[] = [];
@@ -265,7 +265,7 @@ export function formatDivergenceReport(
     }
   }
   sections.push(
-    `Otherwise:\n- Rebase or cherry-pick to a feature branch before running sync\n- Force-sync (DESTRUCTIVE — permanently discards the commits): git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} -f`
+    `Otherwise:\n- Rebase or cherry-pick to a feature branch before running sync\n- Force-sync (DESTRUCTIVE - permanently discards the commits): git push origin upstream/${defaultBranch}:refs/heads/${defaultBranch} -f`
   );
   return sections.join('\n\n');
 }
