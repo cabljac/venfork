@@ -211,83 +211,93 @@ export function commandHelp(
   return COMMAND_HELP.find(([name]) => name === command)?.[1] ?? null;
 }
 
-/**
- * Show help information on `ui`: stdout when help was asked for, stderr
- * when it stands in for a usage error.
- */
-export function showHelp(ui: Ui = stdoutUi): void {
-  ui.intro('🔧 Venfork - Private Repository Mirrors for Vendor Development');
+const COMMAND_LIST = `Get started
+  setup <owner/repo>           Create the mirror and public fork, clone it
+  clone <mirror>               Join a mirror a teammate set up
 
-  ui.note(
-    `${COMMAND_HELP.map(([, text]) => text).join('\n\n')}
+Every day
+  sync                         Bring upstream changes into the mirror
+  stage <branch>               Publish a branch and open the upstream PR
+  doctor                       Check the mirror, list what was published
 
-Every command accepts --yes, -y and --no-input; where nothing confirms or
-  asks, they change nothing`,
-    'Available Commands'
-  );
+Review upstream work
+  pull pr <number-or-url>      Bring an upstream PR in for review
+  pull issue <number-or-url>   Copy an upstream issue in for triage
+  stage issue <number-or-url>  Publish an internal issue upstream
 
-  ui.note(
-    `# One-time setup
-venfork setup git@github.com:awesome/project.git
-# or shorthand:
-venfork setup awesome/project
+Automation
+  schedule set <cron>          Sync on a schedule with GitHub Actions
+  keep add <path>              Keep a mirror-only file across sync
+  workflows block <file>       Stop an upstream workflow on the mirror
 
-# Or for organization repos:
-venfork setup git@github.com:awesome/project.git --org my-company
+Advanced
+  stage <branch> --dry-run     Show what stage would publish, push nothing
+  --yes, --no-input            On every command: confirm, or never prompt
+  --json                       Print one JSON result (not with help)
 
-# Same org as upstream: give the public fork a different repo name
-venfork setup my-org/lib.git my-org-lib-private --org my-org --fork-name lib-public
+Example
+  venfork setup acme/widget --org my-company && cd widget-private
+  venfork stage fix-typo   # after you commit on a fix-typo branch`;
 
-cd project-private
-
-# Work privately (juniors can learn here!)
-git checkout -b feature/new-thing
-# ... work, mistakes, learning, iteration ...
-git push origin feature/new-thing
-# Still private! Create internal PR for team review
-
-# After team approval, stage for upstream and open the PR in one go
-venfork stage feature/new-thing
-# NOW visible on public fork; upstream PR is opened with your internal review body
-
-# Bring a third-party upstream PR in for internal review
-venfork pull pr 1234
-# Refresh as the contributor pushes updates: venfork pull pr 1234`,
-    'Example Workflow'
-  );
-
-  ui.note(
+const HELP_TOPICS: ReadonlyArray<readonly [string, string]> = [
+  [
+    'env',
     `VENFORK_ORG - Default organization for repo creation
-  Priority: --org flag, then VENFORK_ORG, then your personal account (after a prompt)
+  Priority: --org, then VENFORK_ORG, then your personal account (after a prompt)
   Example: export VENFORK_ORG=my-company
 
-VENFORK_NONINTERACTIVE=1 - Never prompt, as with --no-input (it does not confirm;
-  pass --yes for that). venfork also never prompts when CI is set or without a
-  terminal on stdin and stderr. A prompt that cannot be shown exits 2 naming the
-  flag to pass.
+VENFORK_NONINTERACTIVE=1 - Never prompt, as with --no-input (it does not
+  confirm; pass --yes for that). venfork also never prompts when CI is set or
+  without a terminal on stdin and stderr. A prompt that cannot be shown exits 2
+  naming the flag to pass.
 
-VENFORK_GIT_TIMEOUT - Cap in ms for each network git/gh operation (default 600000)
+VENFORK_GIT_TIMEOUT - Cap in ms for each network git/gh operation
+  (default 600000)
 
-VENFORK_SEED_CHUNK - Commits per push when setup seeds a new mirror (default 1000)
+VENFORK_SEED_CHUNK - Commits per push when setup seeds a new mirror
+  (default 1000)
 
-VENFORK_SEED_RETRY_MS - Base backoff in ms between seed push retries (default 8000)
+VENFORK_SEED_RETRY_MS - Base backoff in ms between seed push retries
+  (default 8000)
 
 NO_COLOR - Print plain progress lines on stderr even in a terminal
 
 GITHUB_REPOSITORY - Set by GitHub Actions. With --report-issues, sync files the
-  venfork-sync-blocked issue there without a privacy lookup when it names origin`,
-    'Environment Variables'
-  );
+  venfork-sync-blocked issue there without a privacy lookup when it names origin
 
-  ui.note(
+Advanced
+
+VENFORK_ALLOW_SELF_REFERENCE=1 - Stop stage refusing the bare word venfork in
+  commit messages, PR titles and bodies. The mirror URL, owner and repo name
+  stay refused.`,
+  ],
+  [
+    'exit-codes',
     `0    Success, or "no" at a confirm in a terminal
-1    Runtime failure, a failing doctor check, or a partial success (for example
-     a stage --pr that pushed but could not open the PR)
+1    Runtime failure, a partial success, or doctor found a failing check
 2    Usage error, or missing input or consent with no prompt
-130  Cancelled at a prompt, or interrupted by SIGINT
+130  Cancelled at a prompt (or its input ended), interrupted by SIGINT,
+     or the terminal closed
 143  Terminated by SIGTERM`,
-    'Exit Codes'
-  );
+  ],
+];
 
-  ui.outro('Built for teams who need private vendor workflows');
+/**
+ * Text of a `venfork help <topic>` page (`env`, `exit-codes`), or null when
+ * `topic` is not one.
+ */
+export function helpTopic(topic: string): string | null {
+  return HELP_TOPICS.find(([name]) => name === topic)?.[1] ?? null;
+}
+
+/**
+ * Show the one-screen command list on `ui`: stdout when help was asked
+ * for, stderr when it stands in for a usage error.
+ */
+export function showHelp(ui: Ui = stdoutUi): void {
+  ui.intro('venfork - private mirrors for vendor work on public repos');
+  ui.note(COMMAND_LIST, 'Commands');
+  ui.outro(
+    'More: venfork <command> --help, venfork help env, venfork help exit-codes'
+  );
 }

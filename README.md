@@ -600,7 +600,7 @@ venfork keep clear
 
 venfork keeps stdout for results and sends everything a human reads to stderr:
 
-- **stdout** carries only results: `venfork --version`, help you ask for (`venfork help`, `venfork <command> --help`) and the `--json` envelope.
+- **stdout** carries only results: `venfork --version`, help you ask for (`venfork help`, `venfork help env`, `venfork help exit-codes`, `venfork <command> --help`) and the `--json` envelope.
 - **stderr** carries progress, spinners, prompts, warnings, errors, usage printed for a bad command line (including bare `venfork` with no command), the human-readable reports of `doctor`, `schedule status`, `workflows status` and `keep list`, and the output of git and gh subprocesses.
 
 So `venfork doctor --json > health.json` writes clean JSON while progress still shows in the terminal, and `venfork sync 2>sync.log` keeps stdout empty.
