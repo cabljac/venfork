@@ -18,38 +18,40 @@ tests:
 - Rebuilds the branch linearly on `upstream/<default>` by cherry-pick with hooks off. Managed commits are dropped. Merge commits are dropped; a merge with a manual conflict resolution is refused.
 - Gates every rebuilt commit (see `leak-invariants.md`): `StageLeakError` for mirror-only paths or content, `MirrorReferenceError` for mirror terms in author, committer, message, file content or file name, and for bot-authored commits.
 - Every publish refusal of the gate is `error.code` `stage-leak`, except text that names the mirror (`mirror-reference`, also bot commits, marker text and config-shaped JSON in a file) and a broken internal block in a PR body (`redaction`). `stage-leak` covers `StageLeakError` and these plain `VenforkError`s: a cherry-pick that fails on a preserved path upstream does not have, a reflog or a mirror-only history longer than the scan cap, a directory in mirror history where venfork writes a file, a blob over 100 MB.
-- Shows commits and files, then asks "Push to public fork?" (no-public: "Push to upstream?"). `--yes` answers it. Unless stdin and stderr are both a TTY, and with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`, the confirm without `--yes` exits 2 before it fetches with one line, `error: Not staged. "Push to public fork?" needs an answer and venfork cannot prompt here. Add --yes to confirm.` (`MissingInputError`), and nothing is pushed; stdout stays empty.
+- Shows commits and files, then asks "Push to public fork and open the upstream PR?" (no-public: "Push to upstream and open the PR?"; with `--no-pr`: "Push to public fork?" / "Push to upstream?"). `--yes` answers it. Unless stdin and stderr are both a TTY, and with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`, the confirm without `--yes` exits 2 before it fetches with one line (here with `--no-pr`), `error: Not staged. "Push to public fork?" needs an answer and venfork cannot prompt here. Add --yes to confirm.` (`MissingInputError`), and nothing is pushed; stdout stays empty.
+- Without `--no-pr`, an upstream or push remote that is not on github.com (GitHub Enterprise, a local path) is `precondition` "Cannot open an upstream PR: ... is not a GitHub repository." with the hint `Pass --no-pr to push the branch only.`, after the confirm check and before any fetch.
 - Pushes `<head>:refs/heads/<branch>` with `--force-with-lease=<ref>:<tip from ls-remote>` and `--no-follow-tags`. No-public pushes to the upstream URL directly (the remote's push URL stays `DISABLE`).
-- `--json` never prompts, even at a TTY (it implies `--no-input`). Outside a git repository, stage fails with `not-in-repository` (exit 1) before it reaches the confirm. Without `--yes` it is `ok: false`, `error: { code: 'missing-input', flag: '--yes' }`, exit 2. On success `result` is `{ branch, head, target: 'public' | 'upstream', compareUrl, prAction?, prUrl?, internalPrUrl? }`; `prAction` (`created`, `updated`, `unchanged`, `failed`) is present only with `--pr`; `failed` (the PR could not be opened, or an existing PR's body could not be updated) exits 1 with the success envelope, an `error:` line and the outro `Stage incomplete: ...`. The outro names the re-run in the explicit form with the same PR flags, each value shell-quoted (`stageRerunCommand`: `venfork stage branch '<name>' --pr [--draft] [--base '<b>'] [--title '<t>'] [--internal-pr <n>] [--no-update-existing]`), and the "re-run with --pr" tip is left out of Next Steps.
-- `--pr`/`--draft`: finds the internal PR on the mirror, redacts it (`stripInternalBlocks`, `RedactionError`), runs `gh pr create`, updates an existing PR body unless `--no-update-existing`, writes `shippedBranches[branch]`.
+- `--json` never prompts, even at a TTY (it implies `--no-input`). Outside a git repository, stage fails with `not-in-repository` (exit 1) before it reaches the confirm. Without `--yes` it is `ok: false`, `error: { code: 'missing-input', flag: '--yes' }`, exit 2. On success `result` is `{ branch, head, target: 'public' | 'upstream', compareUrl, prAction?, prUrl?, internalPrUrl? }`; `prAction` (`created`, `updated`, `unchanged`, `failed`) is present unless `--no-pr`; `failed` (the PR could not be opened, or an existing PR's body could not be updated) exits 1 with the success envelope, an `error:` line and the outro `Stage incomplete: ...`. The outro names the re-run in the explicit form with the same PR flags, each value shell-quoted (`stageRerunCommand`: `venfork stage branch '<name>' [--no-pr] [--draft] [--base '<b>'] [--title '<t>'] [--internal-pr <n>] [--no-update-existing]`).
+- The PR step is the default (`--no-pr` skips it; `--pr` is an accepted no-op alias for one release). `--draft`, `--title`, `--internal-pr`, `--no-update-existing` and `--pr` with `--no-pr` are usage errors (exit 2); `--base` is allowed (compare link). A branch with no commits to publish beyond `upstream/<default>` (merge commits and venfork-managed commits are dropped, so a branch carrying only those counts) is `precondition` "Nothing to stage" before the confirm, with the hint `Commit your work on the branch first.`.
+- The PR step: finds the internal PR on the mirror, redacts it (`stripInternalBlocks`, `RedactionError`), runs `gh pr create`, updates an existing PR body unless `--no-update-existing`, writes `shippedBranches[branch]`. When `gh pr create` fails, the Next Steps note says the upstream PR was not opened and gives the compare URL, and the outro `Stage incomplete: finish the PR with \`venfork stage <branch> ...\` again or by hand.` repeats the PR flags the run used (`--draft`, `--base`, `--title`, `--internal-pr`, `--no-update-existing`); only a `--no-pr` run gets the tip to re-run without `--no-pr`.
 
 ## How a user reaches it
 
-`venfork stage <branch>`, `venfork stage branch <name>` (for a branch named `issue` or `branch`), plus `--pr`, `--draft`, `--title <t>`, `--base <b>`, `--internal-pr <n>`, `--no-update-existing`, `--yes`/`-y`, `--no-input`, `--json`. `stage issue` is in `issue.md`.
+`venfork stage <branch>`, `venfork stage branch <name>` (for a branch named `issue` or `branch`), plus `--no-pr`, `--draft`, `--title <t>`, `--base <b>`, `--internal-pr <n>`, `--no-update-existing`, `--yes`/`-y`, `--no-input`, `--json`. `stage issue` is in `issue.md`.
 
 ## How to drive it
 
 ```bash
 git checkout -q -b feat upstream/main && echo f > src/feat.txt && git add . && git commit -qm "feat: add feat"
-venfork stage feat </dev/null 2>&1; echo $?                    # 2, "Add --yes to confirm."; nothing on $VF_PUBLIC
-VENFORK_NONINTERACTIVE=1 venfork stage feat </dev/null 2>&1; echo $?   # 2 as well: it does not confirm
-venfork stage feat --json </dev/null 2>/dev/null; echo $?      # missing-input envelope naming --yes, 2
-venfork stage feat --yes </dev/null >/dev/null 2>&1; echo $?    # 0
-venfork stage feat --yes --json </dev/null 2>/dev/null | jq -r .result.head   # equals vf_tip "$VF_PUBLIC" feat
-vf_yes stage feat >/dev/null 2>&1; echo $?                      # 0 (answers the confirm through a pseudo-TTY)
-A=$(vf_tip "$VF_PUBLIC" feat); vf_yes stage feat >/dev/null 2>&1; vf_tip "$VF_PUBLIC" feat   # differs from $A
+venfork stage feat --no-pr </dev/null 2>&1; echo $?                    # 2, "Add --yes to confirm."; nothing on $VF_PUBLIC
+VENFORK_NONINTERACTIVE=1 venfork stage feat --no-pr </dev/null 2>&1; echo $?   # 2 as well: it does not confirm
+venfork stage feat --no-pr --json </dev/null 2>/dev/null; echo $?      # missing-input envelope naming --yes, 2
+venfork stage feat --no-pr --yes </dev/null >/dev/null 2>&1; echo $?    # 0
+venfork stage feat --no-pr --yes --json </dev/null 2>/dev/null | jq -r .result.head   # equals vf_tip "$VF_PUBLIC" feat
+vf_yes stage feat --no-pr >/dev/null 2>&1; echo $?                      # 0 (answers the confirm through a pseudo-TTY)
+A=$(vf_tip "$VF_PUBLIC" feat); vf_yes stage feat --no-pr >/dev/null 2>&1; vf_tip "$VF_PUBLIC" feat   # differs from $A
 git checkout -q -b leak upstream/main && mkdir -p .github/workflows && echo x > .github/workflows/venfork-sync.yml && git add . && git commit -qm "ci: wf"
-venfork stage leak </dev/null 2>&1 | grep -o "Refusing to stage.*"   # StageLeakError, exit 1
-venfork stage leak --yes --json </dev/null 2>/dev/null | jq -r .error.code   # stage-leak
+venfork stage leak --no-pr </dev/null 2>&1 | grep -o "Refusing to stage.*"   # StageLeakError, exit 1
+venfork stage leak --no-pr --yes --json </dev/null 2>/dev/null | jq -r .error.code   # stage-leak
 git checkout -q -b word upstream/main && echo w > src/w.txt && git add . && git commit -qm "chore: via venfork"
-venfork stage word </dev/null 2>&1 | grep -o "Refusing to publish.*" # MirrorReferenceError
-venfork stage word --yes --json </dev/null 2>/dev/null | jq -r .error.code   # mirror-reference
-venfork stage main </dev/null; venfork stage venfork-config </dev/null; venfork stage nope </dev/null   # all exit 1
-venfork stage feat --pr </dev/null 2>&1 | grep -o "Cannot open an upstream PR.*"   # local upstream is not GitHub
+venfork stage word --no-pr </dev/null 2>&1 | grep -o "Refusing to publish.*" # MirrorReferenceError
+venfork stage word --no-pr --yes --json </dev/null 2>/dev/null | jq -r .error.code   # mirror-reference
+venfork stage main --no-pr --yes </dev/null; venfork stage venfork-config --no-pr </dev/null; venfork stage nope --no-pr </dev/null   # all exit 1
+venfork stage feat --yes </dev/null 2>&1 | grep -o "Cannot open an upstream PR.*"   # the default PR step: local upstream is not GitHub
 ```
 
-- No-public: launch with `--no-public`; `vf_yes stage feat` puts `feat` on `$VF_UPSTREAM`.
-- Hidden prompt: `script -q /dev/null sh -c 'node "$VF_CLI" stage feat 2>/dev/null; echo EXIT=$?' </dev/null` prints `EXIT=2` (macOS `script`; on Linux `script -qec '...' /dev/null`). `$VF_PUBLIC` has no `feat`.
+- No-public: launch with `--no-public`; `vf_yes stage feat --no-pr` puts `feat` on `$VF_UPSTREAM`.
+- Hidden prompt: `script -q /dev/null sh -c 'node "$VF_CLI" stage feat --no-pr 2>/dev/null; echo EXIT=$?' </dev/null` prints `EXIT=2` (macOS `script`; on Linux `script -qec '...' /dev/null`). `$VF_PUBLIC` has no `feat`.
 - Concurrent lease: the lease is read by `ls-remote` right before the push. No CLI drive or test pins the "moved while staging" error.
 
 ## What proves it
@@ -63,6 +65,6 @@ venfork stage feat --pr </dev/null 2>&1 | grep -o "Cannot open an upstream PR.*"
 
 - Every stage rebuilds, so each run pushes a new SHA (`vf_pushes "$VF_PUBLIC" feat` grows by 1). Compare trees, not SHAs.
 - A piped `printf y` does not confirm. Without a TTY the command exits 2 before reading stdin.
-- A TTY on stdin is not enough. At a terminal, `venfork stage feat 2>/dev/null` (or `2>log`) exits 2 naming `--yes` and pushes nothing: stderr is not a TTY, so the prompt would be hidden. `tests/integration/cli.test.ts` ("stage with stderr redirected at a TTY") pins it.
+- A TTY on stdin is not enough. At a terminal, `venfork stage feat --no-pr 2>/dev/null` (or `2>log`) exits 2 naming `--yes` and pushes nothing: stderr is not a TTY, so the prompt would be hidden. `tests/integration/cli.test.ts` ("stage with stderr redirected at a TTY") pins it.
 - The fixture deny-list has the origin path and `venfork` only. `owner/name` and repo-name terms need a GitHub URL: see `tests/integration/stage-gate-content.test.ts`.
-- `--pr` cannot succeed on the fixture. The redaction and PR payload are proven by `tests/unit/redaction.test.ts` and e2e tier 3 only.
+- The PR step cannot succeed on the fixture, so every fixture drive passes `--no-pr` (`tests/unit/docs-drift.test.ts` refuses a verify-venfork stage drive without it); without it stage stops at "Cannot open an upstream PR" before the leak gate runs. The redaction and PR payload are proven by `tests/unit/redaction.test.ts` and e2e tier 3 only.

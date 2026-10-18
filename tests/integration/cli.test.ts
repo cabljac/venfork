@@ -273,7 +273,11 @@ describe('no TTY: fail fast instead of prompting', () => {
       await cutFeatureBranch(fx);
       const publicFork = fx.publicFork ?? '';
 
-      const refused = await runCliWithoutTty(fx.work, ['stage', 'feature']);
+      const refused = await runCliWithoutTty(fx.work, [
+        'stage',
+        'feature',
+        '--no-pr',
+      ]);
       expect(refused.timedOut).toBe(false);
       expect(refused.exitCode).toBe(2);
       expect(refused.stdout).toBe('');
@@ -284,6 +288,7 @@ describe('no TTY: fail fast instead of prompting', () => {
       const staged = await runCliWithoutTty(fx.work, [
         'stage',
         'feature',
+        '--no-pr',
         '--yes',
       ]);
       expect(staged.exitCode).toBe(0);
@@ -308,7 +313,11 @@ describe('no TTY: fail fast instead of prompting', () => {
         path.join(tmp, 'no-such-upstream.git')
       );
 
-      const result = await runCliWithoutTty(fx.work, ['stage', 'feature']);
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'feature',
+        '--no-pr',
+      ]);
 
       expect(result.timedOut).toBe(false);
       expect(result.exitCode).toBe(2);
@@ -468,9 +477,13 @@ describe('no TTY: fail fast instead of prompting', () => {
     try {
       await cutFeatureBranch(fx);
 
-      const result = await runCliWithoutTty(fx.work, ['stage', 'feature'], {
-        VENFORK_NONINTERACTIVE: '1',
-      });
+      const result = await runCliWithoutTty(
+        fx.work,
+        ['stage', 'feature', '--no-pr'],
+        {
+          VENFORK_NONINTERACTIVE: '1',
+        }
+      );
 
       expect(result.exitCode).toBe(2);
       expect(result.stdout).toBe('');
@@ -958,6 +971,150 @@ function outcomeLines(stderr: string): string[] {
   return lines.slice(steps.lastIndexOf(true) + 1);
 }
 
+describe('stage opens the upstream PR by default', () => {
+  test('the confirm names the PR unless --no-pr', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await cutFeatureBranch(fx);
+
+      const withPr = await runCliWithoutTty(fx.work, ['stage', 'feature']);
+      const pushOnly = await runCliWithoutTty(fx.work, [
+        'stage',
+        'feature',
+        '--no-pr',
+      ]);
+
+      expect(withPr.exitCode).toBe(2);
+      expect(withPr.stderr).toContain(
+        '"Push to public fork and open the upstream PR?"'
+      );
+      expect(pushOnly.exitCode).toBe(2);
+      expect(pushOnly.stderr).toContain('"Push to public fork?"');
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('a PR-only flag with --no-pr is a usage error before anything runs', async () => {
+    const result = await runCliWithoutTty(tmp, [
+      'stage',
+      'feature',
+      '--no-pr',
+      '--title',
+      'T',
+      '--json',
+    ]);
+
+    expect(result.exitCode).toBe(2);
+    expect(parseEnvelope(result.stdout)).toMatchObject({
+      ok: false,
+      error: { code: 'usage' },
+    });
+  });
+
+  test('a branch with no commits to publish is a precondition error', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.git(fx.work, 'checkout', '--quiet', '-b', 'empty');
+      const publicFork = fx.publicFork ?? '';
+
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'empty',
+        '--no-pr',
+        '--yes',
+        '--json',
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(parseEnvelope(result.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: 'precondition',
+          message: expect.stringContaining('Nothing to stage'),
+        },
+      });
+      expect(await hasBranch(publicFork, 'empty')).toBe(false);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('a default stage to a non-GitHub upstream fails before the fetch and names --no-pr', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await cutFeatureBranch(fx);
+      const publicFork = fx.publicFork ?? '';
+      const tracked = await fx.sha(fx.work, 'refs/remotes/upstream/main');
+      await fx.commitOnUpstream({ 'later.txt': 'later\n' }, 'feat: later');
+
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'feature',
+        '--yes',
+        '--json',
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(parseEnvelope(result.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: 'precondition',
+          message: expect.stringContaining('Cannot open an upstream PR'),
+          hint: expect.stringContaining('--no-pr'),
+        },
+      });
+      expect(await fx.sha(fx.work, 'refs/remotes/upstream/main')).toBe(tracked);
+      expect(await hasBranch(publicFork, 'feature')).toBe(false);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('a branch whose only extra commit is the managed commit names what stage dropped', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const scheduled = await runCliWithoutTty(fx.work, [
+        'schedule',
+        'set',
+        '0 * * * *',
+        '--json',
+      ]);
+      expect(scheduled.exitCode).toBe(0);
+      await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+      await fx.git(
+        fx.work,
+        'checkout',
+        '--quiet',
+        '-b',
+        'managed-only',
+        'origin/main'
+      );
+
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'managed-only',
+        '--no-pr',
+        '--yes',
+        '--json',
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(parseEnvelope(result.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: 'precondition',
+          message: expect.stringContaining('venfork-managed commits'),
+          hint: expect.stringContaining('Commit your work'),
+        },
+      });
+      expect(await hasBranch(fx.publicFork ?? '', 'managed-only')).toBe(false);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+});
+
 describe('one fixed flag set on every command', () => {
   test('--yes is a no-op on a command that never confirms', async () => {
     const fx = await createMirrorFixture();
@@ -1062,7 +1219,11 @@ describe('one error, one line', () => {
     try {
       await cutFeatureBranch(fx);
 
-      const result = await runCliWithoutTty(fx.work, ['stage', 'feature']);
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'feature',
+        '--no-pr',
+      ]);
 
       expect(result.exitCode).toBe(2);
       expect(outcomeLines(result.stderr)).toEqual([
@@ -1403,6 +1564,7 @@ describe('--json envelope on stdout, no TTY', () => {
       const refused = await runCliWithoutTty(fx.work, [
         'stage',
         'feature',
+        '--no-pr',
         '--json',
       ]);
       expect(refused.timedOut).toBe(false);
@@ -1422,6 +1584,7 @@ describe('--json envelope on stdout, no TTY', () => {
       const staged = await runCliWithoutTty(fx.work, [
         'stage',
         'feature',
+        '--no-pr',
         '--json',
         '--yes',
       ]);
@@ -1670,7 +1833,7 @@ describe('--json envelope on stdout, no TTY', () => {
   for (const args of [
     ['pull', 'pr', '12', '--json'],
     ['sync', '--json'],
-    ['stage', 'feature', '--yes', '--json'],
+    ['stage', 'feature', '--no-pr', '--yes', '--json'],
     ['schedule', 'status', '--json'],
     ['workflows', 'status', '--json'],
     ['preserve', 'list', '--json'],
@@ -1693,7 +1856,7 @@ describe('--json envelope on stdout, no TTY', () => {
   for (const args of [
     ['pull', 'pr', '12'],
     ['sync'],
-    ['stage', 'feature', '--yes'],
+    ['stage', 'feature', '--no-pr', '--yes'],
     ['schedule', 'status'],
     ['workflows', 'status'],
     ['preserve', 'list'],
@@ -1926,6 +2089,7 @@ describe('--json envelope on stdout, no TTY', () => {
       const result = await runCliWithoutTty(fx.work, [
         'stage',
         'main',
+        '--no-pr',
         '--yes',
         '--json',
       ]);
@@ -1963,6 +2127,7 @@ describe('--json envelope on stdout, no TTY', () => {
       const result = await runCliWithoutTty(fx.work, [
         'stage',
         'leaky',
+        '--no-pr',
         '--yes',
         '--json',
       ]);
@@ -2005,6 +2170,7 @@ describe('--json envelope on stdout, no TTY', () => {
       const result = await runCliWithoutTty(fx.work, [
         'stage',
         'named',
+        '--no-pr',
         '--yes',
         '--json',
       ]);

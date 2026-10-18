@@ -68,7 +68,7 @@ Evidence is git state, read from the bare repos:
 - "Sync complete!" prints after a no-op too. Read the spinner lines (`already up to date` vs `Updated`) and the push count.
 - `stage` rebuilds every commit, so the public SHA changes on every stage. Compare trees and subjects, not SHAs.
 - The fixture remotes are local paths. The deny-list then holds the origin path and `venfork`, not `owner/name`.
-- gh-backed paths (`setup`, `clone`, `pull`, `stage --pr`, issues) stop at the stub. Their success paths are proven only by e2e.
+- gh-backed paths (`setup`, `clone`, `pull`, `stage` without `--no-pr`, issues) stop at the stub. Their success paths are proven only by e2e.
 
 ## Clean up
 

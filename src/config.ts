@@ -10,7 +10,7 @@ import { netExec, netFailureReason } from './shared/net.js';
 import { parseRepoPath, shellQuote } from './utils.js';
 
 /**
- * Record kept by `venfork stage --pr` linking an internal review PR (on the
+ * Record kept by `venfork stage` linking an internal review PR (on the
  * private mirror) to the upstream PR it was promoted to.
  */
 export interface ShippedBranch {
@@ -114,7 +114,7 @@ export interface VenforkConfig {
    * — unless upstream now contains the same path, in which case upstream wins.
    */
   preserve?: string[];
-  /** Branch -> upstream PR linkage recorded by `venfork stage --pr`. */
+  /** Branch -> upstream PR linkage recorded by `venfork stage`. */
   shippedBranches?: Record<string, ShippedBranch>;
   /** Branch -> upstream PR tracking recorded by `venfork pull pr`. */
   pulledPrs?: Record<string, PulledPr>;

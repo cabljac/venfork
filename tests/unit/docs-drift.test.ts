@@ -46,6 +46,14 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
+function markdownFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const full = path.join(dir, name);
+    if (statSync(full).isDirectory()) return markdownFiles(full);
+    return full.endsWith('.md') ? [full] : [];
+  });
+}
+
 /** `VENFORK_*` identifiers in src that are code constants, not env vars. */
 const NOT_ENV_VARS = new Set([
   'VENFORK_BOT_EMAIL',
@@ -118,6 +126,48 @@ describe('README matches the CLI contract', () => {
       const body = readmeBody(command);
       for (const flag of new Set(usage.match(/--[a-z][a-z-]*/g) ?? [])) {
         if (!mentions(body, flag)) missing.push(`${command} ${flag}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test('docs never name `--pr` outside the alias sentence', () => {
+    const docFiles = ['README.md', 'CLAUDE.md'];
+    const stray: string[] = [];
+    for (const file of docFiles) {
+      const sentences = read(file).split(/(?<=[.!?])\s+|\n/);
+      for (const sentence of sentences) {
+        if (!mentions(sentence, '--pr')) continue;
+        if (/accepted for one release/.test(sentence)) continue;
+        stray.push(`${file}: ${sentence.trim()}`);
+      }
+    }
+    expect(stray).toEqual([]);
+  });
+
+  test('every verify-venfork stage drive on the fixture passes --no-pr', () => {
+    const files = markdownFiles(
+      path.join(ROOT, '.agents/skills/verify-venfork')
+    );
+    expect(files.length).toBeGreaterThan(0);
+    const missing: string[] = [];
+    for (const file of files) {
+      const lines = readFileSync(file, 'utf8').split('\n');
+      for (const raw of lines) {
+        if (raw.includes('Cannot open an upstream PR')) continue;
+        const line = raw.replace(/\s#\s.*$/, '');
+        for (const m of line.matchAll(
+          /(?:\bvenfork|\bvf_yes|"\$VF_CLI")\s+stage\s+([^\s`;|<>&#)]+)/g
+        )) {
+          const target = m[1] ?? '';
+          if (target === 'issue' || target.startsWith('-')) continue;
+          const rest = line.slice(m.index ?? 0).split(/[;|`]|&&/)[0] ?? '';
+          if (/<[a-z-]+>|\[/.test(rest)) continue;
+          if (rest.trim() === 'venfork stage branch issue') continue;
+          if (!mentions(rest, '--no-pr')) {
+            missing.push(`${path.relative(ROOT, file)}: ${rest.trim()}`);
+          }
+        }
       }
     }
     expect(missing).toEqual([]);

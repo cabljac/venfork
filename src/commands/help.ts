@@ -88,7 +88,7 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'stage',
-    `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]
+    `venfork stage <branch> [--no-pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]
 venfork stage branch <name> [same options]
 venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]
   Push a branch (or an issue) from the mirror outward, to the public fork or upstream
@@ -97,9 +97,12 @@ venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--jso
   Rebuilds the branch as linear history on upstream (merges and venfork-managed
     commits dropped, new SHAs) and refuses commits that carry mirror-only files or
     mention the mirror or venfork in their author, committer or message
-  With --pr, also opens the upstream PR using the internal-review PR's body
+  Then opens the upstream PR using the internal-review PR's body
     (with <!-- venfork:internal -->...<!-- /venfork:internal --> blocks redacted)
   Options:
+  • --no-pr                Push the branch only; --draft, --title, --internal-pr and
+                           --no-update-existing need the PR and are refused with it
+  • --draft                Open the upstream PR as a draft
   • --internal-pr <n>      Pin a specific internal review PR number (skips most-recent-open lookup)
   • --no-update-existing   Do not update an already-open upstream PR body when staging
   • --yes, -y              Push (and open the PR or issue) without the confirm
@@ -225,7 +228,7 @@ git push origin feature/new-thing
 # Still private! Create internal PR for team review
 
 # After team approval, stage for upstream and open the PR in one go
-venfork stage feature/new-thing --pr
+venfork stage feature/new-thing
 # NOW visible on public fork; upstream PR is opened with your internal review body
 
 # Bring a third-party upstream PR in for internal review

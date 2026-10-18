@@ -13,9 +13,9 @@ import type { PromptContext } from './shared/prompt.js';
 export type ParsedStageBranchArgs = {
   kind: 'branch';
   branch: string;
-  /** When true, also open an upstream PR after staging. */
+  /** Open the upstream PR after the push; false only with `--no-pr`. */
   createPr: boolean;
-  /** When true, the upstream PR is opened as a draft. Implies --pr. */
+  /** When true, the upstream PR is opened as a draft. */
   draft: boolean;
   /** Override the upstream PR title; default is the internal PR title. */
   title?: string;
@@ -56,7 +56,7 @@ export type ParsedStageArgs = ParsedStageBranchArgs | ParsedStageIssueArgs;
 
 /** Usage line for `venfork stage <branch>`. */
 export const STAGE_USAGE =
-  'venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]';
+  'venfork stage <branch> [--no-pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]';
 
 /**
  * Parse `venfork stage ...` argv after the `stage` token.
@@ -65,8 +65,10 @@ export const STAGE_USAGE =
  * `branch` must use `stage branch <name>`.
  */
 export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
-  let createPr = false;
+  let prFlag: string | undefined;
+  let noPr = false;
   let draft = false;
+  let titleFlag: string | undefined;
   let title: string | undefined;
   let base: string | undefined;
   let internalPrNumber: number | undefined;
@@ -76,12 +78,15 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   const positional = scanArgs(stageArgs, STAGE_USAGE, (a, i) => {
     if (promptFlags.onOption(a) !== undefined) return 0;
     if (a === '--pr') {
-      createPr = true;
+      prFlag = a;
+      return 0;
+    }
+    if (a === '--no-pr') {
+      noPr = true;
       return 0;
     }
     if (a === '--draft') {
       draft = true;
-      createPr = true;
       return 0;
     }
     if (a === '--no-update-existing') {
@@ -91,6 +96,7 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     if (a === '--title' || a.startsWith('--title=')) {
       const { value, consumed } = consumeValue('--title', stageArgs, i);
       title = value;
+      titleFlag = '--title';
       return consumed;
     }
     if (a === '--base' || a.startsWith('--base=')) {
@@ -118,7 +124,8 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
       );
     }
     const branchOnly = [
-      createPr && '--pr',
+      prFlag,
+      noPr && '--no-pr',
       draft && '--draft',
       base !== undefined && '--base',
       internalPrNumber !== undefined && '--internal-pr',
@@ -155,11 +162,25 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   if (branch === undefined) {
     throw new UsageError(`Missing branch name. Usage: ${STAGE_USAGE}`);
   }
+  if (noPr) {
+    const prOnly = [
+      draft && '--draft',
+      titleFlag,
+      internalPrNumber !== undefined && '--internal-pr',
+      noUpdateExisting && '--no-update-existing',
+      prFlag,
+    ].find((flag): flag is string => typeof flag === 'string');
+    if (prOnly) {
+      throw new UsageError(
+        `${prOnly} needs the upstream PR, so it cannot be combined with --no-pr`
+      );
+    }
+  }
 
   return {
     kind: 'branch',
     branch,
-    createPr,
+    createPr: !noPr,
     draft,
     title,
     base,

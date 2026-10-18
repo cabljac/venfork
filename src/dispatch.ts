@@ -43,8 +43,8 @@ export async function assertInRepository(
  * Whether `venfork <command> <args>` talks to GitHub through gh and must
  * fail fast when gh is not authenticated. `pull` needs gh once its arguments parse, so a usage error
  * is reported first. `stage` needs gh for
- * `stage issue` and when a branch stage opens an upstream PR (`--pr` /
- * `--draft`).
+ * `stage issue` and for a branch stage, which opens the upstream PR unless
+ * `--no-pr`.
  */
 export function requiresGhAuth(command: string, args: string[]): boolean {
   if (ALWAYS_GH.has(command)) return true;

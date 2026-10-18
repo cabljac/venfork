@@ -428,6 +428,12 @@ beforeEach(() => {
   signalHandlers.clear();
   shouldHangOnFork = false;
   mockResponses.clear();
+  // Stage refuses a branch with nothing to publish; give it one commit.
+  mockResponses.set('git log --reverse --format=%s upstream0tip..', {
+    exitCode: 0,
+    stdout: 'feat: staged work',
+    stderr: '',
+  });
   confirmResponse = true; // Reset to true for each test
   promptCancelled = false;
   tempDirCounter = 0;
@@ -2286,6 +2292,103 @@ describe('stageCommand', () => {
     expect(threw).toBe(false);
   });
 
+  test('stageCommand: gh pr create failure returns prAction failed and does not tell the user to drop --no-pr', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'GraphQL: something went wrong',
+    });
+
+    const result = await stageCommand('feature-branch', { createPr: true });
+
+    expect(result.prAction).toBe('failed');
+    const nextSteps = noteCalls
+      .filter((n) => n.title === 'Next Steps')
+      .map((n) => n.message)
+      .join('\n');
+    expect(nextSteps).toContain('upstream PR was not opened');
+    expect(nextSteps).toContain(
+      'https://github.com/up/repo/compare/main...owner:feature-branch?expand=1'
+    );
+    expect(nextSteps).not.toContain('--no-pr');
+  });
+
+  test('stageCommand: a --no-pr run keeps the tip to re-run without --no-pr', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+
+    const result = await stageCommand('feature-branch');
+
+    expect(result.prAction).toBeUndefined();
+    const nextSteps = noteCalls
+      .filter((n) => n.title === 'Next Steps')
+      .map((n) => n.message)
+      .join('\n');
+    expect(nextSteps).toContain('re-run without --no-pr');
+  });
+
   test('--draft passes --draft to gh pr create', async () => {
     confirmResponse = true;
     mockResponses.set('git remote get-url origin', {
@@ -2625,7 +2728,7 @@ describe('stageCommand', () => {
       createPr: true,
       draft: true,
       base: 'main',
-      title: "Fix it's bug",
+      title: "It's ready",
     });
 
     expect(result).toMatchObject({
@@ -2642,22 +2745,22 @@ describe('stageCommand', () => {
     expect(
       String((clack.outro as ReturnType<typeof mock>).mock.calls.at(-1)?.[0])
     ).toBe(
-      "Stage incomplete: finish the PR by hand, or run `venfork stage branch 'feature-branch' --pr --draft --base 'main' --title 'Fix it'\\''s bug'` again."
+      "Stage incomplete: finish the PR by hand, or run `venfork stage branch 'feature-branch' --draft --base 'main' --title 'It'\\''s ready'` again."
     );
   });
 
   test('the stage re-run command keeps every PR flag and quotes values', () => {
     expect(
-      stageRerunCommand('feat/$(x)', {
+      stageRerunCommand('feat/$(x)', true, {
         draft: true,
         internalPrNumber: 12,
         noUpdateExisting: true,
       })
     ).toBe(
-      "venfork stage branch 'feat/$(x)' --pr --draft --internal-pr 12 --no-update-existing"
+      "venfork stage branch 'feat/$(x)' --draft --internal-pr 12 --no-update-existing"
     );
-    expect(stageRerunCommand('branch', {})).toBe(
-      "venfork stage branch 'branch'"
+    expect(stageRerunCommand('branch', false, {})).toBe(
+      "venfork stage branch 'branch' --no-pr"
     );
   });
 
@@ -2714,7 +2817,7 @@ describe('stageCommand', () => {
     ).not.toContain('re-run with --pr');
     expect(
       String((clack.outro as ReturnType<typeof mock>).mock.calls.at(-1)?.[0])
-    ).toContain("`venfork stage branch 'issue' --pr` again");
+    ).toContain("`venfork stage branch 'issue'` again");
   });
 
   test('--pr respects --no-update-existing on already-exists path', async () => {
@@ -4687,6 +4790,32 @@ describe('stageCommand --pr payload', () => {
       ON_STDERR
     );
     expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
+  });
+
+  test('a public fork off github.com fails before any fetch and names --no-pr', async () => {
+    mockPrStage();
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.example.com:owner/repo-fork.git',
+      stderr: '',
+    });
+
+    const error = await stageCommand('feature-branch', {
+      createPr: true,
+    }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(CommandExitError);
+    expect(clack.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "the public remote 'git@github.example.com:owner/repo-fork.git' is not a GitHub repository"
+      ),
+      ON_STDERR
+    );
+    expect(clack.log.error).toHaveBeenCalledWith(
+      expect.stringContaining('Pass --no-pr to push the branch only.'),
+      ON_STDERR
+    );
+    expect(execaCalls.some((cmd) => cmd.includes('fetch'))).toBe(false);
   });
 });
 
