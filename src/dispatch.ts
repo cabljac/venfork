@@ -83,7 +83,10 @@ export type PartialOutcome =
 export function partialFailureExitCode(outcome: PartialOutcome): 0 | 1 {
   switch (outcome.command) {
     case 'stage':
-      return outcome.result.prAction === 'failed' ? 1 : 0;
+      return 'prAction' in outcome.result &&
+        outcome.result.prAction === 'failed'
+        ? 1
+        : 0;
     case 'pull pr':
       return outcome.push && !outcome.result.pushed ? 1 : 0;
     case 'sync':

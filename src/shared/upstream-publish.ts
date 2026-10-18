@@ -1,6 +1,7 @@
 import { $ } from 'execa';
 import { GitHubError } from '../errors.js';
 import { assertNoMirrorReference } from './deny-list.js';
+import { netExec, netFailureReason } from './net.js';
 
 /**
  * Creates a PR on upstream via gh and returns its URL. Scans the title and
@@ -44,6 +45,41 @@ export async function createUpstreamPr(args: {
   throw new GitHubError(
     `Failed to create upstream PR via gh: ${combined.trim() || `exit ${result.exitCode}`}`
   );
+}
+
+/**
+ * Finds the open upstream PR that `gh pr create` would report as "already
+ * exists" for this head and base. Read only. Returns `{ url: null }` when
+ * there is none, or `{ error }` when gh fails.
+ */
+export async function findOpenUpstreamPr(args: {
+  upstreamRepoPath: string;
+  /** Owner where the head branch lives. Same as upstream owner in no-public mode. */
+  headOwner: string;
+  branch: string;
+  base: string;
+  cwd: string;
+}): Promise<{ url: string | null } | { error: string }> {
+  const result = await netExec(args.cwd, {
+    bufferOutput: true,
+  })`gh pr list --repo ${args.upstreamRepoPath} --head ${args.branch} --base ${args.base} --state open --json url,headRepositoryOwner --limit 100`;
+  if (result.exitCode !== 0) {
+    return { error: netFailureReason(result) };
+  }
+  try {
+    const prs = JSON.parse(String(result.stdout)) as Array<{
+      url: string;
+      headRepositoryOwner?: { login?: string };
+    }>;
+    const match = prs.find(
+      (pr) =>
+        pr.headRepositoryOwner?.login?.toLowerCase() ===
+        args.headOwner.toLowerCase()
+    );
+    return { url: match?.url ?? null };
+  } catch {
+    return { error: 'gh pr list did not return JSON' };
+  }
 }
 
 /**

@@ -331,6 +331,7 @@ import {
   PreconditionError,
   SyncDivergenceError,
   UsageError,
+  VenforkError,
 } from '../../src/errors.js';
 
 /** Calls setupCommand with the quiet sync that src/index.ts wires in, unless a test passes its own. */
@@ -2235,6 +2236,231 @@ describe('stageCommand', () => {
     expect(execaCalls.some((cmd) => cmd.includes('--body-file -'))).toBe(true);
   });
 
+  test('dryRun previews the redacted PR body and calls no push, gh pr create or config write', async () => {
+    confirmResponse = false;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          {
+            number: 7,
+            url: 'https://github.com/owner/repo-private/pull/7',
+            title: 'feat: add auth',
+            body: 'Public summary.\n\n<!-- venfork:internal -->client X requires Y<!-- /venfork:internal -->\n\nMore public detail.',
+          },
+        ]),
+        stderr: '',
+      }
+    );
+
+    const result = await stageCommand('feature-branch', {
+      createPr: true,
+      dryRun: true,
+    });
+
+    expect(result).toMatchObject({
+      dryRun: true,
+      branch: 'feature-branch',
+      target: 'public',
+      base: 'main',
+      prTitle: 'feat: add auth',
+      prBody: 'Public summary.\n\n\n\nMore public detail.',
+      internalPrUrl: 'https://github.com/owner/repo-private/pull/7',
+    });
+    expect(result).not.toHaveProperty('prAction');
+    expect(JSON.stringify(result)).not.toContain('client X');
+    expect(
+      noteCalls.some(
+        (n) =>
+          n.title === 'Upstream PR body preview' &&
+          n.message.includes('More public detail.')
+      )
+    ).toBe(true);
+    expect(execaCalls.some((cmd) => cmd.includes('gh pr create'))).toBe(false);
+    expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
+    expect(
+      execaCalls.some(
+        (cmd) =>
+          cmd.includes('git checkout --orphan venfork-config') ||
+          cmd.includes('venfork-config:venfork-config')
+      )
+    ).toBe(false);
+  });
+
+  describe('dryRun with an open upstream PR', () => {
+    const mockDryRunRepo = () => {
+      confirmResponse = false;
+      mockResponses.set('git remote get-url origin', {
+        exitCode: 0,
+        stdout: 'git@github.com:owner/repo-private.git',
+        stderr: '',
+      });
+      mockResponses.set('git remote get-url public', {
+        exitCode: 0,
+        stdout: 'git@github.com:owner/repo-fork.git',
+        stderr: '',
+      });
+      mockResponses.set('git remote get-url upstream', {
+        exitCode: 0,
+        stdout: 'git@github.com:up/repo.git',
+        stderr: '',
+      });
+      mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          version: '1',
+          publicForkUrl: 'git@github.com:owner/repo-fork.git',
+          upstreamUrl: 'git@github.com:up/repo.git',
+        }),
+        stderr: '',
+      });
+      mockResponses.set(
+        'gh pr list --repo owner/repo-private --head feature-branch',
+        {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            {
+              number: 7,
+              url: 'https://github.com/owner/repo-private/pull/7',
+              title: 'feat: add auth',
+              body: 'Public summary.',
+            },
+          ]),
+          stderr: '',
+        }
+      );
+      mockResponses.set('gh pr list --repo up/repo --head feature-branch', {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          {
+            url: 'https://github.com/up/repo/pull/50',
+            headRepositoryOwner: { login: 'someone-else' },
+          },
+          {
+            url: 'https://github.com/up/repo/pull/123',
+            headRepositoryOwner: { login: 'owner' },
+          },
+        ]),
+        stderr: '',
+      });
+    };
+
+    test('reports the PR to update and no title, since a re-stage keeps the title', async () => {
+      mockDryRunRepo();
+
+      const result = await stageCommand('feature-branch', {
+        createPr: true,
+        dryRun: true,
+        title: 'New title',
+      });
+
+      expect(result).toMatchObject({
+        dryRun: true,
+        existingPrUrl: 'https://github.com/up/repo/pull/123',
+        prBody: 'Public summary.',
+      });
+      expect(result).not.toHaveProperty('prTitle');
+      const details = noteCalls.find((n) => n.title === 'Staging Details');
+      expect(details?.message).toContain(
+        'https://github.com/up/repo/pull/123 is already open; its title stays'
+      );
+      expect(details?.message).not.toContain('New title');
+      expect(
+        execaCalls.some(
+          (cmd) =>
+            cmd.includes('gh pr list --repo up/repo --head feature-branch') &&
+            cmd.includes('--base main') &&
+            cmd.includes('--state open')
+        )
+      ).toBe(true);
+      expect(execaCalls.some((cmd) => cmd.includes('gh pr edit'))).toBe(false);
+    });
+
+    test('with noUpdateExisting reports neither title nor body', async () => {
+      mockDryRunRepo();
+
+      const result = await stageCommand('feature-branch', {
+        createPr: true,
+        dryRun: true,
+        noUpdateExisting: true,
+      });
+
+      expect(result).toMatchObject({
+        existingPrUrl: 'https://github.com/up/repo/pull/123',
+      });
+      expect(result).not.toHaveProperty('prTitle');
+      expect(result).not.toHaveProperty('prBody');
+      expect(
+        noteCalls.some((n) => n.title === 'Upstream PR body preview')
+      ).toBe(false);
+      expect(
+        noteCalls.find((n) => n.title === 'Staging Details')?.message
+      ).toContain('left unchanged (--no-update-existing)');
+    });
+
+    test('ignores an open PR from another head owner', async () => {
+      mockDryRunRepo();
+      mockResponses.set('gh pr list --repo up/repo --head feature-branch', {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          {
+            url: 'https://github.com/up/repo/pull/50',
+            headRepositoryOwner: { login: 'someone-else' },
+          },
+        ]),
+        stderr: '',
+      });
+
+      const result = await stageCommand('feature-branch', {
+        createPr: true,
+        dryRun: true,
+      });
+
+      expect(result).toMatchObject({ prTitle: 'feat: add auth' });
+      expect(result).not.toHaveProperty('existingPrUrl');
+    });
+
+    test('a --title naming the mirror still fails the dry run with mirror-reference', async () => {
+      mockDryRunRepo();
+
+      const err = await stageCommand('feature-branch', {
+        createPr: true,
+        dryRun: true,
+        title: 'feat: port from owner/repo-private',
+      }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(CommandExitError);
+      const cause = (err as CommandExitError).cause;
+      expect(cause).toBeInstanceOf(VenforkError);
+      expect((cause as VenforkError).code).toBe('mirror-reference');
+    });
+  });
+
   test('--pr surfaces "already exists" without throwing', async () => {
     confirmResponse = true;
     mockResponses.set('git remote get-url origin', {
@@ -2340,7 +2566,7 @@ describe('stageCommand', () => {
 
     const result = await stageCommand('feature-branch', { createPr: true });
 
-    expect(result.prAction).toBe('failed');
+    expect(result).toMatchObject({ prAction: 'failed' });
     const nextSteps = noteCalls
       .filter((n) => n.title === 'Next Steps')
       .map((n) => n.message)
@@ -2381,7 +2607,7 @@ describe('stageCommand', () => {
 
     const result = await stageCommand('feature-branch');
 
-    expect(result.prAction).toBeUndefined();
+    expect(result).not.toHaveProperty('prAction');
     const nextSteps = noteCalls
       .filter((n) => n.title === 'Next Steps')
       .map((n) => n.message)
