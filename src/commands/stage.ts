@@ -8,8 +8,6 @@ import {
   BranchNotFoundError,
   CommandExitError,
   GitError,
-  isEntryReported,
-  MissingInputError,
   PreconditionError,
   RemoteNotFoundError,
   UsageError,
@@ -56,6 +54,9 @@ import { STAGE_USAGE } from '../stage-args.js';
 import { parseRepoPath } from '../utils.js';
 
 const CONFIG_BRANCH = 'venfork-config';
+
+/** Starts the missing-input error of the push confirm. */
+const NOT_STAGED = 'Not staged.';
 
 /**
  * Files a merge commit resolves *differently* from both parents.
@@ -342,7 +343,8 @@ async function planStaging(
 
   assertCanConfirm(
     stageConfirmMessage(noPublic, consent.createPr),
-    consent.prompt
+    consent.prompt,
+    NOT_STAGED
   );
   await netFetch('upstream', cwd);
   await netFetch('origin', cwd);
@@ -777,6 +779,7 @@ export async function stageCommand(
       {
         message: stageConfirmMessage(plan.noPublic, createPr),
         initialValue: false,
+        stopped: NOT_STAGED,
       },
       options.prompt
     );
@@ -905,14 +908,6 @@ export async function stageCommand(
       ...(internalPr ? { internalPrUrl: internalPr.url } : {}),
     };
   } catch (error) {
-    if (error instanceof MissingInputError) {
-      s.cancel('Not staged: the push confirm needs --yes');
-      throw error;
-    }
-    if (isEntryReported(error)) throw error;
-    s.stop('Error occurred');
-    p.log.error(error instanceof Error ? error.message : String(error));
-    p.outro('❌ Stage failed');
-    throw new CommandExitError(1, error);
+    throw p.reportFailure(error, s);
   }
 }

@@ -45,7 +45,7 @@ For changes that cross commands, use `leak-invariants.md` and `multi-command-jou
 - Read the full output, or `grep` for the one line that is the evidence (`2>&1 | grep 'already up to date'`). Do not use `tail`: the last line is the outro or a blank line, and it hides the message that proves the result.
 - stdout carries only results (`--version`, requested help, the `--json` envelope). Progress, prompts, reports and errors go to stderr, so grep them with `2>&1`. Piped stderr is plain `prefix message` lines (`info:`, `ok:`, `step:`, `done:`, `warn:`, `error:`) with no ANSI escapes.
 - Commands without a prompt: use `</dev/null`.
-- venfork prompts only when stdin and stderr are both a TTY. With `</dev/null`, or `2>file` at a terminal, a needed answer exits 2 and names the flag (`Pass --yes.`). At a terminal, a prompt whose input ends exits 130 with `Cancelled: input ended at a prompt`.
+- venfork prompts only when stdin and stderr are both a TTY. With `</dev/null`, or `2>file` at a terminal, a needed answer exits 2 and names the flag (`Add --yes to confirm.`). At a terminal, a prompt whose input ends exits 130 with `Cancelled: input ended at a prompt`.
 - With `--json`, read `error.code`, not the message. `references/features/README.md` lists the codes and exit codes.
 - A piped `y` does not answer a clack confirm. Use `vf_yes`.
 

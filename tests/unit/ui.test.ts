@@ -5,7 +5,20 @@ import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 mock.module('@clack/prompts', quietPrompts);
 
 import * as clack from '@clack/prompts';
-import { createUi, isRich, log, note, stdoutUi } from '../../src/shared/ui.js';
+import {
+  CommandExitError,
+  MissingInputError,
+  UsageError,
+} from '../../src/errors.js';
+import {
+  createUi,
+  isRich,
+  log,
+  note,
+  reportFailure,
+  stderrUi,
+  stdoutUi,
+} from '../../src/shared/ui.js';
 
 function fakeStream(isTTY: boolean) {
   const chunks: string[] = [];
@@ -165,6 +178,82 @@ describe('streams', () => {
     } finally {
       out.mockRestore();
       process.stdout.isTTY = tty;
+    }
+  });
+});
+
+describe('reportFailure', () => {
+  function richSpinner() {
+    const spin = {
+      start: mock(() => {}),
+      stop: mock(() => {}),
+      cancel: mock(() => {}),
+      error: mock(() => {}),
+      message: mock(() => {}),
+      clear: mock(() => {}),
+      isCancelled: false,
+    };
+    const factory = spyOn(clack, 'spinner').mockReturnValue(spin);
+    return { spin, restore: () => factory.mockRestore() };
+  }
+
+  test('clears a rich spinner and prints the error once, with no spinner outcome', () => {
+    const { spin, restore } = richSpinner();
+    try {
+      const s = stderrUi.spinner();
+      s.start('Fetching from upstream');
+      const cause = new Error('fetch failed');
+
+      const result = reportFailure(cause, s);
+
+      expect(spin.clear).toHaveBeenCalledTimes(1);
+      expect(spin.stop).not.toHaveBeenCalled();
+      expect(spin.error).not.toHaveBeenCalled();
+      expect(spin.cancel).not.toHaveBeenCalled();
+      expect(clack.log.error).toHaveBeenCalledTimes(1);
+      expect(clack.log.error).toHaveBeenCalledWith('fetch failed', ON_STDERR);
+      expect(result).toBeInstanceOf(CommandExitError);
+      expect((result as CommandExitError).exitCode).toBe(1);
+      expect((result as CommandExitError).cause).toBe(cause);
+    } finally {
+      restore();
+    }
+  });
+
+  test('returns an error src/index.ts reports unprinted, and still clears the spinner', () => {
+    const { spin, restore } = richSpinner();
+    try {
+      const s = stderrUi.spinner();
+      const errors = [
+        new CommandExitError(130),
+        new UsageError('Unknown option: --bogus'),
+        new MissingInputError('--yes', 'Push to public fork?'),
+      ];
+      for (const error of errors) {
+        expect(reportFailure(error, s)).toBe(error);
+      }
+      expect(spin.clear).toHaveBeenCalledTimes(errors.length);
+      expect(clack.log.error).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  test('prints exactly one error: line in plain mode', () => {
+    const tty = process.stderr.isTTY;
+    process.stderr.isTTY = false;
+    const err = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const s = stderrUi.spinner();
+      s.start('Fetching from upstream');
+      err.mockClear();
+
+      reportFailure('not an Error', s);
+
+      expect(err.mock.calls).toEqual([['error: not an Error\n']]);
+    } finally {
+      err.mockRestore();
+      process.stderr.isTTY = tty;
     }
   });
 });

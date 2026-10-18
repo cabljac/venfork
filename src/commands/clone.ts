@@ -3,11 +3,7 @@ import path from 'node:path';
 import { $ } from 'execa';
 import { checkCloneInputs, githubRepoInput } from '../clone-args.js';
 import { fetchVenforkConfig } from '../config.js';
-import {
-  CommandExitError,
-  isEntryReported,
-  PreconditionError,
-} from '../errors.js';
+import { CommandExitError, PreconditionError } from '../errors.js';
 import { ghGitProtocol } from '../git.js';
 import { netExec, runNetOp } from '../shared/net.js';
 import { isCancel, type PromptContext, promptText } from '../shared/prompt.js';
@@ -115,9 +111,7 @@ export async function cloneCommand(
       const error = new PreconditionError(
         `Directory '${vendorRepoName}' already exists.`
       );
-      p.log.error(error.message);
-      p.outro('❌ Clone failed');
-      throw new CommandExitError(1, error);
+      throw p.reportFailure(error);
     }
 
     // Step 2: Clone vendor repository (gh respects git_protocol and accepts owner/repo)
@@ -338,11 +332,7 @@ export async function cloneCommand(
     };
   } catch (error) {
     if (clonedDir) await removePartialClone(clonedDir);
-    if (isEntryReported(error)) throw error;
-    s.stop('Error occurred');
-    p.log.error(error instanceof Error ? error.message : String(error));
-    p.outro('❌ Clone failed');
-    throw new CommandExitError(1, error);
+    throw p.reportFailure(error, s);
   }
 }
 

@@ -263,7 +263,7 @@ describe('no TTY: fail fast instead of prompting', () => {
     expect(result.exitCode).toBe(2);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('Continue with personal account?');
-    expect(result.stderr).toContain('Pass --yes.');
+    expect(result.stderr).toContain('Add --yes to confirm.');
   });
 
   test('stage without --yes exits 2 naming --yes and pushes nothing; with --yes it pushes', async () => {
@@ -277,7 +277,7 @@ describe('no TTY: fail fast instead of prompting', () => {
       expect(refused.exitCode).toBe(2);
       expect(refused.stdout).toBe('');
       expect(refused.stderr).toContain('Push to public fork?');
-      expect(refused.stderr).toContain('Pass --yes.');
+      expect(refused.stderr).toContain('Add --yes to confirm.');
       expect(await hasBranch(publicFork, 'feature')).toBe(false);
 
       const staged = await runCliWithoutTty(fx.work, [
@@ -312,11 +312,9 @@ describe('no TTY: fail fast instead of prompting', () => {
       expect(result.timedOut).toBe(false);
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain('Push to public fork?');
-      expect(result.stderr).toContain('Pass --yes.');
+      expect(result.stderr).toContain('Add --yes to confirm.');
       expect(result.stderr).not.toContain('git fetch upstream failed');
-      expect(result.stderr).toContain(
-        'cancelled: Not staged: the push confirm needs --yes'
-      );
+      expect(result.stderr).not.toContain('cancelled:');
     } finally {
       await fx.cleanup();
     }
@@ -357,7 +355,7 @@ describe('no TTY: fail fast instead of prompting', () => {
       expect(result.exitCode).toBe(2);
       expect(result.stdout).toBe('');
       expect(result.stderr).toContain('Open the issue on client/project?');
-      expect(result.stderr).toContain('Pass --yes.');
+      expect(result.stderr).toContain('Add --yes to confirm.');
       const calls = await readFile(ghLog, 'utf8').catch(() => '');
       expect(calls).not.toContain('issue view');
       expect(calls).not.toContain('issue create');
@@ -454,7 +452,9 @@ describe('no TTY: fail fast instead of prompting', () => {
         })`python3 -c ${PTY_STDERR_FILE_SCRIPT} node ${entry} stage feature`;
 
         expect(result.stdout.trim().split('\n').at(-1)).toBe('EXIT=2');
-        expect(await readFile(errFile, 'utf8')).toContain('Pass --yes.');
+        expect(await readFile(errFile, 'utf8')).toContain(
+          'Add --yes to confirm.'
+        );
         expect(await hasBranch(fx.publicFork ?? '', 'feature')).toBe(false);
       } finally {
         await fx.cleanup();
@@ -473,7 +473,7 @@ describe('no TTY: fail fast instead of prompting', () => {
 
       expect(result.exitCode).toBe(2);
       expect(result.stdout).toBe('');
-      expect(result.stderr).toContain('Pass --yes.');
+      expect(result.stderr).toContain('Add --yes to confirm.');
       expect(await hasBranch(fx.publicFork ?? '', 'feature')).toBe(false);
     } finally {
       await fx.cleanup();
@@ -916,6 +916,93 @@ describe('doctor --json output', () => {
   });
 });
 
+/**
+ * The non-empty stderr lines after the last `step:` progress line, or all
+ * of them when no step printed.
+ */
+function outcomeLines(stderr: string): string[] {
+  const lines = stderr.split('\n').filter((line) => line !== '');
+  const steps = lines.map((line) => line.startsWith('step: '));
+  return lines.slice(steps.lastIndexOf(true) + 1);
+}
+
+describe('one error, one line', () => {
+  test('a failed stage prints only its error line', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'nope',
+        '--yes',
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(outcomeLines(result.stderr)).toEqual([
+        "error: Branch 'nope' does not exist",
+      ]);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('a failed preserve add prints only its error line', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const result = await runCliWithoutTty(fx.work, [
+        'preserve',
+        'add',
+        'missing.txt',
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe(
+        "🧷 Venfork Preserve\nerror: Cannot preserve 'missing.txt': it does not exist on origin/main. Commit the file to origin/main first."
+      );
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('a stage confirm without a TTY is one error line that names --yes', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await cutFeatureBranch(fx);
+
+      const result = await runCliWithoutTty(fx.work, ['stage', 'feature']);
+
+      expect(result.exitCode).toBe(2);
+      expect(outcomeLines(result.stderr)).toEqual([
+        'error: Not staged. "Push to public fork?" needs an answer and venfork cannot prompt here. Add --yes to confirm.',
+      ]);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('every failure line uses one prefix', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await cutFeatureBranch(fx);
+
+      const failures = [
+        await runCliWithoutTty(fx.work, ['stage', 'feature']),
+        await runCliWithoutTty(fx.work, ['stage', 'nope', '--yes']),
+        await runCliWithoutTty(fx.work, ['bogus']),
+        await runCliWithoutTty(tmp, ['sync']),
+      ];
+
+      for (const result of failures) {
+        expect(result.exitCode).not.toBe(0);
+        const lines = outcomeLines(result.stderr);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toStartWith('error: ');
+      }
+    } finally {
+      await fx.cleanup();
+    }
+  });
+});
+
 describe('output streams', () => {
   test('sync sends progress to stderr as plain lines and leaves stdout empty', async () => {
     const fx = await createMirrorFixture();
@@ -1288,7 +1375,7 @@ describe('--json envelope on stdout, no TTY', () => {
       const result = await runCliWithoutTty(tmp, args);
 
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain('Error: ');
+      expect(result.stderr).toStartWith('error: ');
       expect(parseEnvelope(result.stdout)).toEqual({
         schemaVersion: 1,
         ok: false,
@@ -1315,7 +1402,7 @@ describe('--json envelope on stdout, no TTY', () => {
         error: { code: 'not-in-repository', message: expect.any(String) },
       });
       expect(result.stderr).toBe(
-        'Error: Not in a git repository. Run this command from inside a git repository.'
+        'error: Not in a git repository. Run this command from inside a git repository.'
       );
     });
   }
@@ -1334,7 +1421,7 @@ describe('--json envelope on stdout, no TTY', () => {
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toBe('');
       expect(result.stderr).toBe(
-        'Error: Not in a git repository. Run this command from inside a git repository.'
+        'error: Not in a git repository. Run this command from inside a git repository.'
       );
     });
   }

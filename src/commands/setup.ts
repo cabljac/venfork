@@ -8,7 +8,6 @@ import {
   CommandExitError,
   ConfigError,
   GitHubError,
-  isEntryReported,
   PreconditionError,
 } from '../errors.js';
 import {
@@ -555,12 +554,9 @@ Upstream: ${config.upstreamUrl} (read-only)`,
   try {
     return await Promise.race([interrupted, steps()]);
   } catch (error) {
-    if (isEntryReported(error)) throw error;
-    s.stop('Error occurred');
-    p.log.error(error instanceof Error ? error.message : String(error));
-    p.outro('❌ Setup failed');
+    const failure = p.reportFailure(error, s);
     await cleanup();
-    throw new CommandExitError(1, error);
+    throw failure;
   } finally {
     // Ensure cleanup and remove signal handlers
     await cleanup();
