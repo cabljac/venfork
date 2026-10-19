@@ -26,15 +26,15 @@ venfork preserve add docs/INTERNAL.md </dev/null >/dev/null 2>&1; venfork sync <
 git -C "$VF_PUBLIC" ls-tree -r --name-only main | grep -c -e venfork-sync -e INTERNAL     # 0: public is upstream
 git fetch -q origin
 git checkout -q -b c1 origin/main && cp docs/INTERNAL.md src/notes.md && git add . && git commit -qm "docs: notes"
-venfork stage c1 </dev/null 2>&1 | grep -o "Refusing to stage.*"          # content of docs/INTERNAL.md
-venfork stage c1 --yes --json </dev/null 2>/dev/null | jq -r .error.code   # stage-leak
+venfork stage c1 --no-pr --yes </dev/null 2>&1 | grep -o "Refusing to stage.*"   # content of docs/INTERNAL.md
+venfork stage c1 --no-pr --yes --json </dev/null 2>/dev/null | jq -r .error.code   # stage-leak
 git checkout -q -b c2 upstream/main && mkdir -p .venfork && echo '{}' > .venfork/x.json && git add . && git commit -qm "chore: x"
-venfork stage c2 </dev/null 2>&1 | grep -o "Refusing to stage.*"          # mirror-only path .venfork/x.json
+venfork stage c2 --no-pr --yes </dev/null 2>&1 | grep -o "Refusing to stage.*"   # mirror-only path .venfork/x.json
 git checkout -q -b c3 upstream/main && echo r > src/r.txt && git add . && git commit -qm "see $VF_ORIGIN"
-venfork stage c3 </dev/null 2>&1 | grep -o "Refusing to publish.*"        # message contains the origin path
-venfork stage c3 --yes --json </dev/null 2>/dev/null | jq -r .error.code   # mirror-reference
+venfork stage c3 --no-pr --yes </dev/null 2>&1 | grep -o "Refusing to publish.*"   # message contains the origin path
+venfork stage c3 --no-pr --yes --json </dev/null 2>/dev/null | jq -r .error.code   # mirror-reference
 git checkout -q -b c4 origin/main && echo c > src/c.txt && git add . && git commit -qm "feat: c"
-vf_yes stage c4 >/dev/null 2>&1                                              # cut from origin/main, carries the managed commit
+vf_yes stage c4 --no-pr >/dev/null 2>&1                                     # cut from origin/main, carries the managed commit
 git -C "$VF_PUBLIC" ls-tree -r --name-only c4 | grep -c -e venfork-sync -e INTERNAL   # 0: managed commit dropped
 git -C "$VF_PUBLIC" log --format='%an%n%cn%n%B' main..c4 | grep -ci -e venfork -e "$VF_ORIGIN"   # 0
 for b in c1 c2 c3; do git -C "$VF_PUBLIC" rev-parse -q --verify "refs/heads/$b" || echo "$b absent"; done

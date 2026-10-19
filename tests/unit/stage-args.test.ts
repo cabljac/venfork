@@ -12,16 +12,16 @@ function parseStageCliArgs(args: string[]): ParsedStageBranchArgs {
 }
 
 describe('parseStageCliArgs', () => {
-  test('parses positional branch with no flags', () => {
+  test('parses positional branch with no flags: the PR is opened by default', () => {
     const parsed = parseStageCliArgs(['feat/auth']);
     expect(parsed.branch).toBe('feat/auth');
-    expect(parsed.createPr).toBe(false);
+    expect(parsed.createPr).toBe(true);
     expect(parsed.draft).toBe(false);
     expect(parsed.title).toBeUndefined();
     expect(parsed.base).toBeUndefined();
   });
 
-  test('--pr opts in to upstream PR creation', () => {
+  test('--pr is still accepted and changes nothing', () => {
     const parsed = parseStageCliArgs(['feat/auth', '--pr']);
     expect(parsed.branch).toBe('feat/auth');
     expect(parsed.createPr).toBe(true);
@@ -188,9 +188,37 @@ describe('parseStageCliArgs issue', () => {
   });
 });
 
+describe('parseStageCliArgs --no-pr', () => {
+  test('--no-pr pushes the branch only', () => {
+    expect(parseStageCliArgs(['feat', '--no-pr']).createPr).toBe(false);
+  });
+
+  test('--base still applies with --no-pr: it sets the compare link', () => {
+    expect(parseStageCliArgs(['feat', '--no-pr', '--base', 'dev']).base).toBe(
+      'dev'
+    );
+  });
+
+  const prOnly: string[][] = [
+    ['--draft'],
+    ['--title', 'T'],
+    ['--internal-pr', '3'],
+    ['--no-update-existing'],
+    ['--pr'],
+  ];
+  for (const flags of prOnly) {
+    test(`refuses ${flags[0]} with --no-pr`, () => {
+      expect(() => parseStageCliArgs(['feat', '--no-pr', ...flags])).toThrow(
+        `${flags[0]} needs the upstream PR, so it cannot be combined with --no-pr`
+      );
+    });
+  }
+});
+
 describe('parseStageCliArgs issue rejects branch-only flags', () => {
   const cases: string[][] = [
     ['--pr'],
+    ['--no-pr'],
     ['--draft'],
     ['--base', 'develop'],
     ['--internal-pr', '3'],

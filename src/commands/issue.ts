@@ -126,7 +126,7 @@ function issueUsage(action: 'stage' | 'pull' | undefined): string {
  * Issue command: stage an internal issue to upstream, or pull an upstream
  * issue into the mirror for internal triage. Body translation uses the same
  * `<!-- venfork:internal -->...<!-- /venfork:internal -->` markers as
- * `stage --pr`. No comment sync — the linkage is one-shot.
+ * `stage <branch>`. No comment sync: the linkage is one-shot.
  * @returns The opened issue, for `--json`.
  */
 export async function issueCommand(

@@ -88,12 +88,12 @@ git push origin feature/new-thing
 # Still private! Create internal PR for team review
 
 # 3. Stage for upstream (after internal approval)
-venfork stage feature/new-thing --pr
+venfork stage feature/new-thing
 # NOW visible on public fork — and the upstream PR is opened for you,
 # carrying your internal review body (with <!-- venfork:internal --> blocks redacted).
 
-# Or just stage and open the PR yourself later:
-venfork stage feature/new-thing
+# Or just push the branch and open the PR yourself later:
+venfork stage feature/new-thing --no-pr
 ```
 
 ```bash
@@ -115,7 +115,7 @@ Creates the complete vendor workflow setup (with `--json`, setup never prompts a
 
 **`--fork-name`** sets the **public fork’s repository name** under your chosen owner/org (passed through to `gh repo fork --fork-name`). Use this when **upstream already lives under the same org** you pass to `--org`: GitHub cannot create a second repo with the same name, so the fork must use a different name (e.g. `my-lib-public` while upstream is `my-lib`).
 
-**`--no-public`** skips the public-fork hop entirely. Only `origin` (private mirror) and `upstream` are configured; `venfork stage` later pushes branches **directly to upstream** and `--pr` opens an intra-upstream PR. Use this when you **own the upstream** repo (no client to hide work from) — it removes a redundant fork-and-stage round-trip. Mutually exclusive with `--fork-name`.
+**`--no-public`** skips the public-fork hop entirely. Only `origin` (private mirror) and `upstream` are configured; `venfork stage` later pushes branches **directly to upstream** and opens an intra-upstream PR (unless `--no-pr`). Use this when you **own the upstream** repo (no client to hide work from): it removes a redundant fork-and-stage round-trip. Mutually exclusive with `--fork-name`.
 
 **What it creates:**
 - **Private mirror** (`yourname/project-private` or `org/project-private`) - For internal work
@@ -267,9 +267,9 @@ venfork sync develop   # Sync develop branch with upstream/develop
 - Workflow allow/block entries match file basenames exactly (no glob patterns)
 - A preserved file that upstream adds is replaced by upstream's version. If upstream later deletes that path again, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork preserve remove <path>` to let it go
 
-### `venfork stage <branch> [--pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]`
+### `venfork stage <branch> [--no-pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]`
 
-Push a branch to the public fork, making it visible and ready for PR to upstream. `venfork stage branch <name>` is the explicit form of the same command; use it for a branch named `issue` or `branch`. With `--pr`, also opens the upstream PR for you using your internal review PR's body. With `--json`, stage never prompts and prints one JSON envelope on stdout (see [JSON output](#json-output)).
+Push a branch to the public fork, making it visible and ready for PR to upstream. `venfork stage branch <name>` is the explicit form of the same command; use it for a branch named `issue` or `branch`. It also opens the upstream PR for you using your internal review PR's body, unless you pass `--no-pr`. With `--json`, stage never prompts and prints one JSON envelope on stdout (see [JSON output](#json-output)).
 
 **⚠️ Important:** This is when your work becomes visible to the client!
 
@@ -277,35 +277,37 @@ Push a branch to the public fork, making it visible and ready for PR to upstream
 - `branch` - Branch name to stage
 
 **Flags:**
-- `--pr` - Also open an upstream PR after staging. Looks up your internal-review PR on the private mirror and copies its description (with redacted blocks stripped — see below) into the upstream PR.
-- `--draft` - Open the upstream PR as a draft. Implies `--pr`.
+- By default stage also opens the upstream PR. It looks up your internal-review PR on the private mirror and copies its description (with redacted blocks stripped).
+- `--no-pr` - Push the branch only and print the compare link. `--draft`, `--title`, `--internal-pr` and `--no-update-existing` need the PR, so they are usage errors with `--no-pr`; `--base` still sets the compare link. `--pr` is still accepted for one release and changes nothing.
+- `--draft` - Open the upstream PR as a draft.
+- A branch with no commits to publish beyond upstream's default branch is refused (`precondition`, "Nothing to stage"). Merge commits and venfork-managed commits do not count: stage drops them.
 - `--title <text>` - Override the upstream PR title (default: the internal PR title, or the branch name if no internal PR was found).
 - `--base <branch>` - Override the upstream base branch (default: upstream's default branch).
 - `--internal-pr <n>` - Pin a specific internal-review PR number (skips the most-recent-open lookup). Useful when multiple PRs target the same branch.
-- `--no-update-existing` - Do not update an already-open upstream PR body when staging. By default, if an upstream PR for the branch already exists, `venfork stage --pr` refreshes its body with the latest translated content.
-- `--yes`, `-y` - Answer the "Push to public fork?" (or "Push to upstream?") confirm with yes. Required when venfork cannot prompt.
+- `--no-update-existing` - Do not update an already-open upstream PR body when staging. By default, if an upstream PR for the branch already exists, `venfork stage` refreshes its body with the latest translated content.
+- `--yes`, `-y` - Answer the "Push to public fork and open the upstream PR?" (no-public: "Push to upstream and open the PR?") confirm with yes. With `--no-pr` the confirm is "Push to public fork?" (or "Push to upstream?"). Required when venfork cannot prompt.
 - `--no-input` - Never prompt. Without `--yes`, the confirm exits 2 and nothing is pushed. See [Non-interactive use](#non-interactive-use).
 
 **Examples:**
 ```bash
-# Stage only — same as before
-venfork stage feature-auth
+# Push only, no PR
+venfork stage feature-auth --no-pr
 
 # Stage and open the upstream PR using the internal review body
-venfork stage feature-auth --pr
+venfork stage feature-auth
 
 # Open as draft
 venfork stage feature-auth --draft
 
 # Override title or base
-venfork stage feature-auth --pr --title "Add OAuth"
-venfork stage feature-auth --pr --base develop
+venfork stage feature-auth --title "Add OAuth"
+venfork stage feature-auth --base develop
 
 # From a script or CI: confirm up front
-venfork stage feature-auth --pr --yes
+venfork stage feature-auth --yes
 ```
 
-**What it does (without `--pr`):**
+**What it does (with `--no-pr`, and before the PR):**
 1. Refuses branches that are not upstream work: upstream's default branch, anything that is not a local branch (tags, remote-tracking refs), `venfork-config`, and a branch with no history in common with upstream. Like sync, it also refuses while the preserve list holds entries venfork no longer accepts, and names the `venfork preserve remove` command for each.
 2. Fetches upstream and origin, then rebuilds the branch as a linear history on `upstream/<default>`: every non-merge commit is cherry-picked in order and venfork-managed commits are dropped. Merge commits never ship (a merge with a manual conflict resolution is refused, since dropping it would lose work). The rebuilt commits get new SHAs even when the branch was already based on upstream.
 3. Checks every rebuilt commit before anything is pushed and refuses the branch when a commit:
@@ -314,10 +316,10 @@ venfork stage feature-auth --pr --yes
    - adds a text file that is a near copy of a preserved file, the managed workflow or the venfork config: the same text after the byte order mark, UTF-16, line endings, case, invisible characters and whitespace are normalized, or a text that shares more than half of the mirror file's lines of 20 or more characters (at least three such lines; lines upstream's own version of that path also has do not count). This catches a changed letter, a prepended line or a CRLF conversion. It does not catch a copy that is gzip-compressed, base64-encoded, UTF-32 encoded or otherwise re-encoded, nor a rewrite that shares few lines. Mirror files over 1 MiB are only matched by exact content.
    - adds or changes a file whose content contains origin's URL, origin's `owner/name`, origin's repo name after a host (`github.com/<owner>/<name>`, `git@<host>:<owner>/<name>`, `ssh://` or `https://` URLs; a bare `<owner>/<name>` with another owner, such as a package path, passes in file content), or that is a JSON object shaped like a venfork config (a URL-valued `upstreamUrl` plus a URL-valued `publicForkUrl`, `"mode": "no-public"`, or any of the keys `preserve`, `schedule`, `shippedBranches`, `pulledPrs`, `shippedIssues` and `pulledIssues`; with `VENFORK_ALLOW_SELF_REFERENCE=1`, only when its `upstreamUrl` or `publicForkUrl` names this mirror's upstream or public fork, or one of those link maps is not empty), or whose file name contains one of those terms. Text is read as UTF-8, or as UTF-16 when it starts with a byte order mark, and searched for every term. Every file, text or binary, is also searched byte by byte for origin's URL and `owner/name` encoded as UTF-8, UTF-16LE and UTF-16BE (ignoring ASCII case), whatever byte order mark or NUL bytes it has. Compressed content (gzip, zip and other archives) and UTF-32 text are not decoded, so a mirror reference inside them is not found. A file over 100 MB cannot be checked and is refused. The bare word `venfork` is allowed in file content, so docs can mention the tool. Marker-shaped text (`venfork:internal`, with any spacing or invisible characters) is refused in file content, author, committer and message, even with `VENFORK_ALLOW_SELF_REFERENCE=1`.
    - was authored or committed by the venfork bot.
-   - has an author, committer or message that contains origin's URL, origin's `owner/name`, origin's GitHub Pages address (`<owner>.github.io/<name>`), origin's repo name as a whole word (when it has at least six characters and differs from upstream's; `<name>-public`, `my-<name>` and `<name>.ts` pass, but a plain `<name>` or `<name>#12` does not) or the word `venfork`. Text is percent-decoded before matching, so `acme%2Fwidget-private` is found. For an origin on another host, such as GitHub Enterprise, `owner/name` is read from any `host[:/]owner/name` URL. The same terms apply to the branch name and, with `--pr`, to the PR title and body (this includes `<!-- venfork:internal -->` markers).
+   - has an author, committer or message that contains origin's URL, origin's `owner/name`, origin's GitHub Pages address (`<owner>.github.io/<name>`), origin's repo name as a whole word (when it has at least six characters and differs from upstream's; `<name>-public`, `my-<name>` and `<name>.ts` pass, but a plain `<name>` or `<name>#12` does not) or the word `venfork`. Text is percent-decoded before matching, so `acme%2Fwidget-private` is found. For an origin on another host, such as GitHub Enterprise, `owner/name` is read from any `host[:/]owner/name` URL. The same terms apply to the branch name and, unless `--no-pr`, to the PR title and body (this includes `<!-- venfork:internal -->` markers).
 
    Path matching ignores case. A preserve entry that is a directory on origin's default branch, on your local default branch or anywhere in the mirror history the check reads (possible in an old config) is refused as an invalid entry, with the `venfork preserve remove '<entry>'` command to run. The branch name goes through the same term check before anything is fetched.
-4. Shows the target, the branch, every commit subject and every file that any published commit adds or changes, then asks for confirmation. A file that a later commit deletes is listed as "removed later in the branch, still in history", because the public history still holds it. When commit messages, or with `--pr` the upstream PR title or body, contain `#N`, it warns that those numbers will resolve against upstream.
+4. Shows the target, the branch, every commit subject and every file that any published commit adds or changes, then asks for confirmation. A file that a later commit deletes is listed as "removed later in the branch, still in history", because the public history still holds it. When commit messages, or (unless `--no-pr`) the upstream PR title or body, contain `#N`, it warns that those numbers will resolve against upstream.
 5. Pushes the rebuilt head with `--force-with-lease` and `--no-follow-tags`, so no local tag goes with it.
 6. Provides a compare URL so you can open the PR yourself.
 
@@ -325,7 +327,7 @@ Commit messages, author names and author emails are published as they are. Keep 
 
 To use venfork on a project whose upstream legitimately mentions venfork, set `VENFORK_ALLOW_SELF_REFERENCE=1`. It relaxes only the bare word `venfork`. URL, owner and repo name terms still apply, and text shaped like a marker (`venfork:internal` in any wrapper, such as `[venfork:internal]`) is still refused in PR titles and bodies. An HTML comment that only mentions the tool (`<!-- uses venfork -->`) passes, but one that reads like a broken marker (`<!-- venfork:intenral -->`, `<!-- venfork internal -->`) is refused.
 
-**What `--pr` adds:**
+**What the PR step adds:**
 1. Looks up the most recent PR on the private mirror with `--head <branch>` (open first, then most recent of any state).
 2. Renders the upstream PR body by stripping any `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks. With no internal PR, the body lists the published commit subjects with standalone `#N` references and `(#N)` groups removed (`#N` inside a word or URL is kept). The title and body are then refused if they still contain `venfork`, origin's URL or origin's `owner/name`. The private mirror stays invisible to upstream: no back-link to the internal review and no hint that one exists. The internal PR URL is recorded only in your mirror config (step 5).
 3. Shows you the translated body **before** confirming, so you can catch redaction mistakes before they go public.
@@ -346,7 +348,7 @@ Internal note: Client X explicitly asked us to use Auth0 instead of Keycloak (se
 The implementation follows the spec at https://example.com/oauth.
 ```
 
-`venfork stage --pr` strips all content enclosed by these markers before posting upstream. The upstream PR shows only the public summary; the internal context stays inside the redacted block on the private mirror, where only your team can see it.
+`venfork stage` strips all content enclosed by these markers before posting upstream. The upstream PR shows only the public summary; the internal context stays inside the redacted block on the private mirror, where only your team can see it.
 
 A comment that mentions venfork but is not a well-formed marker (for example a typo such as `venfork:intenral`), an unmatched close marker, or any `venfork` left in the text after stripping stops the stage before anything is pushed. An unmatched open marker drops everything after it. If you forget to add markers around other internal context, it is sent upstream, so review the preview prompt before confirming.
 
@@ -395,9 +397,9 @@ In that case it refetches `pull/<n>/head` from upstream and force-with-lease pus
 
 ### `venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]` and `venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]`
 
-Move *issue* context between the private mirror and upstream. The command names follow the direction: `stage` goes outward (mirror to upstream), `pull` comes inward (upstream to mirror). The shape matches `stage --pr` and `pull pr`, but for issues instead of PRs. With `--json`, both never prompt and print one JSON envelope on stdout (see [JSON output](#json-output)).
+Move *issue* context between the private mirror and upstream. The command names follow the direction: `stage` goes outward (mirror to upstream), `pull` comes inward (upstream to mirror). The shape matches `stage <branch>` and `pull pr`, but for issues instead of PRs. With `--json`, both never prompt and print one JSON envelope on stdout (see [JSON output](#json-output)).
 
-- `stage issue <internal-#>` - read an internal triage issue from the mirror, redact `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks (same convention as `stage --pr`), and open the upstream counterpart via `gh issue create`.
+- `stage issue <internal-#>` - read an internal triage issue from the mirror, redact `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks (same convention as `stage <branch>`), and open the upstream counterpart via `gh issue create`.
 - `pull issue <upstream-#>` - read an upstream issue **and its comments**, create a parallel internal issue on the mirror titled `[upstream #N] <original title>` so the team can triage it without leaving the private space. The upstream comment thread is snapshotted into the mirror issue body under an "Upstream comments" section.
 
 A branch named `issue` or `branch` cannot use the bare `venfork stage <name>` form. Run `venfork stage branch issue` instead.
@@ -651,7 +653,7 @@ Any command line that contains `--json` before any `--` gets the envelope, whate
 
 - `sync` on the default branch: `{ "kind": "default-branch", "status": "pushed" | "up-to-date", "branch", "upstreamTip", "origin": { "tip", "pushed" }, "public"?: { "tip", "pushed" } }`. `public` is absent in no-public mode. `status` is `pushed` when origin or public moved.
 - `sync <branch>` on a pulled upstream PR: `{ "kind": "pulled-pr", "status": "pushed" | "up-to-date" | "push-failed", "branch", "prNumber", "head" }`. `push-failed` means the local branch moved but origin did not; the run exits 1, with or without `--json`.
-- `stage <branch>`: `{ "branch", "head", "target": "public" | "upstream", "compareUrl", "prAction"?, "prUrl"?, "internalPrUrl"? }`. `head` is the rebuilt commit that was pushed. `prAction` is present only with `--pr`: `created`, `updated` (an open PR's body was refreshed), `unchanged` (an open PR was left as is) or `failed` (the push worked, the PR could not be opened or its body could not be updated; the run exits 1).
+- `stage <branch>`: `{ "branch", "head", "target": "public" | "upstream", "compareUrl", "prAction"?, "prUrl"?, "internalPrUrl"? }`. `head` is the rebuilt commit that was pushed. `prAction` is present unless `--no-pr`: `created`, `updated` (an open PR's body was refreshed), `unchanged` (an open PR was left as is) or `failed` (the push worked, the PR could not be opened or its body could not be updated; the run exits 1).
 - `stage issue` and `pull issue`: `{ "number", "url", "source": { "number", "url" } }`. `number` and `url` are the issue venfork opened; `source` is the issue it was made from.
 - `pull pr`: `{ "branch", "head", "prNumber", "prUrl", "pushed" }`. `pushed` is false with `--no-push` or when the push to origin failed; a failed push exits 1.
 - `doctor`: `{ "checks": [{ "id", "ok": true | false | "skipped", "detail", "fix"? }], "links": { "shippedBranches", "pulledPrs", "shippedIssues", "pulledIssues" } | null, "healthy" }`. `healthy` is false when any check failed. Doctor that ran is `ok: true` even when a check failed; it then exits 1.
@@ -663,7 +665,7 @@ Any command line that contains `--json` before any `--` gets the envelope, whate
 
 ```bash
 venfork sync --json | jq -r '.result.status'
-venfork stage feat/auth --pr --yes --json | jq -r '.result.prUrl'
+venfork stage feat/auth --yes --json | jq -r '.result.prUrl'
 ```
 
 ## Non-interactive use
@@ -686,7 +688,7 @@ When venfork cannot prompt:
 
 ```bash
 # In CI: never prompt, and confirm the push explicitly
-venfork stage feat/auth --pr --yes --no-input
+venfork stage feat/auth --yes --no-input
 ```
 
 **Exit codes:**
@@ -717,7 +719,7 @@ venfork clone acme/project-private --no-input --json
 cd project-private
 venfork doctor --json | jq '.result.checks[] | select(.id == "transport")'
 venfork sync --json
-venfork stage feat/auth --pr --yes --json
+venfork stage feat/auth --yes --json
 ```
 
 You do not need `gh auth setup-git`. Every git fetch, push and ls-remote that venfork runs adds `-c credential.https://github.com.helper= -c credential.https://github.com.helper=!gh auth git-credential`. For `https://github.com`, gh is then the only credential helper in venfork's git calls: the helpers in your git config are not asked, and git never stores a gh token in them (a stored copy would go stale when gh refreshes its token). Your own helpers keep working for every other host and for git commands you run yourself. The helper applies only to `https://github.com` URLs, never to other hosts or local paths. When gh is missing or not authenticated, git fails at once with `terminal prompts disabled` and never waits on a prompt. `venfork doctor` shows the result in its `transport` check.
@@ -772,7 +774,7 @@ venfork setup git@github.com:client/project.git
 Set `VENFORK_NONINTERACTIVE=1` to make venfork never prompt, as if every command got `--no-input`. It does **not** answer confirms: a confirm without `--yes` exits 2. Pass `--yes` to give consent. See [Non-interactive use](#non-interactive-use).
 
 ```bash
-VENFORK_NONINTERACTIVE=1 venfork stage feat/auth --pr --yes
+VENFORK_NONINTERACTIVE=1 venfork stage feat/auth --yes
 ```
 
 ### `VENFORK_GIT_TIMEOUT`
@@ -795,7 +797,7 @@ The generated workflow also reads the `VENFORK_PUSH_TOKEN` secret (or, with `sch
 
 ### Concurrency
 
-Commands that mutate `venfork-config` (`stage --pr`, `pull pr`, `stage issue`, `pull issue`, and `sync upstream-pr/<n>`) push to the orphan config branch with `--force-with-lease=venfork-config:<read-sha>`, leasing against the exact SHA the command read its starting state from.
+Commands that mutate `venfork-config` (`stage`, `pull pr`, `stage issue`, `pull issue`, and `sync upstream-pr/<n>`) push to the orphan config branch with `--force-with-lease=venfork-config:<read-sha>`, leasing against the exact SHA the command read its starting state from.
 
 When two venfork commands race the config update, the losing one's push is rejected with a "stale info" error. **venfork auto-handles this**: it re-reads the freshly-updated config (now including the winning run's changes), re-applies its own patch on top, and pushes again with the new lease SHA. Up to 3 retries before giving up.
 

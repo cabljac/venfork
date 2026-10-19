@@ -267,13 +267,21 @@ function stageConfirmMessage(noPublic: boolean, createPr: boolean): string {
     : 'Push to public fork?';
 }
 
+function notGitHubForPr(remote: string): PreconditionError {
+  return new PreconditionError(
+    `Cannot open an upstream PR: ${remote} is not a GitHub repository.`,
+    { hint: 'Pass --no-pr to push the branch only.' }
+  );
+}
+
 /**
  * Resolves remotes and the default branch for a staging push, fetches
  * upstream and origin, and refuses branches that are not upstream work:
  * `venfork-config`, anything that is not a local branch, upstream's default
  * branch, and a branch with no history in common with upstream. Also
  * refuses while the config holds invalid preserve entries, as sync does.
- * Refuses before the fetch when the push confirm could not be answered.
+ * Refuses before the fetch when the push confirm could not be answered,
+ * and when the PR is wanted but upstream or the push remote is not on GitHub.
  * Throws `BranchNotFoundError` / `RemoteNotFoundError` so callers can render
  * a single failure path.
  */
@@ -346,6 +354,12 @@ async function planStaging(
     consent.prompt,
     NOT_STAGED
   );
+  if (consent.createPr && !upstreamRepoPath) {
+    throw notGitHubForPr(`the upstream remote '${upstreamUrl}'`);
+  }
+  if (consent.createPr && !pushRepoPath) {
+    throw notGitHubForPr(`the ${pushRemote} remote '${pushUrl}'`);
+  }
   await netFetch('upstream', cwd);
   await netFetch('origin', cwd);
   const upstreamDefaultBranch = await getDefaultBranch('upstream');
@@ -545,7 +559,7 @@ async function pushStagedHead(
 }
 
 export interface StageOptions {
-  /** When true, also open an upstream PR after staging. */
+  /** When true, also open an upstream PR after staging. The CLI sets it unless `--no-pr`. */
   createPr?: boolean;
   /** When true, the upstream PR is opened as a draft. Implies createPr. */
   draft?: boolean;
@@ -574,10 +588,11 @@ export interface StageOptions {
  */
 export function stageRerunCommand(
   branch: string,
+  createPr: boolean,
   options: StageOptions
 ): string {
   const parts = ['venfork stage branch', shellQuote(branch)];
-  if (options.createPr || options.draft) parts.push('--pr');
+  if (!createPr) parts.push('--no-pr');
   if (options.draft) parts.push('--draft');
   if (options.base !== undefined)
     parts.push('--base', shellQuote(options.base));
@@ -601,13 +616,13 @@ export interface StageResult {
   /** GitHub compare URL for opening the PR by hand. */
   compareUrl: string;
   /**
-   * Only with `--pr`: `created`, `updated` (an open PR's body was
+   * Absent with `--no-pr`: `created`, `updated` (an open PR's body was
    * refreshed), `unchanged` (an open PR was left as is) or `failed`
    * (the push succeeded, the PR could not be opened or its body could
    * not be updated).
    */
   prAction?: 'created' | 'updated' | 'unchanged' | 'failed';
-  /** The upstream PR, when `--pr` opened or found one. */
+  /** The upstream PR, when stage opened or found one. */
   prUrl?: string;
   /** The internal review PR the upstream body came from. */
   internalPrUrl?: string;
@@ -665,7 +680,7 @@ function buildUpstreamPrPayload(
 /**
  * Stage command: Push branch to public fork for PR to upstream.
  *
- * With `--pr` (createPr), additionally opens the upstream PR using the
+ * With `createPr` (the CLI default; `--no-pr` turns it off), also opens the upstream PR using the
  * internal-review PR's body as a starting point (with `<!-- venfork:internal
  * -->...<!-- /venfork:internal -->` blocks stripped) and records the
  * internal/upstream PR linkage in `venfork-config.shippedBranches`.
@@ -692,24 +707,18 @@ export async function stageCommand(
       prompt: options.prompt,
     });
     s.stop('Branch verified');
-    if (createPr) {
-      if (!plan.upstreamRepoPath) {
-        throw new PreconditionError(
-          `Cannot open an upstream PR: the upstream remote '${plan.upstreamUrl}' is not a GitHub repository.`
-        );
-      }
-      if (!plan.pushRepoPath) {
-        throw new PreconditionError(
-          `Cannot open an upstream PR: the ${plan.pushRemote} remote '${plan.pushUrl}' is not a GitHub repository.`
-        );
-      }
-    }
 
     s.start('Rebuilding the branch on upstream and checking every commit');
     const prepared = await prepareStage(plan, repoDir);
+    if (prepared.subjects.length === 0) {
+      throw new PreconditionError(
+        `Nothing to stage: '${plan.branch}' has no commits to publish beyond upstream/${plan.upstreamDefaultBranch} (merge commits and venfork-managed commits are dropped).`,
+        { hint: 'Commit your work on the branch first.' }
+      );
+    }
     s.stop(`Prepared ${prepared.subjects.length} commit(s) to publish`);
 
-    // Look up the internal PR up-front when --pr is set so the user sees the
+    // Look up the internal PR up-front when the PR is wanted so the user sees the
     // translated body in the confirm prompt before anything is published.
     let internalPr: InternalPrInfo | null = null;
     let translatedBody = '';
@@ -902,7 +911,7 @@ export async function stageCommand(
     }
 
     // Use the resolved baseBranch (which respects --base) so the compare URL
-    // points at the same base the user asked for, even if --pr wasn't set
+    // points at the same base the user asked for, even with --no-pr
     // or `gh pr create` failed earlier. In no-public mode the head and base
     // live in the same repo, so gh's compare URL accepts a bare branch name.
     const prUrl = plan.noPublic
@@ -915,21 +924,25 @@ export async function stageCommand(
         lines.push(`Internal review: ${internalPr.url}`);
       }
       p.note(lines.join('\n'), 'Next Steps');
-    } else {
-      const tip = createPr
-        ? ''
-        : '\n\n(Tip: re-run with --pr to open it automatically.)';
+    } else if (createPr) {
       p.note(
         plan.noPublic
-          ? `Your branch is now on upstream!\n\nCreate a pull request:\n  ${prUrl}${tip}`
-          : `Your branch is now on the public fork!\n\nCreate a pull request to upstream:\n  ${prUrl}${tip}`,
+          ? `Your branch is now on upstream, but the upstream PR was not opened.\n\nOpen it by hand:\n  ${prUrl}`
+          : `Your branch is now on the public fork, but the upstream PR was not opened.\n\nOpen it by hand:\n  ${prUrl}`,
+        'Next Steps'
+      );
+    } else {
+      p.note(
+        plan.noPublic
+          ? `Your branch is now on upstream!\n\nCreate a pull request:\n  ${prUrl}\n\n(Tip: re-run without --no-pr to open it automatically.)`
+          : `Your branch is now on the public fork!\n\nCreate a pull request to upstream:\n  ${prUrl}\n\n(Tip: re-run without --no-pr to open it automatically.)`,
         'Next Steps'
       );
     }
 
     p.outro(
       prAction === 'failed'
-        ? `Stage incomplete: finish the PR by hand, or run \`${stageRerunCommand(plan.branch, options)}\` again.`
+        ? `Stage incomplete: finish the PR by hand, or run \`${stageRerunCommand(plan.branch, createPr, options)}\` again.`
         : '✨ Stage complete!'
     );
     return {
