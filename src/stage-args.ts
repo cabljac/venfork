@@ -1,4 +1,4 @@
-import type { ApprovalLevel } from './config.js';
+import { type ApprovalLevel, approvalWord } from './config.js';
 import { UsageError } from './errors.js';
 import {
   consumeValue,
@@ -76,13 +76,6 @@ export type ParsedStageArgs =
 /** Usage line for `venfork stage approval`. */
 export const STAGE_APPROVAL_USAGE =
   'venfork stage approval [on|reviewed|two-person|off] [--yes] [--no-input] [--json]';
-
-const APPROVAL_WORDS: Record<string, ApprovalLevel> = {
-  on: 'two-person',
-  'two-person': 'two-person',
-  reviewed: 'reviewed',
-  off: 'off',
-};
 
 /** Usage line for `venfork stage <branch>`. */
 export const STAGE_USAGE =
@@ -177,7 +170,7 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     if (rest.length > 1)
       throw unexpectedArgument(rest[1], STAGE_APPROVAL_USAGE);
     const word = rest[0];
-    const level = word === undefined ? undefined : APPROVAL_WORDS[word];
+    const level = word === undefined ? undefined : approvalWord(word);
     if (word !== undefined && level === undefined) {
       throw new UsageError(
         `Unknown approval level '${word}'. Usage: ${STAGE_APPROVAL_USAGE}. To stage a branch named 'approval', run \`venfork stage branch approval\`.`

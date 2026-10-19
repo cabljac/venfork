@@ -104,6 +104,7 @@ function parseCommand(
           parsed.publicForkRepoName,
           {
             noPublic: parsed.noPublic,
+            approval: parsed.approval,
             syncMirror: setupSyncMirror(),
             prompt: parsed.prompt,
             organizationFromEnv: parsed.organizationFromEnv,
@@ -135,7 +136,7 @@ function parseCommand(
     case 'stage': {
       const parsed = parseStageCliArgs(args);
       if (parsed.kind === 'approval') {
-        return resultOf(() => approvalCommand(parsed.level));
+        return resultOf(() => approvalCommand(parsed.level, parsed.prompt));
       }
       if (parsed.kind === 'issue') {
         return resultOf(() =>

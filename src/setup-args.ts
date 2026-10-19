@@ -1,3 +1,4 @@
+import { type ApprovalLevel, approvalWord } from './config.js';
 import { UsageError } from './errors.js';
 import {
   consumeValue,
@@ -17,6 +18,8 @@ export type ParsedSetupArgs = {
   organizationFromEnv?: boolean;
   publicForkRepoName?: string;
   noPublic: boolean;
+  /** `--approval <level>` for a new mirror; absent means `two-person`. */
+  approval?: ApprovalLevel;
   /** `--yes` / `--no-input`. */
   prompt: PromptContext;
   /** Print the `--json` envelope on stdout. */
@@ -24,7 +27,7 @@ export type ParsedSetupArgs = {
 };
 
 const USAGE =
-  'venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--own-upstream] [--yes] [--no-input] [--json]';
+  'venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--own-upstream] [--approval <level>] [--yes] [--no-input] [--json]';
 
 /**
  * Parse `venfork setup ...` argv after the `setup` token.
@@ -33,6 +36,7 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
   let organization: string | undefined;
   let publicForkRepoName: string | undefined;
   let noPublic = false;
+  let approval: ApprovalLevel | undefined;
   const promptFlags = parsePromptFlags({ allowJson: true });
 
   const positional = scanArgs(setupArgs, USAGE, (a, i) => {
@@ -51,6 +55,16 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
     if (a === '--own-upstream') {
       noPublic = true;
       return 0;
+    }
+    if (a === '--approval' || a.startsWith('--approval=')) {
+      const { value, consumed } = consumeValue('--approval', setupArgs, i);
+      approval = approvalWord(value);
+      if (approval === undefined) {
+        throw new UsageError(
+          `--approval must be on, two-person, reviewed or off, not '${value}'`
+        );
+      }
+      return consumed;
     }
     return undefined;
   });
@@ -72,6 +86,7 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
       : {}),
     publicForkRepoName: trimmedForkName,
     noPublic,
+    ...(approval ? { approval } : {}),
     prompt: promptFlags.prompt,
     json: promptFlags.json,
   };

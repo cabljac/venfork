@@ -3,6 +3,10 @@ import path from 'node:path';
 import { $ } from 'execa';
 import { APPROVAL_LEVELS, type ApprovalLevel } from '../config.js';
 
+/** The warning printed whenever the approval gate is off. */
+export const APPROVAL_OFF_WARNING =
+  'The approval gate is off: venfork stage can publish any branch, from any person or agent with access to this clone, without a review. Turn it back on with `venfork stage approval on`.';
+
 /** A lowered approval level that a person must confirm before stage goes on. */
 export interface Weakening {
   /** The level this clone last saw. */

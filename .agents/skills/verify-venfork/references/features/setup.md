@@ -13,6 +13,7 @@ tests:
 
 ## What exists
 
+- A new mirror's venfork-config gets `approval: two-person`, or the `--approval <on|two-person|reviewed|off>` level (`on` is `two-person`; `off` writes no field and prints the off warning). Setup records the level in the new clone's memory (`<git common dir>/venfork/approval.json`), unless that memory already holds a higher level. An existing config keeps its level; a different `--approval` then only warns and names `venfork stage approval`. Mirrors from older versions have no field, which is `off`.
 - Needs gh auth first (`AuthenticationError`: "GitHub CLI is not authenticated. Please run: gh auth login").
 - Prompts for the upstream when it is missing and for the mirror name when it is missing (default `<repo>-private`). With no `--org` and no `VENFORK_ORG`, asks "Continue with personal account?"; `--yes` answers it. `--org` set to your own gh username (any case) is consent: the repos go under the personal account (no `gh repo fork --org`) and the confirm is skipped, with or without a TTY. `VENFORK_ORG` set to your username is not consent: the repos still go under the personal account, but the confirm runs (exit 2 naming `--yes` when it cannot prompt).
 - Never prompts unless stdin and stderr are both a TTY (prompts render on stderr), and never with `CI` set (not `false`/`0`), with `VENFORK_NONINTERACTIVE=1` or with `--no-input`. Then a missing mirror name becomes `<repo>-private` (logged on stderr), a missing upstream exits 2 naming "the <upstream> argument", and the personal-account confirm without `--yes` exits 2 naming `--yes` (`MissingInputError`). stdout stays empty.
@@ -26,7 +27,7 @@ tests:
 
 ## How a user reaches it
 
-`venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--own-upstream] [--yes] [--no-input] [--json]`. `<upstream>` is a GitHub URL or `owner/repo`.
+`venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--own-upstream] [--approval <level>] [--yes] [--no-input] [--json]`. `<upstream>` is a GitHub URL or `owner/repo`.
 
 ## How to drive it
 

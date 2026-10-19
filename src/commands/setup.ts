@@ -3,7 +3,12 @@ import { rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { $ } from 'execa';
-import { createConfigBranch, readVenforkConfigFromRepo } from '../config.js';
+import {
+  type ApprovalLevel,
+  approvalOf,
+  createConfigBranch,
+  readVenforkConfigFromRepo,
+} from '../config.js';
 import {
   CommandExitError,
   ConfigError,
@@ -17,6 +22,11 @@ import {
   ghRepoIsForkOf,
 } from '../git.js';
 import { checkSetupInputs } from '../setup-args.js';
+import {
+  APPROVAL_OFF_WARNING,
+  findWeakening,
+  rememberApproval,
+} from '../shared/approval-guard.js';
 import { pathExists } from '../shared/fs.js';
 import { claimInterrupts } from '../shared/interrupt.js';
 import { netExec, runNetOp, seedMirrorInChunks } from '../shared/net.js';
@@ -147,6 +157,7 @@ function setupRepo(repo: string): SetupRepo {
  * @param options.noPublic - Skip the public-fork hop entirely. Only `origin` (private mirror) and `upstream` are configured; `stage` later pushes branches directly to `upstream`. Mutually exclusive with `publicForkRepoName`.
  * @param options.prompt - `--yes` answers the personal-account confirm; `--no-input` never prompts.
  * @param options.organizationFromEnv - `organization` came from `VENFORK_ORG`, so naming your own account there is not consent.
+ * @param options.approval - Approval level of a new mirror's config; `two-person` when absent. An existing config keeps its level.
  * @param options.syncMirror - Quietly syncs the local clone at `cwd` when the fork or mirror already existed on GitHub.
  * @returns The repos and the local checkout, for `--json`.
  */
@@ -157,6 +168,7 @@ export async function setupCommand(
   publicForkRepoName: string | undefined,
   options: {
     noPublic?: boolean;
+    approval?: ApprovalLevel;
     syncMirror: (cwd: string) => Promise<void>;
     prompt?: PromptContext;
     organizationFromEnv?: boolean;
@@ -484,6 +496,8 @@ export async function setupCommand(
     // Step 7: Venfork config branch, checked before any remote is rewired
     s.start('Creating venfork configuration');
     const mode = noPublic ? 'no-public' : 'standard';
+    const requestedApproval = options.approval ?? 'two-person';
+    let approval: ApprovalLevel;
     const protocol = await ghGitProtocol();
     const upstreamRemoteUrl = githubUrlForProtocol(
       config.upstreamUrl,
@@ -496,8 +510,10 @@ export async function setupCommand(
         repoDir,
         publicRemoteUrl ?? null,
         upstreamRemoteUrl,
-        mode
+        mode,
+        requestedApproval
       );
+      approval = requestedApproval;
       s.stop('Venfork configuration created');
     } catch (err) {
       if (!(err instanceof ConfigError && err.reason === 'exists')) throw err;
@@ -506,8 +522,18 @@ export async function setupCommand(
         upstreamUrl: upstreamRemoteUrl,
         publicForkUrl: publicRemoteUrl ?? null,
       });
+      approval = approvalOf(await readVenforkConfigFromRepo(repoDir));
       s.stop('Keeping the existing venfork configuration');
+      if (options.approval !== undefined && options.approval !== approval) {
+        p.log.warn(
+          `This mirror already has approval ${approval}; --approval ${options.approval} applies only to a new mirror. Run \`venfork stage approval ${options.approval}\` to change it.`
+        );
+      }
     }
+    if (!(await findWeakening(approval, repoDir))) {
+      await rememberApproval(repoDir, approval);
+    }
+    if (approval === 'off') p.log.warn(APPROVAL_OFF_WARNING);
 
     // Step 8: Configure remotes
     s.start('Configuring git remotes');
@@ -544,7 +570,15 @@ Upstream: ${config.upstreamUrl} (read-only)`,
   cd ${repoDir}
   git checkout -b feature-branch
   # Do your work, push to origin (private)
-  # When ready to share: venfork stage feature-branch`
+${
+  approval === 'off'
+    ? '  # When ready to share: venfork stage feature-branch'
+    : `  # Open a PR on the mirror and get it approved, then: venfork stage feature-branch${
+        approval === 'two-person'
+          ? '\n  # Two-person: the approver is neither the PR author nor you.\n  # Your agent opens the PRs and you approve them? venfork stage approval reviewed'
+          : ''
+      }`
+}`
     );
     return {
       mode,

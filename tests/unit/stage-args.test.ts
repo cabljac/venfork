@@ -367,6 +367,9 @@ describe('parseStageCliArgs: stage approval', () => {
     expect(() => parseStageUnion(['approval', 'maybe'])).toThrow(
       'venfork stage branch approval'
     );
+    expect(() => parseStageUnion(['approval', 'constructor'])).toThrow(
+      "Unknown approval level 'constructor'"
+    );
   });
 
   test('branch flags and a second level are usage errors', () => {

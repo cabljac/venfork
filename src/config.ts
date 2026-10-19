@@ -175,6 +175,18 @@ export const APPROVAL_LEVELS: readonly ApprovalLevel[] = [
   'two-person',
 ];
 
+const APPROVAL_WORDS: Readonly<Record<string, ApprovalLevel>> = {
+  on: 'two-person',
+  'two-person': 'two-person',
+  reviewed: 'reviewed',
+  off: 'off',
+};
+
+/** The level a CLI word names (`on` is `two-person`), or undefined for any other word. */
+export function approvalWord(word: string): ApprovalLevel | undefined {
+  return Object.hasOwn(APPROVAL_WORDS, word) ? APPROVAL_WORDS[word] : undefined;
+}
+
 /**
  * The approval level of `config`; `'off'` when it is unset.
  *
@@ -272,11 +284,13 @@ export async function createConfigBranch(
   repoDir: string,
   publicForkUrl: string | null,
   upstreamUrl: string,
-  mode: 'standard' | 'no-public' = 'standard'
+  mode: 'standard' | 'no-public' = 'standard',
+  approval: ApprovalLevel = 'off'
 ): Promise<void> {
   const config: VenforkConfig = {
     version: '1',
     upstreamUrl,
+    ...(approval === 'off' ? {} : { approval }),
   };
   if (mode === 'no-public') {
     config.mode = 'no-public';

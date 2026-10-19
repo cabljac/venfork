@@ -354,6 +354,7 @@ function setupCommand(
   publicForkRepoName?: string,
   options: {
     noPublic?: boolean;
+    approval?: 'off' | 'reviewed' | 'two-person';
     syncMirror?: (cwd: string) => Promise<void>;
     prompt?: { yes: boolean; noInput: boolean };
     organizationFromEnv?: boolean;
@@ -6157,5 +6158,63 @@ describe('prompt cancel exits 130', () => {
       );
       expect(pushedOrCreated()).toEqual([]);
     });
+  });
+});
+
+describe('setupCommand approval level', () => {
+  async function writtenConfig(
+    options: { approval?: 'off' | 'reviewed' | 'two-person' } = {}
+  ): Promise<Record<string, unknown>> {
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 2,
+      stdout: '',
+      stderr: "error: No such remote 'upstream'",
+    });
+    try {
+      await setupCommand(
+        'git@github.com:test/repo.git',
+        'test-vendor',
+        'acme',
+        undefined,
+        options
+      );
+    } catch {
+      // Expected in mocked env
+    }
+    const write = writeFileCalls.find((w) =>
+      w.path.endsWith('.venfork/config.json')
+    );
+    return JSON.parse(write?.content ?? '{}');
+  }
+
+  test('a new mirror gets two-person approval by default', async () => {
+    expect((await writtenConfig()).approval).toBe('two-person');
+  });
+
+  test('setup records the new level in the clone memory', async () => {
+    await writtenConfig();
+    const memory = writeFileCalls.find((w) =>
+      w.path.endsWith(path.join('venfork', 'approval.json'))
+    );
+    expect(JSON.parse(memory?.content ?? '{}')).toEqual({
+      level: 'two-person',
+    });
+  });
+
+  test('--approval reviewed is written as reviewed', async () => {
+    expect((await writtenConfig({ approval: 'reviewed' })).approval).toBe(
+      'reviewed'
+    );
+  });
+
+  test('--approval off writes no approval field and warns', async () => {
+    expect(await writtenConfig({ approval: 'off' })).not.toHaveProperty(
+      'approval'
+    );
+    expect(
+      (clack.log.warn as ReturnType<typeof mock>).mock.calls.some((call) =>
+        String(call[0]).includes('The approval gate is off')
+      )
+    ).toBe(true);
   });
 });

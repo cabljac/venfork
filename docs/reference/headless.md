@@ -18,7 +18,7 @@ When venfork cannot prompt:
 - A prompt without a default exits 2. The error on stderr names the argument or flag that supplies the value, for example `the <upstream> argument` or `--upstream <url>`.
 - A confirm exits 2 and names `--yes`. Nothing is pushed or created.
 
-`--yes` (`-y`) answers every confirm of that command with yes, with or without a terminal: the `setup` personal-account confirm, the `stage` push confirm, and the `stage issue` and `pull issue` confirms. It is the only way to give consent without a prompt. One confirm is the exception: when the mirror's approval level was lowered, stage asks a person at a terminal, and `--yes` does not answer it (see [`venfork stage approval`](commands.md#venfork-stage-approval-onreviewedtwo-personoff---yes---no-input---json)). Every command accepts `--yes`, `-y` and `--no-input`, so a wrapper can always pass one fixed flag set; on a command with nothing to confirm or ask (`sync`, `doctor`, `pull pr`, `schedule`, `workflows`, `keep`, and `clone` for `--yes`) they change nothing.
+`--yes` (`-y`) answers every confirm of that command with yes, with or without a terminal: the `setup` personal-account confirm, the `stage` push confirm, and the `stage issue` and `pull issue` confirms. It is the only way to give consent without a prompt. One confirm is the exception: when the mirror's approval level was lowered, stage asks a person at a terminal, and `--yes` does not answer it (see [`venfork stage approval`](commands.md#venfork-stage-approval-onreviewedtwo-personoff---yes---no-input---json)). `venfork stage approval <lower level>` asks the same kind of confirm: without a terminal it writes the level, and the next stage in that clone stops with `gate-weakened` until a person confirms at a terminal. Every command accepts `--yes`, `-y` and `--no-input`, so a wrapper can always pass one fixed flag set; on a command with nothing to confirm or ask (`sync`, `doctor`, `pull pr`, `schedule`, `workflows`, `keep`, and `clone` for `--yes`) they change nothing.
 
 ```bash
 # In CI: never prompt, and confirm the push explicitly
@@ -44,7 +44,8 @@ venfork runs on a machine with no browser, no SSH key and nobody at the keyboard
 1. Give gh a token. Set `GH_TOKEN` in the environment, or run `gh auth login --with-token < token.txt` once. The token needs access to the mirror, the public fork and upstream.
 2. Use HTTPS for GitHub remotes: `gh config set git_protocol https`. Then clone the mirror, so that `gh repo clone` writes HTTPS remote URLs. A clone that already has SSH remotes keeps them.
 3. Run venfork with `--no-input` (or `--json`, which implies it). Pass `--yes` to the commands that ask for consent. With `--json`, stdout carries one JSON document. See [Non-interactive use](#non-interactive-use) and [JSON output](json.md#json-output).
-4. Check the exit code: `0` success, `1` runtime failure, a failing doctor check or a partial success (see the table above), `2` usage error or missing input or consent, `130` cancelled, `143` terminated by SIGTERM.
+4. Pick the approval level when you create the mirror. A new mirror needs two-person approval on the mirror PR before `venfork stage` publishes, and lowering it later needs a person at a terminal. A script that runs `setup` and then `stage` with no reviewer passes `venfork setup --approval off` (or `--approval reviewed` when a person approves the agent's PRs).
+5. Check the exit code: `0` success, `1` runtime failure, a failing doctor check or a partial success (see the table above), `2` usage error or missing input or consent, `130` cancelled, `143` terminated by SIGTERM.
 
 ```bash
 export GH_TOKEN="$(cat /run/secrets/gh-token)"

@@ -87,7 +87,9 @@ git checkout -b feature/new-thing
 git push origin feature/new-thing
 # Still private! Create internal PR for team review
 
-# 3. Stage for upstream (after internal approval)
+# 3. Stage for upstream once someone else approved the mirror PR
+#    (new mirrors need an approver who is neither the PR author nor you;
+#     venfork setup --approval reviewed lets you approve an agent's PRs)
 venfork stage feature/new-thing
 # NOW visible on public fork - and the upstream PR is opened for you,
 # carrying your internal review body (with <!-- venfork:internal --> blocks redacted).

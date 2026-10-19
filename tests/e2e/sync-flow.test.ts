@@ -96,6 +96,8 @@ e2eDescribe('venfork e2e - scheduled sync flow', () => {
         GITHUB_ORG,
         '--fork-name',
         names.fork,
+        '--approval',
+        'off',
         '--yes',
       ],
       {
@@ -596,6 +598,8 @@ e2eDescribe('venfork e2e - scheduled sync flow', () => {
           '--org',
           GITHUB_ORG,
           '--own-upstream',
+          '--approval',
+          'off',
           '--yes',
         ],
         { cwd: tmpRoot, env: { VENFORK_ORG: GITHUB_ORG } }
