@@ -1,6 +1,6 @@
 import type { ScheduleAuth } from './config.js';
 import { UsageError } from './errors.js';
-import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
+import { isPromptFlag, scanArgs, unexpectedArgument } from './shared/args.js';
 import { isValidCronExpression } from './shared/cron.js';
 import { JSON_FLAG } from './shared/json-output.js';
 
@@ -42,7 +42,7 @@ export function parseScheduleCliArgs(args: string[]): ParsedScheduleArgs {
   const authFlags: string[] = [];
   let json = false;
   const [action = 'status', ...rest] = scanArgs(args, SCHEDULE_USAGE, (arg) => {
-    if (arg === NO_INPUT_FLAG) return 0;
+    if (isPromptFlag(arg)) return 0;
     if (arg === JSON_FLAG) {
       json = true;
       return 0;

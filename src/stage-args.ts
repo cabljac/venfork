@@ -71,7 +71,7 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   let base: string | undefined;
   let internalPrNumber: number | undefined;
   let noUpdateExisting = false;
-  const promptFlags = parsePromptFlags({ allowYes: true, allowJson: true });
+  const promptFlags = parsePromptFlags({ allowJson: true });
 
   const positional = scanArgs(stageArgs, STAGE_USAGE, (a, i) => {
     if (promptFlags.onOption(a) !== undefined) return 0;

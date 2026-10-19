@@ -17,8 +17,8 @@ tests:
 - Resolves `upstream` (`RemoteNotFoundError`), parses it as a GitHub repo ("Could not parse upstream remote URL"), then the PR argument: a positive integer or a `github.com/<owner>/<repo>/pull/<n>` URL. A URL for another repo is refused.
 - Reads the PR with `gh pr view`. Refuses an existing local `upstream-pr/<n>` unless `--branch-name` is given.
 - `git fetch upstream pull/<n>/head:<branch>`, then a plain `git push origin <branch> --no-follow-tags` (no lease; both through `netExec`, so gh is the only github.com credential helper), then writes `pulledPrs[<branch>]` (number, URL, head, `lastSyncedAt`).
-- `--no-push`, or a failed push, keeps the branch local and writes no `pulledPrs` entry. Both exit 0.
-- `--json`: `result` is `{ branch, head, prNumber, prUrl, pushed }`; `pushed` is false with `--no-push` or a failed push. Failures are `ok: false` with `error.code` (`remote-not-found`, `usage`, `auth`, `internal` for an unparsable upstream URL, `not-in-repository` outside a git repository).
+- `--no-push`, or a failed push, keeps the branch local and writes no `pulledPrs` entry. `--no-push` exits 0. A failed push exits 1: one `error:` line (no spinner `done:` line) that names the recovery, `venfork pull pr <n> --branch-name '<branch>'` (`--branch-name` skips the existing-branch refusal, so it works for the default name too), then the outro `Pull incomplete: the branch is local only.` (`tests/integration/cli.test.ts` "partial success exits 1").
+- `--json`: `result` is `{ branch, head, prNumber, prUrl, pushed }`; `pushed` is false with `--no-push` or a failed push; a failed push exits 1 (`partialFailureExitCode`). Failures are `ok: false` with `error.code` (`remote-not-found`, `usage`, `auth`, `internal` for an unparsable upstream URL, `not-in-repository` outside a git repository).
 - Refresh is `venfork sync <branch>` (see `sync.md`): it finds the PR by `pulledPrs[branch]` or the name `upstream-pr/<n>`, force-fetches, pushes with a lease and needs no gh.
 - The old `venfork pull-request` name exits 2 and names `venfork pull pr`. A malformed `<pr-number-or-url>` exits 2 at parse time; a URL to another repo than upstream exits 1.
 

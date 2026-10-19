@@ -16,6 +16,8 @@ tests:
 - `venfork help`, `venfork --help` and `venfork -h` print the full help on stdout and exit 0: the intro, "Available Commands" (every command's usage), "Example Workflow", "Environment Variables", "Exit Codes" and the outro.
 - `venfork help <command>` prints only that command's usage on stdout. `help pull pr`, `help pull issue` and `help stage issue` print the subcommand entry. `help version`, `help -v` and `help --version` print the `--version` entry. An unknown `<command>` (`help bogus`) is the unknown-command usage error (exit 2, nothing on stdout), and a renamed one (`help status`) names the new form, as `venfork bogus` and `venfork status` do.
 - `venfork <command> --help` (or `-h`) prints that command's usage on stdout and exits 0. It is checked before the parser, so other bad arguments on the same line do not matter. `venfork bogus --help` has no entry and is the unknown-command usage error.
+- `--yes`, `-y` and `--no-input` anywhere after `help` (`venfork help --yes`, `venfork help -y doctor`) are ignored, as on every command.
+- Every usage line lists `[--yes] [--no-input] [--json]`, "Available Commands" ends with "Every command accepts --yes, -y and --no-input", and the "Exit Codes" row for 1 includes a partial success.
 - `venfork --version`, `-v` and `version` print the package version on stdout and exit 0.
 - Bare `venfork` prints the full help on stderr (stdout stays empty) and exits 2.
 - Unknown command: exit 2, "Unknown command: <name>. Run `venfork help`.". Renamed commands exit 2 and name the new form: `pull-request` (`venfork pull pr`), `issue` (`venfork pull issue`, `venfork stage issue`), `status` (`venfork doctor`).

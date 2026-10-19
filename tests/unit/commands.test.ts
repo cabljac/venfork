@@ -322,7 +322,8 @@ import {
   syncCommand,
   workflowsCommand,
 } from '../../src/commands.js';
-import { setupSyncMirror } from '../../src/dispatch.js';
+import { stageRerunCommand } from '../../src/commands/stage.js';
+import { partialFailureExitCode, setupSyncMirror } from '../../src/dispatch.js';
 import {
   CommandExitError,
   GitHubError,
@@ -2569,6 +2570,151 @@ describe('stageCommand', () => {
           cmd.includes('--body-file -')
       )
     ).toBe(true);
+  });
+
+  test('--pr reports failed and exits 1 when gh pr edit fails on an existing upstream PR', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify feature-branch', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        'a pull request for branch "feature-branch" into branch "main" already exists: https://github.com/up/repo/pull/77',
+    });
+    mockResponses.set('gh pr edit https://github.com/up/repo/pull/77', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'GraphQL: Resource not accessible by integration',
+    });
+    (clack.log.error as ReturnType<typeof mock>).mockClear();
+    (clack.outro as ReturnType<typeof mock>).mockClear();
+
+    const result = await stageCommand('feature-branch', {
+      createPr: true,
+      draft: true,
+      base: 'main',
+      title: "Fix it's bug",
+    });
+
+    expect(result).toMatchObject({
+      prAction: 'failed',
+      prUrl: 'https://github.com/up/repo/pull/77',
+    });
+    expect(partialFailureExitCode({ command: 'stage', result })).toBe(1);
+    expect(clack.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'upstream PR body was not updated: GraphQL: Resource not accessible by integration'
+      ),
+      expect.anything()
+    );
+    expect(
+      String((clack.outro as ReturnType<typeof mock>).mock.calls.at(-1)?.[0])
+    ).toBe(
+      "Stage incomplete: finish the PR by hand, or run `venfork stage branch 'feature-branch' --pr --draft --base 'main' --title 'Fix it'\\''s bug'` again."
+    );
+  });
+
+  test('the stage re-run command keeps every PR flag and quotes values', () => {
+    expect(
+      stageRerunCommand('feat/$(x)', {
+        draft: true,
+        internalPrNumber: 12,
+        noUpdateExisting: true,
+      })
+    ).toBe(
+      "venfork stage branch 'feat/$(x)' --pr --draft --internal-pr 12 --no-update-existing"
+    );
+    expect(stageRerunCommand('branch', {})).toBe(
+      "venfork stage branch 'branch'"
+    );
+  });
+
+  test('--pr that cannot open the PR names the re-run with its flags and drops the --pr tip', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify issue', {
+      exitCode: 0,
+      stdout: 'cafef00d',
+      stderr: '',
+    });
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set('gh pr list --repo owner/repo-private --head issue', {
+      exitCode: 0,
+      stdout: '[]',
+      stderr: '',
+    });
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'HTTP 502: Bad Gateway',
+    });
+    (clack.note as ReturnType<typeof mock>).mockClear();
+    (clack.outro as ReturnType<typeof mock>).mockClear();
+
+    const result = await stageCommand('issue', { createPr: true });
+
+    expect(result).toMatchObject({ prAction: 'failed' });
+    expect(partialFailureExitCode({ command: 'stage', result })).toBe(1);
+    expect(
+      String((clack.note as ReturnType<typeof mock>).mock.calls.at(-1)?.[0])
+    ).not.toContain('re-run with --pr');
+    expect(
+      String((clack.outro as ReturnType<typeof mock>).mock.calls.at(-1)?.[0])
+    ).toContain("`venfork stage branch 'issue' --pr` again");
   });
 
   test('--pr respects --no-update-existing on already-exists path', async () => {

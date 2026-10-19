@@ -73,6 +73,14 @@ export function scanArgs(
  */
 export const NO_INPUT_FLAG = '--no-input';
 
+/**
+ * True for `--no-input`, `--yes` or `-y`. Every command accepts them, so a
+ * wrapper can pass one fixed flag set; where nothing prompts they do nothing.
+ */
+export function isPromptFlag(arg: string): boolean {
+  return arg === NO_INPUT_FLAG || arg === '--yes' || arg === '-y';
+}
+
 /** The prompt flags one command parse has seen so far. */
 export interface PromptFlagParser {
   /** The `--yes` / `--no-input` state, filled in as options are read. */
@@ -80,21 +88,19 @@ export interface PromptFlagParser {
   /** Whether `--json` was seen (only with `allowJson`). */
   readonly json: boolean;
   /**
-   * A {@link scanArgs} option handler for `--no-input` and, when allowed,
-   * `--yes`/`-y` and `--json`. Returns 0 for one of those flags,
+   * A {@link scanArgs} option handler for `--no-input`, `--yes`/`-y` and,
+   * when allowed, `--json`. Returns 0 for one of those flags,
    * `undefined` otherwise.
    */
   onOption(arg: string): 0 | undefined;
 }
 
 /**
- * Shared parsing of the prompt flags for a command that prompts. Pass
- * `allowYes: false` for a command with no confirm, so `--yes` stays an
- * unknown option there. With `allowJson`, `--json` is accepted and sets
- * `noInput`, so a JSON run never prompts.
+ * Shared parsing of the prompt flags for a command that prompts. With
+ * `allowJson`, `--json` is accepted and sets `noInput`, so a JSON run
+ * never prompts.
  */
 export function parsePromptFlags(options: {
-  allowYes: boolean;
   allowJson?: boolean;
 }): PromptFlagParser {
   const prompt: PromptContext = { yes: false, noInput: false };
@@ -109,7 +115,7 @@ export function parsePromptFlags(options: {
         prompt.noInput = true;
         return 0;
       }
-      if (options.allowYes && (arg === '--yes' || arg === '-y')) {
+      if (arg === '--yes' || arg === '-y') {
         prompt.yes = true;
         return 0;
       }

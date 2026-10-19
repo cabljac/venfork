@@ -1,4 +1,4 @@
-import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
+import { isPromptFlag, scanArgs, unexpectedArgument } from './shared/args.js';
 import { JSON_FLAG } from './shared/json-output.js';
 
 const USAGE = 'venfork doctor [--no-input] [--json]';
@@ -17,7 +17,7 @@ export type ParsedDoctorArgs = {
 export function parseDoctorCliArgs(args: string[]): ParsedDoctorArgs {
   let json = false;
   const positional = scanArgs(args, USAGE, (arg) => {
-    if (arg === NO_INPUT_FLAG) return 0;
+    if (isPromptFlag(arg)) return 0;
     if (arg !== JSON_FLAG) return undefined;
     json = true;
     return 0;

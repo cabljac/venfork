@@ -190,11 +190,12 @@ describe('parsePullCliArgs prompt flags', () => {
     });
   });
 
-  test('pull pr rejects --yes and -y: it has no confirm', () => {
+  test('pull pr accepts --yes and -y as a no-op', () => {
     for (const flag of ['--yes', '-y']) {
-      expect(() => parsePullCliArgs(['pr', '5', flag])).toThrow(
-        `Unknown option '${flag}'. Usage: venfork pull pr`
-      );
+      expect(parsePullCliArgs(['pr', '5', flag])).toMatchObject({
+        kind: 'pr',
+        ref: '5',
+      });
     }
   });
 });

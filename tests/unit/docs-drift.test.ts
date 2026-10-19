@@ -137,4 +137,27 @@ describe('README matches the CLI contract', () => {
     }
     expect(missing).toEqual([]);
   });
+
+  test('no README sentence says a command rejects a prompt flag every command accepts', () => {
+    const rejectsPromptFlag = (line: string) =>
+      /(does not|doesn't|cannot|never) (take|accept)s? `(--yes|-y|--no-input)`/.test(
+        line
+      ) ||
+      /`(--yes|-y|--no-input)`[^.]*(only where|only on|refus|reject|usage error)/.test(
+        line
+      ) ||
+      /(refus|reject)[^.]*`(--yes|-y|--no-input)`/.test(line);
+    for (const stale of [
+      '`clone` has no confirm, so it does not take `--yes`.',
+      '`--yes` is accepted only where a confirm exists: `setup`, `stage`, `stage issue` and `pull issue`.',
+      '`sync` refuses `--yes`.',
+      '`--yes` on `doctor` is a usage error.',
+    ]) {
+      expect(rejectsPromptFlag(stale)).toBe(true);
+    }
+    expect(readme.split('\n').filter(rejectsPromptFlag)).toEqual([]);
+    expect(readme).toContain(
+      'Every command accepts `--yes`, `-y` and `--no-input`'
+    );
+  });
 });

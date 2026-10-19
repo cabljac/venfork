@@ -18,6 +18,7 @@ import {
 } from './commands.js';
 import {
   assertInRepository,
+  partialFailureExitCode,
   requiresGhAuth,
   setupSyncMirror,
 } from './dispatch.js';
@@ -37,6 +38,7 @@ import {
 import { parsePullCliArgs } from './pull-args.js';
 import { parseScheduleCliArgs } from './schedule-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
+import { isPromptFlag } from './shared/args.js';
 import { closedOutputExitCode } from './shared/closed-output.js';
 import { interruptsClaimed } from './shared/interrupt.js';
 import {
@@ -122,9 +124,15 @@ function parseCommand(
     }
     case 'sync': {
       const parsed = parseSyncCliArgs(args);
-      return resultOf(() =>
-        syncCommand(parsed.branch, { reportIssues: parsed.reportIssues })
-      );
+      return async () => {
+        const result = await syncCommand(parsed.branch, {
+          reportIssues: parsed.reportIssues,
+        });
+        return {
+          result,
+          exitCode: partialFailureExitCode({ command: 'sync', result }),
+        };
+      };
     }
     case 'schedule': {
       const parsed = parseScheduleCliArgs(args);
@@ -142,8 +150,8 @@ function parseCommand(
           })
         );
       }
-      return resultOf(() =>
-        stageCommand(parsed.branch, {
+      return async () => {
+        const result = await stageCommand(parsed.branch, {
           createPr: parsed.createPr,
           draft: parsed.draft,
           title: parsed.title,
@@ -151,8 +159,12 @@ function parseCommand(
           internalPrNumber: parsed.internalPrNumber,
           noUpdateExisting: parsed.noUpdateExisting,
           prompt: parsed.prompt,
-        })
-      );
+        });
+        return {
+          result,
+          exitCode: partialFailureExitCode({ command: 'stage', result }),
+        };
+      };
     }
     case 'doctor': {
       parseDoctorCliArgs(args);
@@ -173,12 +185,20 @@ function parseCommand(
     case 'pull': {
       const parsed = parsePullCliArgs(args);
       if (parsed.kind === 'pr') {
-        return resultOf(() =>
-          pullRequestCommand(parsed.ref, {
+        return async () => {
+          const result = await pullRequestCommand(parsed.ref, {
             branchName: parsed.branchName,
             push: parsed.push,
-          })
-        );
+          });
+          return {
+            result,
+            exitCode: partialFailureExitCode({
+              command: 'pull pr',
+              result,
+              push: parsed.push,
+            }),
+          };
+        };
       }
       return resultOf(() =>
         issueCommand('pull', parsed.ref, {
@@ -231,7 +251,7 @@ async function main(args: string[]): Promise<void> {
   if (json) refuseTextOutput(command, rest);
 
   if (HELP_WORDS.includes(command)) {
-    const [target, ...targetRest] = args.slice(1);
+    const [target, ...targetRest] = rest.filter((arg) => !isPromptFlag(arg));
     if (!target || HELP_WORDS.includes(target)) {
       showHelp();
       return;

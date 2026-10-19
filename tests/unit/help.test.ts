@@ -17,6 +17,7 @@ describe('commandHelp', () => {
   });
 
   test.each([
+    ['clone', []],
     ['sync', []],
     ['doctor', []],
     ['schedule', []],
@@ -24,8 +25,11 @@ describe('commandHelp', () => {
     ['preserve', []],
     ['pull', []],
     ['pull', ['pr']],
-  ] as const)('the %s %p usage line shows --no-input', (command, rest) => {
-    const usage = commandHelp(command, [...rest]) ?? '';
-    expect(usage.split('\n')[0]).toContain('[--no-input] [--json]');
-  });
+  ] as const)(
+    'the %s %p usage line shows the prompt flags',
+    (command, rest) => {
+      const usage = commandHelp(command, [...rest]) ?? '';
+      expect(usage.split('\n')[0]).toContain('[--yes] [--no-input] [--json]');
+    }
+  );
 });

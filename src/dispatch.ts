@@ -1,4 +1,6 @@
-import { syncCommand } from './commands.js';
+import type { PullPrResult } from './commands/pull-request.js';
+import type { StageResult } from './commands/stage.js';
+import { type SyncResult, syncCommand } from './commands.js';
 import { NotInRepositoryError } from './errors.js';
 import { parsePullCliArgs } from './pull-args.js';
 import { parseStageCliArgs } from './stage-args.js';
@@ -65,6 +67,31 @@ export function requiresGhAuth(command: string, args: string[]): boolean {
     }
   }
   return false;
+}
+
+/** A finished command run whose result can report a partial failure. */
+export type PartialOutcome =
+  | { command: 'stage'; result: StageResult }
+  | { command: 'pull pr'; result: PullPrResult; push: boolean }
+  | { command: 'sync'; result: SyncResult };
+
+/**
+ * 1 when a command did part of its job and failed the rest, else 0: stage
+ * pushed but could not open the PR, or a push to origin that was asked for
+ * failed. The `--json` result still says what landed.
+ */
+export function partialFailureExitCode(outcome: PartialOutcome): 0 | 1 {
+  switch (outcome.command) {
+    case 'stage':
+      return outcome.result.prAction === 'failed' ? 1 : 0;
+    case 'pull pr':
+      return outcome.push && !outcome.result.pushed ? 1 : 0;
+    case 'sync':
+      return outcome.result.kind === 'pulled-pr' &&
+        outcome.result.status === 'push-failed'
+        ? 1
+        : 0;
+  }
 }
 
 /**

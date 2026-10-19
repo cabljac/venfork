@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'bun:test';
 import type { SyncResult } from '../../src/commands.js';
 import {
   assertInRepository,
+  partialFailureExitCode,
   requiresGhAuth,
   requiresRepository,
   setupSyncMirror,
@@ -107,5 +108,65 @@ describe('setupSyncMirror', () => {
       cwd: '/work/acme-private',
       quiet: true,
     });
+  });
+});
+
+describe('partialFailureExitCode', () => {
+  const staged = {
+    branch: 'feat',
+    head: 'h',
+    target: 'public' as const,
+    compareUrl: 'u',
+  };
+
+  test('stage exits 1 when the push worked and the PR could not be opened', () => {
+    expect(
+      partialFailureExitCode({
+        command: 'stage',
+        result: { ...staged, prAction: 'failed' },
+      })
+    ).toBe(1);
+    expect(
+      partialFailureExitCode({
+        command: 'stage',
+        result: { ...staged, prAction: 'created' },
+      })
+    ).toBe(0);
+    expect(partialFailureExitCode({ command: 'stage', result: staged })).toBe(
+      0
+    );
+  });
+
+  test('pull pr exits 1 when the asked-for push to origin failed', () => {
+    const pulled = { branch: 'b', head: 'h', prNumber: 1, prUrl: 'u' };
+    expect(
+      partialFailureExitCode({
+        command: 'pull pr',
+        result: { ...pulled, pushed: false },
+        push: true,
+      })
+    ).toBe(1);
+    expect(
+      partialFailureExitCode({
+        command: 'pull pr',
+        result: { ...pulled, pushed: false },
+        push: false,
+      })
+    ).toBe(0);
+  });
+
+  test('sync exits 1 when a pulled PR branch could not be pushed', () => {
+    expect(
+      partialFailureExitCode({
+        command: 'sync',
+        result: {
+          kind: 'pulled-pr',
+          status: 'push-failed',
+          branch: 'b',
+          prNumber: 1,
+          head: 'h',
+        },
+      })
+    ).toBe(1);
   });
 });
