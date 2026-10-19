@@ -1,5 +1,13 @@
 # venfork
 
+## [0.13.1](https://github.com/cabljac/venfork/compare/v0.13.0...v0.13.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **cli:** tighten 0.13 edge cases (prompt wording, SIGTERM 143, help bogus, outside-repo errors) ([#124](https://github.com/cabljac/venfork/issues/124)) ([d3d16eb](https://github.com/cabljac/venfork/commit/d3d16ebfb56a8dc1b47f6cf166fd010034d2ee50))
+* **release:** find the packed tarball without parsing npm pack --json ([#120](https://github.com/cabljac/venfork/issues/120)) ([59d149a](https://github.com/cabljac/venfork/commit/59d149a377daee4cc90048408ac29ae74147ea60))
+
 ## [0.13.0](https://github.com/cabljac/venfork/compare/v0.12.0...v0.13.0) (2026-10-17)
 
 
