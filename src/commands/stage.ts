@@ -1,5 +1,6 @@
 import { $ } from 'execa';
 import {
+  type ApprovalLevel,
   approvalOf,
   assertNoInvalidPreserve,
   readVenforkConfigFromRepo,
@@ -18,6 +19,12 @@ import {
 } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { checkApprovalGate, type GateLevel } from '../shared/approval.js';
+import {
+  describeWeakening,
+  findWeakening,
+  rememberApproval,
+  type Weakening,
+} from '../shared/approval-guard.js';
 import { WORKFLOWS_DIR } from '../shared/constants.js';
 import {
   assertNoMirrorReference,
@@ -32,6 +39,7 @@ import { resolveCommit } from '../shared/mirror-commit.js';
 import { netExec, netFailureReason, netFetch } from '../shared/net.js';
 import {
   assertCanConfirm,
+  canPrompt,
   isCancel,
   type PromptContext,
   promptConfirm,
@@ -270,6 +278,10 @@ export interface StagingPlan {
   approval: ApprovalReport | null;
   /** The approved mirror PR; the upstream PR body comes from it. Null when the gate did not pass. */
   approvedPrNumber: number | null;
+  /** The mirror's approval level. */
+  approvalLevel: ApprovalLevel;
+  /** A lowered approval level a person must confirm at a terminal first. */
+  weakening: Weakening | null;
 }
 
 /** What the approval gate decided, as `--json` reports it. */
@@ -390,6 +402,14 @@ async function planStaging(
   }
   await netFetch('upstream', cwd);
   await netFetch('origin', cwd);
+  const weakening = await findWeakening(level, cwd);
+  if (
+    weakening &&
+    !consent.dryRun &&
+    !canPrompt({ noInput: consent.prompt?.noInput ?? false })
+  ) {
+    throw weakenedError(level, weakening);
+  }
   let approval: ApprovalReport | null = null;
   let approvedPrNumber: number | null = null;
   if (level !== 'off') {
@@ -466,7 +486,49 @@ async function planStaging(
     sourceHead,
     approval,
     approvedPrNumber,
+    approvalLevel: level,
+    weakening,
   };
+}
+
+function weakenedError(
+  level: ApprovalLevel,
+  weakening: Weakening
+): ApprovalError {
+  return new ApprovalError(
+    'gate-weakened',
+    `Not staged: the approval gate was lowered (${describeWeakening(weakening)}), and a person must confirm that at a terminal.`,
+    'Run the same stage at a terminal without --json and answer the confirm; --yes does not answer it.',
+    { level, weakened: weakening }
+  );
+}
+
+/**
+ * Asks a person at a terminal to confirm a lowered approval level. Unlike
+ * the push confirm, `--yes` never answers it.
+ */
+async function confirmWeakening(
+  plan: StagingPlan,
+  prompt: PromptContext | undefined
+): Promise<void> {
+  if (!plan.weakening) return;
+  p.log.warn(describeWeakening(plan.weakening));
+  const answer = await promptConfirm(
+    {
+      message: `The approval gate was lowered. Stage '${plan.branch}' with approval ${plan.approvalLevel}?`,
+      initialValue: false,
+      stopped: NOT_STAGED,
+    },
+    { yes: false, noInput: prompt?.noInput ?? false }
+  );
+  if (isCancel(answer)) {
+    p.cancel('Operation cancelled');
+    throw new CommandExitError(130);
+  }
+  if (!answer) {
+    p.outro('Stage cancelled');
+    throw new CommandExitError(0);
+  }
 }
 
 /**
@@ -836,6 +898,8 @@ export interface StageDryRunResult {
   internalPrUrl?: string;
   /** The approval gate result; absent when the mirror's level is `off`. */
   approval?: ApprovalReport;
+  /** The lowered approval level a real stage would ask a person to confirm. */
+  weakened?: Weakening;
 }
 
 /** `--json` result of a `venfork stage <branch>` that pushed. */
@@ -948,6 +1012,16 @@ export async function stageCommand(
       options.source
     );
     s.stop('Branch verified');
+    if (options.dryRun) {
+      if (plan.weakening) {
+        p.log.warn(
+          `A real stage needs a person to confirm at a terminal: ${describeWeakening(plan.weakening)}`
+        );
+      }
+    } else {
+      await confirmWeakening(plan, options.prompt);
+      await rememberApproval(repoDir, plan.approvalLevel);
+    }
     if (plan.approval?.ok) {
       p.log.info(approvalLine(plan.approval));
     } else if (plan.approval) {
@@ -1114,6 +1188,7 @@ export async function stageCommand(
         ...(existingPrUrl ? { existingPrUrl } : {}),
         ...(internalPr ? { internalPrUrl: internalPr.url } : {}),
         ...(plan.approval ? { approval: plan.approval } : {}),
+        ...(plan.weakening ? { weakened: plan.weakening } : {}),
       };
     }
 

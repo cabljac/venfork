@@ -18,7 +18,7 @@ When venfork cannot prompt:
 - A prompt without a default exits 2. The error on stderr names the argument or flag that supplies the value, for example `the <upstream> argument` or `--upstream <url>`.
 - A confirm exits 2 and names `--yes`. Nothing is pushed or created.
 
-`--yes` (`-y`) answers every confirm of that command with yes, with or without a terminal: the `setup` personal-account confirm, the `stage` push confirm, and the `stage issue` and `pull issue` confirms. It is the only way to give consent without a prompt. Every command accepts `--yes`, `-y` and `--no-input`, so a wrapper can always pass one fixed flag set; on a command with nothing to confirm or ask (`sync`, `doctor`, `pull pr`, `schedule`, `workflows`, `keep`, and `clone` for `--yes`) they change nothing.
+`--yes` (`-y`) answers every confirm of that command with yes, with or without a terminal: the `setup` personal-account confirm, the `stage` push confirm, and the `stage issue` and `pull issue` confirms. It is the only way to give consent without a prompt. One confirm is the exception: when the mirror's approval level was lowered, stage asks a person at a terminal, and `--yes` does not answer it (see [`venfork stage approval`](commands.md#venfork-stage-approval-onreviewedtwo-personoff---yes---no-input---json)). Every command accepts `--yes`, `-y` and `--no-input`, so a wrapper can always pass one fixed flag set; on a command with nothing to confirm or ask (`sync`, `doctor`, `pull pr`, `schedule`, `workflows`, `keep`, and `clone` for `--yes`) they change nothing.
 
 ```bash
 # In CI: never prompt, and confirm the push explicitly

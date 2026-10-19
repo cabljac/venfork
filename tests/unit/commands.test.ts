@@ -275,7 +275,9 @@ mock.module('node:fs/promises', () => ({
     writeFileCalls.push({ path, content });
     return Promise.resolve();
   }),
-  readFile: mock(() => Promise.reject(new Error('ENOENT'))),
+  readFile: mock(() =>
+    Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+  ),
   rm: mock((path: string, options: { recursive: boolean; force: boolean }) => {
     rmCalls.push({ path, options });
     return Promise.resolve();
