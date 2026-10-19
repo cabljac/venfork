@@ -177,6 +177,7 @@ Push a branch to the public fork, making it visible and ready for PR to upstream
 - `--no-pr` - Push the branch only and print the compare link. `--draft`, `--title`, `--internal-pr` and `--no-update-existing` need the PR, so they are usage errors with `--no-pr`; `--base` still sets the compare link. `--pr` is still accepted for one release and changes nothing.
 - `--draft` - Open the upstream PR as a draft.
 - `--dry-run` - Run every check, rebuild the branch and build the upstream PR title and body after redaction, print them, and stop. Nothing is pushed, no PR is opened or edited, and nothing is recorded. It needs no `--yes`. With the default PR it still reads the internal review PR through gh, and it looks for an open upstream PR for the branch: when one is open, the preview shows that a real stage keeps its title and replaces only its body (or, with `--no-update-existing`, leaves it unchanged). `--dry-run --no-pr` does not use GitHub beyond the fetch.
+- When the mirror's approval level is not `off`, stage first checks for an approving review on the branch's mirror PR and publishes exactly the approved head (see [`venfork stage approval`](#venfork-stage-approval-onreviewedtwo-personoff---yes---no-input---json)).
 - A branch with no commits to publish beyond upstream's default branch is refused (`precondition`, "Nothing to stage"). Merge commits and venfork-managed commits do not count: stage drops them.
 - `--title <text>` - Override the upstream PR title (default: the internal PR title, or the branch name if no internal PR was found).
 - `--base <branch>` - Override the upstream base branch (default: upstream's default branch).
@@ -228,7 +229,7 @@ Commit messages, author names and author emails are published as they are. Keep 
 To use venfork on a project whose upstream legitimately mentions venfork, set `VENFORK_ALLOW_SELF_REFERENCE=1`. It relaxes only the bare word `venfork`. URL, owner and repo name terms still apply, and text shaped like a marker (`venfork:internal` in any wrapper, such as `[venfork:internal]`) is still refused in PR titles and bodies. An HTML comment that only mentions the tool (`<!-- uses venfork -->`) passes, but one that reads like a broken marker (`<!-- venfork:intenral -->`, `<!-- venfork internal -->`) is refused.
 
 **What the PR step adds:**
-1. Looks up the most recent PR on the private mirror with `--head <branch>` (open first, then most recent of any state).
+1. Looks up the most recent PR on the private mirror with `--head <branch>` (open first, then most recent of any state). When the approval gate passed, it uses the approved mirror PR instead.
 2. Renders the upstream PR body by stripping any `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks. With no internal PR, the body lists the published commit subjects with standalone `#N` references and `(#N)` groups removed (`#N` inside a word or URL is kept). The title and body are then refused if they still contain `venfork`, origin's URL or origin's `owner/name`. The private mirror stays invisible to upstream: no back-link to the internal review and no hint that one exists. The internal PR URL is recorded only in your mirror config (step 5).
 3. Shows you the translated body **before** confirming, so you can catch redaction mistakes before they go public.
 4. Runs `gh pr create --repo <upstream> --base <default> --head <fork-owner>:<branch>` and surfaces the resulting PR URL.
@@ -261,7 +262,25 @@ Show or set how much review a branch needs before `venfork stage` publishes it. 
 - `two-person` - As `reviewed`, and the approver must also be someone other than the GitHub user who runs `venfork stage`.
 - `on` - The same as `two-person`.
 
-Setting `off` prints a warning. The gate is a guardrail against publishing by accident or by an agent, not enforcement: anyone with push access to the public fork or upstream can publish without venfork. With `--json`, `result` is `{ "level" }` after the action.
+Setting `off` prints a warning. With `--json`, `result` is `{ "level" }` after the action.
+
+When the level is not `off`, `venfork stage <branch>` (with or without `--no-pr`) checks the mirror PR after it fetches and before it rebuilds anything:
+
+1. It finds the open PR on the mirror whose head is `<branch>` on the mirror and whose base is the mirror default branch. A PR into another branch is refused (`wrong-base`), because the review would not cover the commits of that base branch. When more than one open PR for `<branch>` targets the default branch, stage refuses (`ambiguous-pr`); pass `--internal-pr <n>` to name the PR. `--internal-pr <n>` must name an open PR from `<branch>` on the mirror into the default branch. No open PR is refused.
+2. For each reviewer it takes the latest review that approved, requested changes or was dismissed. Comment-only reviews change nothing. A dismissed latest review neither approves nor blocks. A reviewer whose latest review requests changes blocks the stage.
+3. At least one approval must count: it is on the PR head commit, from a GitHub user account (not a bot, organization or deleted account) that is not the PR author and has write or admin access to the mirror. With `two-person`, the approver must also differ from the gh login running stage. Only `two-person` reads that login, so `reviewed` works with a token that cannot read `/user`, such as a GitHub App token.
+4. Every check run and commit status on the PR head must be complete and passing (`success`, `neutral` or `skipped`). A pending check blocks; run stage again when it finishes.
+5. The local branch must point at the approved PR head. Stage then publishes exactly that commit, so new commits after the approval are refused until they are pushed and approved.
+
+The upstream PR body comes from the approved mirror PR.
+
+The gate covers `venfork stage <branch>` only. `venfork stage issue` is not gated, because it publishes redacted issue text, not code.
+
+A refusal exits 1 with code `approval` and a hint. The two refusals a solo vendor meets first, "two-person approval needs a reviewer other than you" and "has no open PR", name `venfork stage approval reviewed`. `--dry-run` runs the same checks, reports a refusal as a warning and in `result.approval`, and still shows the preview. A level from a newer venfork is refused (`config`) instead of being read as `off`.
+
+Nothing about the gate leaves the mirror: no reviewer name, approval or process note goes into the published commits or the upstream PR. GitHub's review records on the mirror PR are the approval log.
+
+The gate is a guardrail against publishing by accident or by an agent, not enforcement. Anyone with push access to the public fork or upstream can publish without venfork, and anyone with write access to the mirror can change the setting.
 
 ```bash
 venfork stage approval            # print the level
@@ -313,7 +332,7 @@ A re-run refreshes the branch when it already holds the PR: `pulledPrs[<branch>]
 
 Move *issue* context between the private mirror and upstream. The command names follow the direction: `stage` goes outward (mirror to upstream), `pull` comes inward (upstream to mirror). The shape matches `stage <branch>` and `pull pr`, but for issues instead of PRs. With `--json`, both never prompt and print one JSON envelope on stdout (see [JSON output](json.md#json-output)).
 
-- `venfork stage issue <internal-#>` - read an internal triage issue from the mirror, redact `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks (same convention as `stage <branch>`), and open the upstream counterpart via `gh issue create`.
+- `venfork stage issue <internal-#>` - read an internal triage issue from the mirror, redact `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks (same convention as `stage <branch>`), and open the upstream counterpart via `gh issue create`. The approval gate does not apply: `stage issue` publishes redacted issue text, not code.
 - `venfork pull issue <upstream-#>` - read an upstream issue **and its comments**, create a parallel internal issue on the mirror titled `[upstream #N] <original title>` so the team can triage it without leaving the private space. The upstream comment thread is snapshotted into the mirror issue body under an "Upstream comments" section.
 
 A branch named `issue`, `approval` or `branch` cannot use the bare `venfork stage <name>` form. Run `venfork stage branch issue` instead.

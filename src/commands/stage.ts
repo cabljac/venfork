@@ -1,10 +1,13 @@
 import { $ } from 'execa';
 import {
+  approvalOf,
   assertNoInvalidPreserve,
   readVenforkConfigFromRepo,
   updateVenforkConfig,
 } from '../config.js';
 import {
+  ApprovalError,
+  type ApprovalRefusal,
   BranchNotFoundError,
   CommandExitError,
   GitError,
@@ -14,6 +17,7 @@ import {
   VenforkError,
 } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
+import { checkApprovalGate, type GateLevel } from '../shared/approval.js';
 import { WORKFLOWS_DIR } from '../shared/constants.js';
 import {
   assertNoMirrorReference,
@@ -262,6 +266,27 @@ export interface StagingPlan {
   sourceRef: string;
   /** Commit id recorded as `shippedBranches[branch].sourceHead`; equals `sourceRef`. */
   sourceHead: string;
+  /** The approval gate result, or null when the mirror's level is `off`. */
+  approval: ApprovalReport | null;
+  /** The approved mirror PR; the upstream PR body comes from it. Null when the gate did not pass. */
+  approvedPrNumber: number | null;
+}
+
+/** What the approval gate decided, as `--json` reports it. */
+export interface ApprovalReport {
+  level: GateLevel;
+  /** False only in a dry run: a real stage throws instead. */
+  ok: boolean;
+  /** The mirror PR the gate read. */
+  prUrl?: string;
+  /** The approved PR head; stage ships exactly this commit. */
+  headSha?: string;
+  /** Logins whose approval counted. */
+  approvers?: string[];
+  /** Why a real stage would be refused. */
+  reason?: ApprovalRefusal | 'precondition';
+  /** The refusal a real stage would print. */
+  message?: string;
 }
 
 function stageConfirmMessage(noPublic: boolean, createPr: boolean): string {
@@ -295,7 +320,12 @@ function notGitHubForPr(remote: string): PreconditionError {
 async function planStaging(
   requested: string,
   cwd: string,
-  consent: { createPr: boolean; dryRun?: boolean; prompt?: PromptContext },
+  consent: {
+    createPr: boolean;
+    dryRun?: boolean;
+    prompt?: PromptContext;
+    internalPrNumber?: number;
+  },
   source?: { sha: string }
 ): Promise<StagingPlan> {
   const branch = requested.replace(/^refs\/heads\//, '');
@@ -305,12 +335,13 @@ async function planStaging(
     );
   }
   assertNoMirrorReference(branch, 'the branch name', await mirrorDenyList(cwd));
-  const { sourceRef, sourceHead } = source
+  let { sourceRef, sourceHead } = source
     ? await pinnedSource(branch, source.sha, cwd)
     : await localBranchSource(branch, cwd);
 
   const config = await readVenforkConfigFromRepo(cwd);
   assertNoInvalidPreserve(config);
+  const level = approvalOf(config);
   const noPublic = config?.mode === 'no-public';
 
   const upstreamUrlResult = await $({
@@ -359,6 +390,17 @@ async function planStaging(
   }
   await netFetch('upstream', cwd);
   await netFetch('origin', cwd);
+  let approval: ApprovalReport | null = null;
+  let approvedPrNumber: number | null = null;
+  if (level !== 'off') {
+    const gate = await approvalGate(level, branch, sourceHead, cwd, consent);
+    approval = gate.report;
+    approvedPrNumber = gate.prNumber ?? null;
+    if (approval.ok && approval.headSha) {
+      sourceRef = approval.headSha;
+      sourceHead = approval.headSha;
+    }
+  }
   const upstreamDefaultBranch = await getDefaultBranch('upstream', cwd);
   const upstreamTip = await resolveCommit(
     `refs/remotes/upstream/${upstreamDefaultBranch}`,
@@ -422,7 +464,89 @@ async function planStaging(
     ],
     sourceRef,
     sourceHead,
+    approval,
+    approvedPrNumber,
   };
+}
+
+/**
+ * Runs the approval gate and checks that the commit stage would rebuild is
+ * the approved mirror PR head. A dry run reports a refusal instead of
+ * throwing it.
+ */
+async function approvalGate(
+  level: GateLevel,
+  branch: string,
+  sourceHead: string,
+  cwd: string,
+  consent: { dryRun?: boolean; internalPrNumber?: number }
+): Promise<{ report: ApprovalReport; prNumber?: number }> {
+  try {
+    const pass = await checkApprovalGate({
+      level,
+      mirror: await findMirrorRepoPath(cwd),
+      branch,
+      cwd,
+      pinnedPr: consent.internalPrNumber,
+    });
+    if (pass.headSha !== sourceHead) {
+      throw new ApprovalError(
+        'branch-moved',
+        `Not staged: '${branch}' is at ${sourceHead.slice(0, 12)}, but the approved PR head is ${pass.headSha.slice(0, 12)}.`,
+        `Push '${branch}' and get the new head approved, or check out the approved commit.`,
+        {
+          level,
+          prUrl: pass.prUrl,
+          headSha: pass.headSha,
+          branchHead: sourceHead,
+        }
+      );
+    }
+    return {
+      report: {
+        level,
+        ok: true,
+        prUrl: pass.prUrl,
+        headSha: pass.headSha,
+        approvers: pass.approvers,
+      },
+      prNumber: pass.prNumber,
+    };
+  } catch (error) {
+    if (!consent.dryRun) throw error;
+    if (error instanceof ApprovalError) {
+      const prUrl = error.details?.prUrl;
+      return {
+        report: {
+          level,
+          ok: false,
+          reason: error.reason,
+          message: errorLine(error),
+          ...(typeof prUrl === 'string' && prUrl ? { prUrl } : {}),
+        },
+      };
+    }
+    if (error instanceof PreconditionError) {
+      return {
+        report: {
+          level,
+          ok: false,
+          reason: 'precondition',
+          message: errorLine(error),
+        },
+      };
+    }
+    throw error;
+  }
+}
+
+function approvalLine(report: ApprovalReport): string {
+  if (!report.ok) return `${report.level}, not met (${report.reason})`;
+  return `${report.level}, approved by ${(report.approvers ?? []).join(', ')} on ${report.prUrl} at ${(report.headSha ?? '').slice(0, 12)}`;
+}
+
+function errorLine(error: VenforkError): string {
+  return error.hint ? `${error.message} ${error.hint}` : error.message;
 }
 
 /**
@@ -710,6 +834,8 @@ export interface StageDryRunResult {
   existingPrUrl?: string;
   /** The internal review PR the body came from. */
   internalPrUrl?: string;
+  /** The approval gate result; absent when the mirror's level is `off`. */
+  approval?: ApprovalReport;
 }
 
 /** `--json` result of a `venfork stage <branch>` that pushed. */
@@ -732,6 +858,8 @@ export interface StagePushResult {
   prUrl?: string;
   /** The internal review PR the upstream body came from. */
   internalPrUrl?: string;
+  /** The approval that let the stage through; absent when the level is `off`. */
+  approval?: ApprovalReport;
 }
 
 /**
@@ -811,10 +939,22 @@ export async function stageCommand(
     const plan = await planStaging(
       branch,
       repoDir,
-      { createPr, dryRun: options.dryRun, prompt: options.prompt },
+      {
+        createPr,
+        dryRun: options.dryRun,
+        prompt: options.prompt,
+        internalPrNumber: options.internalPrNumber,
+      },
       options.source
     );
     s.stop('Branch verified');
+    if (plan.approval?.ok) {
+      p.log.info(approvalLine(plan.approval));
+    } else if (plan.approval) {
+      p.log.warn(
+        `A real stage would be refused: ${plan.approval.message ?? plan.approval.reason}`
+      );
+    }
 
     s.start('Rebuilding the branch on upstream and checking every commit');
     const prepared = await prepareStage(plan, repoDir);
@@ -840,7 +980,7 @@ export async function stageCommand(
           mirrorRepoPath,
           plan.branch,
           repoDir,
-          options.internalPrNumber
+          plan.approvedPrNumber ?? options.internalPrNumber
         );
       }
       s.stop(
@@ -940,6 +1080,9 @@ export async function stageCommand(
         `  Draft:       ${options.draft ? 'yes' : 'no'}`
       );
     }
+    if (plan.approval) {
+      detailLines.push('', `  Approval:    ${approvalLine(plan.approval)}`);
+    }
     p.note(detailLines.join('\n'), 'Staging Details');
 
     if (publishesBody) {
@@ -970,6 +1113,7 @@ export async function stageCommand(
         ...(publishesBody ? { prBody: translatedBody } : {}),
         ...(existingPrUrl ? { existingPrUrl } : {}),
         ...(internalPr ? { internalPrUrl: internalPr.url } : {}),
+        ...(plan.approval ? { approval: plan.approval } : {}),
       };
     }
 
@@ -1111,6 +1255,7 @@ export async function stageCommand(
       ...(prAction ? { prAction } : {}),
       ...(upstreamPrUrl ? { prUrl: upstreamPrUrl } : {}),
       ...(internalPr ? { internalPrUrl: internalPr.url } : {}),
+      ...(plan.approval ? { approval: plan.approval } : {}),
     };
   } catch (error) {
     throw p.reportFailure(error, s);

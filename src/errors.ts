@@ -17,6 +17,7 @@ export type ErrorCode =
   | 'redaction'
   | 'mirror-reference'
   | 'stage-leak'
+  | 'approval'
   | 'pin-downgrade'
   | 'unmigrated-mirror'
   | 'cancelled'
@@ -290,6 +291,35 @@ export class StageLeakError extends VenforkError {
       { details: { branch, paths, leak, ...(commit ? { commit } : {}) } }
     );
     this.name = 'StageLeakError';
+  }
+}
+
+/** Why the approval gate refused a stage. */
+export type ApprovalRefusal =
+  | 'no-mirror-pr'
+  | 'wrong-head'
+  | 'wrong-base'
+  | 'ambiguous-pr'
+  | 'branch-moved'
+  | 'changes-requested'
+  | 'not-approved'
+  | 'self-approved'
+  | 'checks-pending'
+  | 'checks-failed';
+
+/**
+ * Thrown when the mirror's `approval` level is not met for the branch
+ * stage would publish. Exits 1, like other precondition refusals.
+ */
+export class ApprovalError extends VenforkError {
+  constructor(
+    public readonly reason: ApprovalRefusal,
+    message: string,
+    hint: string,
+    details: Record<string, unknown> = {}
+  ) {
+    super(message, 'approval', { hint, details: { reason, ...details } });
+    this.name = 'ApprovalError';
   }
 }
 
