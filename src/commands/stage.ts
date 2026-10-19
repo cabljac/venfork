@@ -48,6 +48,7 @@ import * as p from '../shared/ui.js';
 import {
   createUpstreamPr,
   editUpstreamPrBody,
+  findOpenUpstreamPr,
 } from '../shared/upstream-publish.js';
 import { withDetachedWorktree } from '../shared/worktree.js';
 import { STAGE_USAGE } from '../stage-args.js';
@@ -281,14 +282,15 @@ function notGitHubForPr(remote: string): PreconditionError {
  * branch, and a branch with no history in common with upstream. Also
  * refuses while the config holds invalid preserve entries, as sync does.
  * Refuses before the fetch when the push confirm could not be answered,
- * and when the PR is wanted but upstream or the push remote is not on GitHub.
+ * unless this is a dry run, which never confirms, and when the PR is
+ * wanted but upstream or the push remote is not on GitHub.
  * Throws `BranchNotFoundError` / `RemoteNotFoundError` so callers can render
  * a single failure path.
  */
 async function planStaging(
   requested: string,
   cwd: string,
-  consent: { createPr: boolean; prompt?: PromptContext }
+  consent: { createPr: boolean; dryRun?: boolean; prompt?: PromptContext }
 ): Promise<StagingPlan> {
   const branch = requested.replace(/^refs\/heads\//, '');
   if (branch.replace(/^origin\//, '') === CONFIG_BRANCH) {
@@ -349,11 +351,13 @@ async function planStaging(
   }
   const pushOwner = pushRepoPath.split('/')[0] ?? '';
 
-  assertCanConfirm(
-    stageConfirmMessage(noPublic, consent.createPr),
-    consent.prompt,
-    NOT_STAGED
-  );
+  if (!consent.dryRun) {
+    assertCanConfirm(
+      stageConfirmMessage(noPublic, consent.createPr),
+      consent.prompt,
+      NOT_STAGED
+    );
+  }
   if (consent.createPr && !upstreamRepoPath) {
     throw notGitHubForPr(`the upstream remote '${upstreamUrl}'`);
   }
@@ -578,6 +582,11 @@ export interface StageOptions {
    * `gh pr edit` so addressing internal feedback re-publishes upstream.
    */
   noUpdateExisting?: boolean;
+  /**
+   * Run every check and build the PR title and body, then stop before the
+   * confirm: nothing is pushed, opened or recorded.
+   */
+  dryRun?: boolean;
   /** `--yes` / `--no-input` for the push confirm. */
   prompt?: PromptContext;
 }
@@ -606,8 +615,39 @@ export function stageRerunCommand(
   return parts.join(' ');
 }
 
-/** `--json` result of `venfork stage <branch>`. */
-export interface StageResult {
+/** `--json` result of `venfork stage <branch>`: a push, or a `--dry-run` preview. */
+export type StageResult = StagePushResult | StageDryRunResult;
+
+/** `--json` result of `venfork stage <branch> --dry-run`. Nothing was pushed. */
+export interface StageDryRunResult {
+  dryRun: true;
+  branch: string;
+  /** The preview rebuild's local commit. A real stage rebuilds again: new SHA, same tree. */
+  head: string;
+  /** The remote a real stage would push to. */
+  target: 'public' | 'upstream';
+  /** GitHub compare URL for the branch once it is pushed. */
+  compareUrl: string;
+  /** The upstream branch the PR would target. */
+  base: string;
+  /** Subjects of the commits that would be published, oldest first. */
+  commits: string[];
+  /** Paths the published history adds, modifies or retypes. */
+  files: string[];
+  /** Paths in `files` that are gone at `head` but stay in the history. */
+  removedLater: string[];
+  /** The upstream PR title after redaction. Absent with `--no-pr` or when `existingPrUrl` is set: a re-stage keeps that PR's title. */
+  prTitle?: string;
+  /** The upstream PR body after redaction. Absent with `--no-pr`, or with `existingPrUrl` and `--no-update-existing`. */
+  prBody?: string;
+  /** The open upstream PR a real stage would update instead of opening a new one. */
+  existingPrUrl?: string;
+  /** The internal review PR the body came from. */
+  internalPrUrl?: string;
+}
+
+/** `--json` result of a `venfork stage <branch>` that pushed. */
+export interface StagePushResult {
   branch: string;
   /** The rebuilt commit pushed as the branch. */
   head: string;
@@ -704,6 +744,7 @@ export async function stageCommand(
     s.start('Verifying branch and fetching upstream and origin');
     const plan = await planStaging(branch, repoDir, {
       createPr,
+      dryRun: options.dryRun,
       prompt: options.prompt,
     });
     s.stop('Branch verified');
@@ -784,17 +825,47 @@ export async function stageCommand(
         `${prepared.issueRefCommits} commit message(s) reference issue/PR numbers that will resolve against upstream`
       );
     }
-    if (createPr && mentionsIssueNumber(prTitle)) {
+    // A real stage keeps an open upstream PR's title and edits only its body.
+    let existingPrUrl: string | null = null;
+    if (createPr && options.dryRun) {
+      s.start('Looking for an open upstream PR');
+      const existing = await findOpenUpstreamPr({
+        upstreamRepoPath: plan.upstreamRepoPath,
+        headOwner: plan.pushOwner,
+        branch: plan.branch,
+        base: baseBranch,
+        cwd: repoDir,
+      });
+      s.clear();
+      if ('error' in existing) {
+        p.log.warn(
+          `Could not look for an open upstream PR (${existing.error}). The preview assumes a real stage opens a new one.`
+        );
+      } else {
+        existingPrUrl = existing.url;
+      }
+    }
+    const publishesTitle = createPr && !existingPrUrl;
+    const publishesBody =
+      createPr && (!existingPrUrl || !options.noUpdateExisting);
+
+    if (publishesTitle && mentionsIssueNumber(prTitle)) {
       p.log.warn(
         'The upstream PR title references issue/PR numbers that will resolve against upstream'
       );
     }
-    if (createPr && mentionsIssueNumber(translatedBody)) {
+    if (publishesBody && mentionsIssueNumber(translatedBody)) {
       p.log.warn(
         'The upstream PR body references issue/PR numbers that will resolve against upstream'
       );
     }
-    if (createPr) {
+    if (createPr && existingPrUrl) {
+      detailLines.push(
+        '',
+        `  Upstream PR: ${existingPrUrl} is already open; its title stays`,
+        `  Body:        ${options.noUpdateExisting ? 'left unchanged (--no-update-existing)' : 'replaced with the preview below'}`
+      );
+    } else if (createPr) {
       detailLines.push(
         '',
         `  Upstream PR: ${prTitle}`,
@@ -804,8 +875,35 @@ export async function stageCommand(
     }
     p.note(detailLines.join('\n'), 'Staging Details');
 
-    if (createPr) {
+    if (publishesBody) {
       p.note(translatedBody || '(empty)', 'Upstream PR body preview');
+    }
+
+    // In no-public mode the head and base live in the same repo, so the
+    // compare URL takes a bare branch name.
+    const prUrl = plan.noPublic
+      ? `https://github.com/${plan.upstreamRepoPath}/compare/${baseBranch}...${plan.branch}?expand=1`
+      : `https://github.com/${plan.upstreamRepoPath}/compare/${baseBranch}...${plan.pushOwner}:${plan.branch}?expand=1`;
+
+    if (options.dryRun) {
+      p.outro(
+        `Dry run: nothing was pushed. Run the same command without --dry-run to stage '${plan.branch}'.`
+      );
+      return {
+        dryRun: true,
+        branch: plan.branch,
+        head: prepared.head,
+        target: plan.pushRemote,
+        compareUrl: prUrl,
+        base: baseBranch,
+        commits: prepared.subjects,
+        files: prepared.files,
+        removedLater: prepared.removedLater,
+        ...(publishesTitle ? { prTitle } : {}),
+        ...(publishesBody ? { prBody: translatedBody } : {}),
+        ...(existingPrUrl ? { existingPrUrl } : {}),
+        ...(internalPr ? { internalPrUrl: internalPr.url } : {}),
+      };
     }
 
     const shouldStage = await promptConfirm(
@@ -832,7 +930,7 @@ export async function stageCommand(
 
     let upstreamPrUrl: string | undefined;
     let alreadyExisted = false;
-    let prAction: StageResult['prAction'];
+    let prAction: StagePushResult['prAction'];
     if (createPr) {
       prAction = 'failed';
       s.start('Opening upstream pull request');
@@ -909,14 +1007,6 @@ export async function stageCommand(
         p.log.warn(`Could not record shippedBranches entry: ${msg}`);
       }
     }
-
-    // Use the resolved baseBranch (which respects --base) so the compare URL
-    // points at the same base the user asked for, even with --no-pr
-    // or `gh pr create` failed earlier. In no-public mode the head and base
-    // live in the same repo, so gh's compare URL accepts a bare branch name.
-    const prUrl = plan.noPublic
-      ? `https://github.com/${plan.upstreamRepoPath}/compare/${baseBranch}...${plan.branch}?expand=1`
-      : `https://github.com/${plan.upstreamRepoPath}/compare/${baseBranch}...${plan.pushOwner}:${plan.branch}?expand=1`;
 
     if (createPr && upstreamPrUrl) {
       const lines = [`Upstream PR: ${upstreamPrUrl}`];

@@ -33,6 +33,8 @@ export type ParsedStageBranchArgs = {
    * internal review feedback re-publishes upstream.
    */
   noUpdateExisting: boolean;
+  /** `--dry-run`: show what would be published and push nothing. */
+  dryRun: boolean;
   /** `--yes` / `--no-input`. */
   prompt: PromptContext;
   /** Print the `--json` envelope on stdout. */
@@ -56,7 +58,7 @@ export type ParsedStageArgs = ParsedStageBranchArgs | ParsedStageIssueArgs;
 
 /** Usage line for `venfork stage <branch>`. */
 export const STAGE_USAGE =
-  'venfork stage <branch> [--no-pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]';
+  'venfork stage <branch> [--no-pr] [--draft] [--dry-run] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]';
 
 /**
  * Parse `venfork stage ...` argv after the `stage` token.
@@ -73,6 +75,7 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   let base: string | undefined;
   let internalPrNumber: number | undefined;
   let noUpdateExisting = false;
+  let dryRun = false;
   const promptFlags = parsePromptFlags({ allowJson: true });
 
   const positional = scanArgs(stageArgs, STAGE_USAGE, (a, i) => {
@@ -91,6 +94,10 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     }
     if (a === '--no-update-existing') {
       noUpdateExisting = true;
+      return 0;
+    }
+    if (a === '--dry-run') {
+      dryRun = true;
       return 0;
     }
     if (a === '--title' || a.startsWith('--title=')) {
@@ -124,6 +131,7 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
       );
     }
     const branchOnly = [
+      dryRun && '--dry-run',
       prFlag,
       noPr && '--no-pr',
       draft && '--draft',
@@ -186,6 +194,7 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     base,
     internalPrNumber,
     noUpdateExisting,
+    dryRun,
     prompt: promptFlags.prompt,
     json: promptFlags.json,
   };

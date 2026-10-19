@@ -1040,6 +1040,178 @@ describe('stage opens the upstream PR by default', () => {
     }
   });
 
+  test('--dry-run --no-pr previews the commits and files without --yes and pushes nothing', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await cutFeatureBranch(fx);
+      const publicFork = fx.publicFork ?? '';
+
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'feature',
+        '--no-pr',
+        '--dry-run',
+        '--json',
+      ]);
+
+      expect(result.exitCode).toBe(0);
+      expect(parseEnvelope(result.stdout)).toMatchObject({
+        ok: true,
+        result: {
+          dryRun: true,
+          branch: 'feature',
+          target: 'public',
+          commits: ['feat: feature work'],
+          files: ['src-feature.txt'],
+          removedLater: [],
+        },
+      });
+      expect(await hasBranch(publicFork, 'feature')).toBe(false);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('--dry-run head has the same tree as the commit a real stage pushes', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await cutFeatureBranch(fx);
+      const publicFork = fx.publicFork ?? '';
+      const args = ['stage', 'feature', '--no-pr', '--json'];
+
+      const dry = await runCliWithoutTty(fx.work, [...args, '--dry-run']);
+      const real = await runCliWithoutTty(fx.work, [...args, '--yes']);
+
+      expect(dry.exitCode).toBe(0);
+      expect(real.exitCode).toBe(0);
+      const headOf = (stdout: string) =>
+        (parseEnvelope(stdout).result as { head: string }).head;
+      const dryHead = headOf(dry.stdout);
+      const pushedHead = headOf(real.stdout);
+      const tree = async (dir: string, sha: string) =>
+        (await fx.git(dir, 'rev-parse', `${sha}^{tree}`)).trim();
+      expect(await tree(fx.work, dryHead)).toBe(
+        await tree(publicFork, pushedHead)
+      );
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('--dry-run in text mode prints the preview and says nothing was pushed', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await cutFeatureBranch(fx);
+
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'feature',
+        '--no-pr',
+        '--dry-run',
+      ]);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain('feat: feature work');
+      expect(result.stderr).toContain('src-feature.txt');
+      expect(result.stderr).toContain('Dry run: nothing was pushed.');
+      expect(result.stderr).not.toContain('Push to public fork?');
+      expect(await hasBranch(fx.publicFork ?? '', 'feature')).toBe(false);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('--dry-run of a branch adding a mirror-only path fails with stage-leak, exit 1', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.git(fx.work, 'checkout', '--quiet', '-b', 'leaky');
+      await mkdir(path.join(fx.work, '.venfork'), { recursive: true });
+      await writeFile(path.join(fx.work, '.venfork', 'leak.txt'), 'leak\n');
+      await fx.git(fx.work, 'add', '.');
+      await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: leaky change');
+      const publicFork = fx.publicFork ?? '';
+      const before = await fx.git(publicFork, 'for-each-ref');
+
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'leaky',
+        '--no-pr',
+        '--dry-run',
+        '--json',
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(parseEnvelope(result.stdout)).toMatchObject({
+        ok: false,
+        error: { code: 'stage-leak', details: { branch: 'leaky' } },
+      });
+      expect(await fx.git(publicFork, 'for-each-ref')).toBe(before);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('--dry-run of a commit naming venfork fails with mirror-reference, exit 1', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.git(fx.work, 'checkout', '--quiet', '-b', 'named');
+      await writeFile(path.join(fx.work, 'named.txt'), 'x\n');
+      await fx.git(fx.work, 'add', 'named.txt');
+      await fx.git(
+        fx.work,
+        'commit',
+        '--quiet',
+        '-m',
+        'feat: built with venfork'
+      );
+      const publicFork = fx.publicFork ?? '';
+      const before = await fx.git(publicFork, 'for-each-ref');
+
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'named',
+        '--no-pr',
+        '--dry-run',
+        '--json',
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(parseEnvelope(result.stdout)).toMatchObject({
+        ok: false,
+        error: { code: 'mirror-reference', details: { matched: 'venfork' } },
+      });
+      expect(await fx.git(publicFork, 'for-each-ref')).toBe(before);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('--dry-run of a branch with no commits to publish fails with Nothing to stage, exit 1', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.git(fx.work, 'checkout', '--quiet', '-b', 'empty');
+
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'empty',
+        '--no-pr',
+        '--dry-run',
+        '--json',
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(parseEnvelope(result.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: 'precondition',
+          message: expect.stringContaining('Nothing to stage'),
+        },
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
   test('a default stage to a non-GitHub upstream fails before the fetch and names --no-pr', async () => {
     const fx = await createMirrorFixture();
     try {

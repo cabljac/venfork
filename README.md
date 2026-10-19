@@ -267,7 +267,7 @@ venfork sync develop   # Sync develop branch with upstream/develop
 - Workflow allow/block entries match file basenames exactly (no glob patterns)
 - A preserved file that upstream adds is replaced by upstream's version. If upstream later deletes that path again, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork preserve remove <path>` to let it go
 
-### `venfork stage <branch> [--no-pr] [--draft] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]`
+### `venfork stage <branch> [--no-pr] [--draft] [--dry-run] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]`
 
 Push a branch to the public fork, making it visible and ready for PR to upstream. `venfork stage branch <name>` is the explicit form of the same command; use it for a branch named `issue` or `branch`. It also opens the upstream PR for you using your internal review PR's body, unless you pass `--no-pr`. With `--json`, stage never prompts and prints one JSON envelope on stdout (see [JSON output](#json-output)).
 
@@ -280,6 +280,7 @@ Push a branch to the public fork, making it visible and ready for PR to upstream
 - By default stage also opens the upstream PR. It looks up your internal-review PR on the private mirror and copies its description (with redacted blocks stripped).
 - `--no-pr` - Push the branch only and print the compare link. `--draft`, `--title`, `--internal-pr` and `--no-update-existing` need the PR, so they are usage errors with `--no-pr`; `--base` still sets the compare link. `--pr` is still accepted for one release and changes nothing.
 - `--draft` - Open the upstream PR as a draft.
+- `--dry-run` - Run every check, rebuild the branch and build the upstream PR title and body after redaction, print them, and stop. Nothing is pushed, no PR is opened or edited, and nothing is recorded. It needs no `--yes`. With the default PR it still reads the internal review PR through gh, and it looks for an open upstream PR for the branch: when one is open, the preview shows that a real stage keeps its title and replaces only its body (or, with `--no-update-existing`, leaves it unchanged). `--dry-run --no-pr` does not use GitHub beyond the fetch.
 - A branch with no commits to publish beyond upstream's default branch is refused (`precondition`, "Nothing to stage"). Merge commits and venfork-managed commits do not count: stage drops them.
 - `--title <text>` - Override the upstream PR title (default: the internal PR title, or the branch name if no internal PR was found).
 - `--base <branch>` - Override the upstream base branch (default: upstream's default branch).
@@ -292,6 +293,9 @@ Push a branch to the public fork, making it visible and ready for PR to upstream
 ```bash
 # Push only, no PR
 venfork stage feature-auth --no-pr
+
+# See what would be published, push nothing
+venfork stage feature-auth --dry-run
 
 # Stage and open the upstream PR using the internal review body
 venfork stage feature-auth
@@ -654,6 +658,7 @@ Any command line that contains `--json` before any `--` gets the envelope, whate
 - `sync` on the default branch: `{ "kind": "default-branch", "status": "pushed" | "up-to-date", "branch", "upstreamTip", "origin": { "tip", "pushed" }, "public"?: { "tip", "pushed" } }`. `public` is absent in no-public mode. `status` is `pushed` when origin or public moved.
 - `sync <branch>` on a pulled upstream PR: `{ "kind": "pulled-pr", "status": "pushed" | "up-to-date" | "push-failed", "branch", "prNumber", "head" }`. `push-failed` means the local branch moved but origin did not; the run exits 1, with or without `--json`.
 - `stage <branch>`: `{ "branch", "head", "target": "public" | "upstream", "compareUrl", "prAction"?, "prUrl"?, "internalPrUrl"? }`. `head` is the rebuilt commit that was pushed. `prAction` is present unless `--no-pr`: `created`, `updated` (an open PR's body was refreshed), `unchanged` (an open PR was left as is) or `failed` (the push worked, the PR could not be opened or its body could not be updated; the run exits 1).
+- `stage <branch> --dry-run`: `{ "dryRun": true, "branch", "head", "target", "compareUrl", "base", "commits", "files", "removedLater", "prTitle"?, "prBody"?, "existingPrUrl"?, "internalPrUrl"? }`. Nothing was pushed: `head` is the preview rebuild's local commit (a real stage rebuilds again, so its SHA differs but its tree is the same), `commits` are its subjects oldest first, and `prTitle`/`prBody` are the redacted PR text that a real stage would publish (absent with `--no-pr`). `existingPrUrl` is the open upstream PR a real stage would update; with it, `prTitle` is absent (the title stays), and with `--no-update-existing` `prBody` is absent too.
 - `stage issue` and `pull issue`: `{ "number", "url", "source": { "number", "url" } }`. `number` and `url` are the issue venfork opened; `source` is the issue it was made from.
 - `pull pr`: `{ "branch", "head", "prNumber", "prUrl", "pushed" }`. `pushed` is false with `--no-push` or when the push to origin failed; a failed push exits 1.
 - `doctor`: `{ "checks": [{ "id", "ok": true | false | "skipped", "detail", "fix"? }], "links": { "shippedBranches", "pulledPrs", "shippedIssues", "pulledIssues" } | null, "healthy" }`. `healthy` is false when any check failed. Doctor that ran is `ok: true` even when a check failed; it then exits 1.

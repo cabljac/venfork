@@ -215,8 +215,22 @@ describe('parseStageCliArgs --no-pr', () => {
   }
 });
 
+describe('parseStageCliArgs --dry-run', () => {
+  test('is off by default', () => {
+    expect(parseStageCliArgs(['feat']).dryRun).toBe(false);
+  });
+
+  test('works with the default PR and with --no-pr', () => {
+    expect(parseStageCliArgs(['feat', '--dry-run']).dryRun).toBe(true);
+    const offline = parseStageCliArgs(['feat', '--dry-run', '--no-pr']);
+    expect(offline.dryRun).toBe(true);
+    expect(offline.createPr).toBe(false);
+  });
+});
+
 describe('parseStageCliArgs issue rejects branch-only flags', () => {
   const cases: string[][] = [
+    ['--dry-run'],
     ['--pr'],
     ['--no-pr'],
     ['--draft'],
