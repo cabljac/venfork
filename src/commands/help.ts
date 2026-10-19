@@ -89,7 +89,7 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'stage',
-    `venfork stage <branch> [--no-pr] [--draft] [--dry-run] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]
+    `venfork stage <branch> [--no-pr] [--draft] [--dry-run] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--force] [--yes] [--no-input] [--json]
 venfork stage branch <name> [same options]
 venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]
 venfork stage approval [on|reviewed|two-person|off] [--yes] [--no-input] [--json]
@@ -110,6 +110,9 @@ venfork stage approval [on|reviewed|two-person|off] [--yes] [--no-input] [--json
                            API beyond the fetch
   • --internal-pr <n>      Pin a specific internal review PR number (skips most-recent-open lookup)
   • --no-update-existing   Do not update an already-open upstream PR body when staging
+  • --force                Stage past an approval refusal; a person confirms at a
+                           terminal (--yes does not) and the bypass is recorded as a
+                           comment on the mirror PR only. Not with --dry-run
   • --yes, -y              Push (and open the PR or issue) without the confirm
   • --no-input             Never prompt; without --yes the confirm exits 2
   • --json                 Print one JSON envelope on stdout; implies --no-input

@@ -306,7 +306,8 @@ export type ApprovalRefusal =
   | 'self-approved'
   | 'checks-pending'
   | 'checks-failed'
-  | 'gate-weakened';
+  | 'gate-weakened'
+  | 'bypass-unconfirmed';
 
 /**
  * Thrown when the mirror's `approval` level is not met for the branch

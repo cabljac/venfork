@@ -18,7 +18,12 @@ import {
   VenforkError,
 } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
-import { checkApprovalGate, type GateLevel } from '../shared/approval.js';
+import {
+  checkApprovalGate,
+  type GateLevel,
+  ghLogin,
+  recordBypassOnMirrorPr,
+} from '../shared/approval.js';
 import {
   describeWeakening,
   findWeakening,
@@ -295,6 +300,10 @@ export interface ApprovalReport {
   headSha?: string;
   /** Logins whose approval counted. */
   approvers?: string[];
+  /** True when `--force` stages past a refusal; the bypass is recorded on the mirror PR. */
+  bypassed?: boolean;
+  /** Number of the mirror PR the gate read. */
+  prNumber?: number;
   /** Why a real stage would be refused. */
   reason?: ApprovalRefusal | 'precondition';
   /** The refusal a real stage would print. */
@@ -337,6 +346,7 @@ async function planStaging(
     dryRun?: boolean;
     prompt?: PromptContext;
     internalPrNumber?: number;
+    force?: boolean;
   },
   source?: { sha: string }
 ): Promise<StagingPlan> {
@@ -416,6 +426,17 @@ async function planStaging(
     const gate = await approvalGate(level, branch, sourceHead, cwd, consent);
     approval = gate.report;
     approvedPrNumber = gate.prNumber ?? null;
+    if (
+      approval.bypassed &&
+      !canPrompt({ noInput: consent.prompt?.noInput ?? false })
+    ) {
+      throw new ApprovalError(
+        'bypass-unconfirmed',
+        `Not staged: --force needs a person to confirm the bypass at a terminal (${approval.message ?? approval.reason}).`,
+        'Run the same stage at a terminal without --json and answer the confirm; --yes does not answer it.',
+        { level, prUrl: approval.prUrl }
+      );
+    }
     if (approval.ok && approval.headSha) {
       sourceRef = approval.headSha;
       sourceHead = approval.headSha;
@@ -541,7 +562,7 @@ async function approvalGate(
   branch: string,
   sourceHead: string,
   cwd: string,
-  consent: { dryRun?: boolean; internalPrNumber?: number }
+  consent: { dryRun?: boolean; internalPrNumber?: number; force?: boolean }
 ): Promise<{ report: ApprovalReport; prNumber?: number }> {
   try {
     const pass = await checkApprovalGate({
@@ -552,29 +573,27 @@ async function approvalGate(
       pinnedPr: consent.internalPrNumber,
     });
     if (pass.headSha !== sourceHead) {
-      throw new ApprovalError(
-        'branch-moved',
-        `Not staged: '${branch}' is at ${sourceHead.slice(0, 12)}, but the approved PR head is ${pass.headSha.slice(0, 12)}.`,
-        `Push '${branch}' and get the new head approved, or check out the approved commit.`,
-        {
-          level,
-          prUrl: pass.prUrl,
-          headSha: pass.headSha,
-          branchHead: sourceHead,
-        }
-      );
+      throw branchMovedError(level, branch, sourceHead, pass);
     }
     return {
       report: {
         level,
         ok: true,
         prUrl: pass.prUrl,
+        prNumber: pass.prNumber,
         headSha: pass.headSha,
         approvers: pass.approvers,
       },
       prNumber: pass.prNumber,
     };
   } catch (error) {
+    if (
+      consent.force &&
+      error instanceof ApprovalError &&
+      error.reason !== 'branch-moved'
+    ) {
+      return { report: forcedReport(level, branch, error, sourceHead) };
+    }
     if (!consent.dryRun) throw error;
     if (error instanceof ApprovalError) {
       const prUrl = error.details?.prUrl;
@@ -602,7 +621,126 @@ async function approvalGate(
   }
 }
 
+function branchMovedError(
+  level: GateLevel,
+  branch: string,
+  sourceHead: string,
+  pr: { prUrl: string; prNumber: number; headSha: string }
+): ApprovalError {
+  return new ApprovalError(
+    'branch-moved',
+    `Not staged: '${branch}' is at ${sourceHead.slice(0, 12)}, but the approved PR head is ${pr.headSha.slice(0, 12)}.`,
+    `Push '${branch}' and get the new head approved, or check out the approved commit.`,
+    {
+      level,
+      prUrl: pr.prUrl,
+      prNumber: pr.prNumber,
+      headSha: pr.headSha,
+      branchHead: sourceHead,
+    }
+  );
+}
+
+/**
+ * The report for a `--force` stage past `error`. A refusal with no open
+ * mirror PR is not bypassable: the bypass must be recorded on one. Nor is
+ * a branch whose head is not the mirror PR head.
+ */
+function forcedReport(
+  level: GateLevel,
+  branch: string,
+  error: ApprovalError,
+  sourceHead: string
+): ApprovalReport {
+  const prUrl = error.details?.prUrl;
+  const prNumber = error.details?.prNumber;
+  const prHead = error.details?.headSha;
+  if (typeof prUrl !== 'string' || typeof prNumber !== 'number') {
+    throw new ApprovalError(
+      error.reason,
+      error.message,
+      '--force records the bypass on the mirror PR, so push the branch and open one first.',
+      error.details
+    );
+  }
+  if (typeof prHead === 'string' && prHead !== sourceHead) {
+    throw branchMovedError(level, branch, sourceHead, {
+      prUrl,
+      prNumber,
+      headSha: prHead,
+    });
+  }
+  return {
+    level,
+    ok: false,
+    bypassed: true,
+    reason: error.reason,
+    message: errorLine(error),
+    prUrl,
+    prNumber,
+    headSha: sourceHead,
+  };
+}
+
+async function recordBypass(
+  plan: StagingPlan,
+  cwd: string,
+  s: ReturnType<typeof p.spinner>
+): Promise<void> {
+  const report = plan.approval;
+  const mirror = await findMirrorRepoPath(cwd);
+  if (!report?.prUrl || report.prNumber === undefined || !mirror) {
+    throw new PreconditionError(
+      'Not staged: venfork could not record the --force bypass, because origin is not a GitHub repository or the mirror PR is unknown.'
+    );
+  }
+  s.start('Recording the --force bypass on the mirror PR');
+  await recordBypassOnMirrorPr({
+    mirror,
+    prNumber: report.prNumber,
+    prUrl: report.prUrl,
+    login: await ghLogin(cwd),
+    level: report.level,
+    sourceHead: plan.sourceHead,
+    refusal: report.message ?? String(report.reason),
+    cwd,
+  });
+  s.stop(`Bypass recorded on ${report.prUrl}`);
+}
+
+/**
+ * Asks a person at a terminal to confirm a `--force` bypass of the gate.
+ * `--yes` never answers it.
+ */
+async function confirmBypass(
+  plan: StagingPlan,
+  prompt: PromptContext | undefined
+): Promise<void> {
+  const report = plan.approval;
+  if (!report?.bypassed) return;
+  p.log.warn(`--force: ${report.message ?? report.reason}`);
+  const answer = await promptConfirm(
+    {
+      message: `Bypass the approval gate (${report.level}) and stage '${plan.branch}' at ${plan.sourceHead.slice(0, 12)}? The bypass is recorded on ${report.prUrl}.`,
+      initialValue: false,
+      stopped: NOT_STAGED,
+    },
+    { yes: false, noInput: prompt?.noInput ?? false }
+  );
+  if (isCancel(answer)) {
+    p.cancel('Operation cancelled');
+    throw new CommandExitError(130);
+  }
+  if (!answer) {
+    p.outro('Stage cancelled');
+    throw new CommandExitError(0);
+  }
+}
+
 function approvalLine(report: ApprovalReport): string {
+  if (report.bypassed) {
+    return `${report.level}, bypassed with --force (${report.reason}); recorded on ${report.prUrl}`;
+  }
   if (!report.ok) return `${report.level}, not met (${report.reason})`;
   return `${report.level}, approved by ${(report.approvers ?? []).join(', ')} on ${report.prUrl} at ${(report.headSha ?? '').slice(0, 12)}`;
 }
@@ -837,6 +975,11 @@ export interface StageOptions {
   /** `--yes` / `--no-input` for the push confirm. */
   prompt?: PromptContext;
   /**
+   * Stage past an approval gate refusal after a person confirms at a
+   * terminal; the bypass is recorded as a comment on the mirror PR.
+   */
+  force?: boolean;
+  /**
    * Stage the commit `sha` under the name `branch` instead of
    * `refs/heads/<branch>`, so no local branch is read or needed.
    */
@@ -1008,6 +1151,7 @@ export async function stageCommand(
         dryRun: options.dryRun,
         prompt: options.prompt,
         internalPrNumber: options.internalPrNumber,
+        force: options.force,
       },
       options.source
     );
@@ -1021,8 +1165,12 @@ export async function stageCommand(
     } else {
       await confirmWeakening(plan, options.prompt);
       await rememberApproval(repoDir, plan.approvalLevel);
+      await confirmBypass(plan, options.prompt);
     }
-    if (plan.approval?.ok) {
+    if (options.force && plan.approvalLevel === 'off') {
+      p.log.warn('approval is off, so --force has nothing to bypass.');
+    }
+    if (plan.approval?.ok || plan.approval?.bypassed) {
       p.log.info(approvalLine(plan.approval));
     } else if (plan.approval) {
       p.log.warn(
@@ -1211,6 +1359,9 @@ export async function stageCommand(
       throw new CommandExitError(0);
     }
 
+    if (plan.approval?.bypassed) {
+      await recordBypass(plan, repoDir, s);
+    }
     await pushStagedHead(plan, prepared.head, repoDir, s);
     const stagedHead = prepared.head;
 
