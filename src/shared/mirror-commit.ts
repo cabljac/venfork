@@ -12,6 +12,7 @@ import {
   ConfigError,
   GitError,
   PinDowngradeError,
+  PreconditionError,
   UnmigratedMirrorError,
 } from '../errors.js';
 import { parseRepoPath } from '../utils.js';
@@ -241,9 +242,11 @@ export async function buildMirrorTip(args: {
 
     if (preserve.length > 0) {
       if (!previousMirrorTip) {
-        throw new Error(
-          `Cannot preserve files: no previous origin/${defaultBranch} tip to read from.\n` +
-            'Run `venfork sync` once to populate the mirror, then commit your preserved files and re-run sync.'
+        throw new PreconditionError(
+          `Cannot preserve files: no previous origin/${defaultBranch} tip to read from.`,
+          {
+            hint: 'Run `venfork sync` once to populate the mirror, then commit your preserved files and re-run sync.',
+          }
         );
       }
       for (const preservePath of preserve) {
@@ -260,9 +263,10 @@ export async function buildMirrorTip(args: {
           preservePath
         );
         if (upstreamEntries.some((entry) => entry.type === 'tree')) {
-          throw new Error(
-            `Preserved file '${preservePath}' cannot be restored: upstream now has a directory at '${preservePath}'.\n` +
-              `Move the preserved file elsewhere, or remove the entry with:\n  ${preserveRemoveHint(preservePath)}`
+          throw preservedPathError(
+            preservePath,
+            `Preserved file '${preservePath}' cannot be restored: upstream now has a directory at '${preservePath}'.`,
+            'Move the preserved file elsewhere, or remove the entry with'
           );
         }
         if (upstreamEntries.length > 0) {
@@ -336,6 +340,22 @@ export async function buildMirrorTip(args: {
 }
 
 /**
+ * The {@link PreconditionError} for a preserve entry sync cannot restore:
+ * `message`, then `advice` and the remove command as the hint.
+ */
+function preservedPathError(
+  preservePath: string,
+  message: string,
+  advice: string
+): PreconditionError {
+  const command = preserveRemoveHint(preservePath);
+  return new PreconditionError(message, {
+    hint: `${advice} \`${command}\`.`,
+    details: { path: preservePath, command },
+  });
+}
+
+/**
  * The tree entry to restore for `preservePath` from `sourceTip`. The path
  * must be a single file (regular, executable or symlink) there, and every
  * parent directory must be a directory or absent in the upstream tree.
@@ -353,16 +373,18 @@ async function preservedEntry(args: {
     const ancestor = segments.slice(0, i).join('/');
     const found = await treeEntriesAt(git, upstreamTip, ancestor);
     if (found.some((entry) => entry.type !== 'tree')) {
-      throw new Error(
-        `Preserved file '${preservePath}' cannot be restored: upstream now has a file at '${ancestor}'.\n` +
-          `Move the preserved file elsewhere, or remove the entry with:\n  ${preserveRemoveHint(preservePath)}`
+      throw preservedPathError(
+        preservePath,
+        `Preserved file '${preservePath}' cannot be restored: upstream now has a file at '${ancestor}'.`,
+        'Move the preserved file elsewhere, or remove the entry with'
       );
     }
     const staged = await mustGit(git, ['ls-files', '-z', '--', ancestor]);
     if (staged.split('\0').includes(ancestor)) {
-      throw new Error(
-        `Preserved file '${preservePath}' cannot be restored: a file exists at '${ancestor}' in the managed tree.\n` +
-          `Move the preserved file elsewhere, or remove the entry with:\n  ${preserveRemoveHint(preservePath)}`
+      throw preservedPathError(
+        preservePath,
+        `Preserved file '${preservePath}' cannot be restored: a file exists at '${ancestor}' in the managed tree.`,
+        'Move the preserved file elsewhere, or remove the entry with'
       );
     }
   }
@@ -370,23 +392,27 @@ async function preservedEntry(args: {
   const entries = await treeEntriesAt(git, sourceTip, preservePath);
   const [entry] = entries;
   if (!entry || entries.length !== 1) {
-    throw new Error(
-      `Preserved file '${preservePath}' not found on origin/${defaultBranch}.\n` +
-        'Either commit it to the mirror first, or remove the entry with:\n' +
-        `  ${preserveRemoveHint(preservePath)}`
+    throw preservedPathError(
+      preservePath,
+      `Preserved file '${preservePath}' not found on origin/${defaultBranch}.`,
+      'Commit it to the mirror first, or remove the entry with'
     );
   }
   if (entry.type === 'tree') {
-    throw new Error(
-      `Preserved path '${preservePath}' is a directory on origin/${defaultBranch}; preserve supports single files only. List each file instead.`
+    throw preservedPathError(
+      preservePath,
+      `Preserved path '${preservePath}' is a directory on origin/${defaultBranch}; preserve supports single files only.`,
+      'List each file instead, and remove the directory entry with'
     );
   }
   if (
     entry.type !== 'blob' ||
     !['100644', '100755', '120000'].includes(entry.mode)
   ) {
-    throw new Error(
-      `Preserved path '${preservePath}' is not a regular file, executable or symlink on origin/${defaultBranch} (mode ${entry.mode}); preserve supports single files only.`
+    throw preservedPathError(
+      preservePath,
+      `Preserved path '${preservePath}' is not a regular file, executable or symlink on origin/${defaultBranch} (mode ${entry.mode}); preserve supports single files only.`,
+      'Remove the entry with'
     );
   }
   return entry;

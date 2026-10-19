@@ -506,6 +506,9 @@ describe('the preserve check asks the tip builder sync uses', () => {
 
     expect(checks.preserve.ok).toBe(false);
     expect(checks.preserve.detail).toContain('directory');
+    expect(checks.preserve.fix).toContain(
+      "venfork preserve remove 'MIRROR.md'"
+    );
     await expect(
       syncCommand(undefined, { cwd: fx.work, quiet: true })
     ).rejects.toThrow(new CommandExitError(1));

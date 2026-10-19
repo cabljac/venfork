@@ -138,3 +138,11 @@ export function parseOwner(url: string): string {
   const match = url.match(/github\.com[:/](.+?)\/.+/);
   return match?.[1] || '';
 }
+
+/**
+ * `value` single-quoted for a POSIX shell, so a pasted command passes it
+ * through unchanged (no expansion of `$(...)`, `*` or quotes).
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}

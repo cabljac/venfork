@@ -17,6 +17,10 @@ export interface JsonError {
   message: string;
   /** The flag that supplies the missing answer; only for `missing-input`. */
   flag?: string;
+  /** The next step, often a command to run. */
+  hint?: string;
+  /** Facts about the failure, such as the files or branch involved. */
+  details?: Record<string, unknown>;
 }
 
 /** The one JSON object a `--json` run prints on stdout. */
@@ -72,10 +76,15 @@ function failedCommand(error: unknown): string | undefined {
 
 function describeError(error: unknown): JsonError {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof MissingInputError) {
-    return { code: error.code, message, flag: error.flag };
+  if (error instanceof VenforkError) {
+    return {
+      code: error.code,
+      message,
+      ...(error instanceof MissingInputError ? { flag: error.flag } : {}),
+      ...(error.hint ? { hint: error.hint } : {}),
+      ...(error.details ? { details: error.details } : {}),
+    };
   }
-  if (error instanceof VenforkError) return { code: error.code, message };
   const command = failedCommand(error);
   if (command?.startsWith('git ')) return { code: 'git', message };
   if (command?.startsWith('gh ')) return { code: 'github', message };

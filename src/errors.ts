@@ -20,7 +20,6 @@ export type ErrorCode =
   | 'pin-downgrade'
   | 'unmigrated-mirror'
   | 'cancelled'
-  | 'command-failed'
   | 'missing-input'
   | 'usage';
 
@@ -30,11 +29,21 @@ export type ErrorCode =
 export class VenforkError extends Error {
   /** The stable code `--json` reports for this error. */
   readonly code: ErrorCode;
+  /** The next step, printed after the message and reported as `error.hint`. */
+  readonly hint?: string;
+  /** Facts a script can act on, reported as `error.details`. */
+  readonly details?: Record<string, unknown>;
 
-  constructor(message: string, code: ErrorCode = 'runtime') {
+  constructor(
+    message: string,
+    code: ErrorCode = 'runtime',
+    extra: { hint?: string; details?: Record<string, unknown> } = {}
+  ) {
     super(message);
     this.name = 'VenforkError';
     this.code = code;
+    if (extra.hint !== undefined) this.hint = extra.hint;
+    if (extra.details !== undefined) this.details = extra.details;
     // Maintains proper stack trace for where our error was thrown (only available on V8)
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, this.constructor);
@@ -78,7 +87,8 @@ export class RemoteNotFoundError extends VenforkError {
   constructor(public readonly remoteName: string) {
     super(
       `Remote '${remoteName}' not found. Did you run venfork setup?`,
-      'remote-not-found'
+      'remote-not-found',
+      { details: { remote: remoteName } }
     );
     this.name = 'RemoteNotFoundError';
   }
@@ -114,8 +124,11 @@ export class GitHubError extends VenforkError {
  * layout.
  */
 export class PreconditionError extends VenforkError {
-  constructor(message: string) {
-    super(message, 'precondition');
+  constructor(
+    message: string,
+    extra: { hint?: string; details?: Record<string, unknown> } = {}
+  ) {
+    super(message, 'precondition', extra);
     this.name = 'PreconditionError';
   }
 }
@@ -125,7 +138,10 @@ export class PreconditionError extends VenforkError {
  */
 export class BranchNotFoundError extends VenforkError {
   constructor(public readonly branchName: string) {
-    super(`Branch '${branchName}' does not exist`, 'branch-not-found');
+    super(`Branch '${branchName}' does not exist`, 'branch-not-found', {
+      hint: 'Run `git branch` to list local branches.',
+      details: { branch: branchName },
+    });
     this.name = 'BranchNotFoundError';
   }
 }
@@ -144,7 +160,9 @@ export class SyncDivergenceError extends VenforkError {
   constructor(
     public readonly defaultBranch: string,
     public readonly origin: RemoteDivergence,
-    public readonly publicFork: RemoteDivergence
+    public readonly publicFork: RemoteDivergence,
+    /** `venfork preserve add <files>` for the origin files it can keep. */
+    preserveCommand?: string
   ) {
     const parts: string[] = [];
     if (origin.count > 0) {
@@ -154,11 +172,31 @@ export class SyncDivergenceError extends VenforkError {
       parts.push(`public/${defaultBranch} has ${publicFork.count}`);
     }
     super(
-      `Sync aborted to prevent data loss: ${parts.join(', ')} commit(s) not in upstream/${defaultBranch}`,
-      'sync-divergence'
+      `Sync aborted to prevent data loss: ${parts.join(', ')} commit(s) not in upstream/${defaultBranch}${listFiles([...origin.files, ...publicFork.files])}.`,
+      'sync-divergence',
+      {
+        hint: preserveCommand
+          ? `If the files belong only on the mirror, run \`${preserveCommand}\`. Otherwise move the commits to a branch and retry.`
+          : 'Move the commits to a branch and retry. `venfork doctor` shows the divergence.',
+        details: {
+          branch: defaultBranch,
+          origin,
+          public: publicFork,
+          ...(preserveCommand ? { command: preserveCommand } : {}),
+        },
+      }
     );
     this.name = 'SyncDivergenceError';
   }
+}
+
+/** ` (a, b, and 3 more)` for the first files of a list, or `` for none. */
+function listFiles(files: string[]): string {
+  const unique = [...new Set(files)];
+  if (unique.length === 0) return '';
+  const shown = unique.slice(0, 3).join(', ');
+  const more = unique.length > 3 ? `, and ${unique.length - 3} more` : '';
+  return ` (${shown}${more})`;
 }
 
 /** Why a {@link ConfigError} was thrown. */
@@ -187,9 +225,10 @@ export class ConfigError extends VenforkError {
     message: string,
     options?: { cause?: unknown; reason?: ConfigErrorReason }
   ) {
-    super(message, 'config');
+    const reason = options?.reason ?? 'invalid';
+    super(message, 'config', { details: { reason } });
     this.name = 'ConfigError';
-    this.reason = options?.reason ?? 'invalid';
+    this.reason = reason;
     if (options?.cause !== undefined) this.cause = options.cause;
   }
 }
@@ -203,7 +242,8 @@ export class RedactionError extends VenforkError {
   constructor(public readonly snippet: string) {
     super(
       `Refusing to publish: '${snippet}' mentions venfork outside a well-formed <!-- venfork:internal --> ... <!-- /venfork:internal --> block. Fix the markers or remove the mention and retry.`,
-      'redaction'
+      'redaction',
+      { details: { snippet } }
     );
     this.name = 'RedactionError';
   }
@@ -222,7 +262,8 @@ export class MirrorReferenceError extends VenforkError {
   ) {
     super(
       `Refusing to publish: ${where} contains '${matched}', which points back at the private mirror. ${remedy}`,
-      'mirror-reference'
+      'mirror-reference',
+      { details: { where, matched } }
     );
     this.name = 'MirrorReferenceError';
   }
@@ -245,7 +286,8 @@ export class StageLeakError extends VenforkError {
       leak === 'content'
         ? `Refusing to stage '${branch}': ${who} would publish content of a mirror-only file: ${paths.join(', ')}. Rewrite the branch so no commit copies mirror-only content (it belongs on the mirror default branch only) and retry.`
         : `Refusing to stage '${branch}': ${who} would publish mirror-only path(s) ${paths.join(', ')}. Rewrite the branch so no commit adds or changes them (they belong on the mirror default branch only) and retry.`,
-      'stage-leak'
+      'stage-leak',
+      { details: { branch, paths, leak, ...(commit ? { commit } : {}) } }
     );
     this.name = 'StageLeakError';
   }
@@ -262,7 +304,8 @@ export class PinDowngradeError extends VenforkError {
   ) {
     super(
       `origin pins venfork ${pinned}, you are running ${running}; upgrade the CLI or set VENFORK_INSTALL_SPEC`,
-      'pin-downgrade'
+      'pin-downgrade',
+      { details: { pinned, running } }
     );
     this.name = 'PinDowngradeError';
   }
@@ -287,6 +330,17 @@ export class UnmigratedMirrorError extends VenforkError {
 }
 
 /**
+ * The code for a {@link CommandExitError} that carries no cause: a decline
+ * at a confirm (exit 0) or a signal is `cancelled`.
+ */
+function exitCodeErrorCode(exitCode: number): ErrorCode {
+  if (exitCode === 0 || exitCode === 130 || exitCode === 143) {
+    return 'cancelled';
+  }
+  return exitCode === 2 ? 'usage' : 'runtime';
+}
+
+/**
  * Thrown by a command that has already printed its outcome. `src/index.ts`
  * exits with `exitCode` and prints nothing more; with `--json` the error
  * envelope describes `cause` when it is set.
@@ -296,10 +350,7 @@ export class CommandExitError extends VenforkError {
     public readonly exitCode: number,
     cause?: unknown
   ) {
-    super(
-      `Command exited with code ${exitCode}`,
-      exitCode === 130 || exitCode === 143 ? 'cancelled' : 'command-failed'
-    );
+    super(`Command exited with code ${exitCode}`, exitCodeErrorCode(exitCode));
     this.name = 'CommandExitError';
     if (cause !== undefined) this.cause = cause;
   }
@@ -321,7 +372,8 @@ export class MissingInputError extends VenforkError {
     const next = flag === '--yes' ? 'Add --yes to confirm.' : `Pass ${flag}.`;
     super(
       `${stopped ? `${stopped} ` : ''}"${question}" needs an answer and venfork cannot prompt here. ${next}`,
-      'missing-input'
+      'missing-input',
+      { details: { flag, question } }
     );
     this.name = 'MissingInputError';
   }
@@ -359,4 +411,14 @@ export function exitCodeFor(error: unknown): number {
     return 2;
   }
   return 1;
+}
+
+/**
+ * The one human line for `error`: its message, then its hint when it is a
+ * {@link VenforkError} with one.
+ */
+export function errorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof VenforkError) || !error.hint) return message;
+  return `${message}${/[.!?]$/.test(message) ? '' : '.'} ${error.hint}`;
 }

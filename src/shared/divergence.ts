@@ -1,6 +1,7 @@
 import { $ } from 'execa';
 import { normalizePreservePath } from '../config.js';
-import type { SyncDivergenceError } from '../errors.js';
+import { type RemoteDivergence, SyncDivergenceError } from '../errors.js';
+import { shellQuote } from '../utils.js';
 import {
   inspectManagedCommit,
   isWeakManagedKind,
@@ -167,6 +168,39 @@ export async function checkDivergence(args: {
   return { count, files: Array.from(files).sort(), weakManaged };
 }
 
+/** The most files {@link preserveCommandFor} puts in one command. */
+export const PRESERVE_COMMAND_MAX_FILES = 10;
+
+/**
+ * `venfork preserve add <files>` for the files the preserve list accepts,
+ * each shell-quoted. Undefined when it accepts none of them, or more than
+ * {@link PRESERVE_COMMAND_MAX_FILES}: a partial command would keep only
+ * some files.
+ */
+export function preserveCommandFor(files: string[]): string | undefined {
+  const valid = files.filter((file) => normalizePreservePath(file) !== null);
+  return valid.length > 0 && valid.length <= PRESERVE_COMMAND_MAX_FILES
+    ? `venfork preserve add ${valid.map(shellQuote).join(' ')}`
+    : undefined;
+}
+
+/**
+ * The {@link SyncDivergenceError} for divergent commits on origin and
+ * public, with the preserve command for origin's files as its hint.
+ */
+export function divergenceError(
+  defaultBranch: string,
+  origin: RemoteDivergence,
+  publicFork: RemoteDivergence
+): SyncDivergenceError {
+  return new SyncDivergenceError(
+    defaultBranch,
+    origin,
+    publicFork,
+    preserveCommandFor(origin.files)
+  );
+}
+
 /**
  * Human-readable explanation of a {@link SyncDivergenceError}: which remotes
  * diverged, the files involved, and how to unblock sync. `maxFiles` caps
@@ -221,7 +255,7 @@ export function formatDivergenceReport(
     }
     if (validForPreserve.length > 0) {
       sections.push(
-        `If these are mirror-only files you want to keep across sync, add them to preserve:\n  venfork preserve add ${validForPreserve.slice(0, maxFiles).join(' ')}${more(validForPreserve.length)}`
+        `If these are mirror-only files you want to keep across sync, add them to preserve:\n  venfork preserve add ${validForPreserve.slice(0, maxFiles).map(shellQuote).join(' ')}${more(validForPreserve.length)}`
       );
       if (invalidForPreserve.length > 0) {
         sections.push(

@@ -7,7 +7,7 @@ import { ConfigError, GitError } from './errors.js';
 import { SYNC_WORKFLOW_PATH } from './shared/constants.js';
 import { isValidCronExpression } from './shared/cron.js';
 import { netExec, netFailureReason } from './shared/net.js';
-import { parseRepoPath } from './utils.js';
+import { parseRepoPath, shellQuote } from './utils.js';
 
 /**
  * Record kept by `venfork stage --pr` linking an internal review PR (on the
@@ -105,8 +105,8 @@ export interface VenforkConfig {
    *   - not the managed sync workflow (or a path below it) and nothing under
    *     `.venfork/`: venfork owns those
    *
-   * Whitespace is forbidden so the divergence-error hint
-   * (`venfork preserve add <path>`) stays copy/paste-safe without quoting.
+   * Every printed `venfork preserve add|remove` command single-quotes its
+   * paths (`shellQuote`); that quoting, not this list, makes it paste-safe.
    * Entries that don't match move to `invalidPreserve` during normalization.
    *
    * On sync, every listed path is read from the previous mirror tip
@@ -470,10 +470,8 @@ export function isVenforkOwnedPath(entry: string): boolean {
  * characters (`*`, `?`, `[`, `]`), a leading `:` (pathspec magic), or
  * `..` / `.` / empty segments, and venfork-owned paths
  * ({@link isVenforkOwnedPath}). Whitespace anywhere in the value is rejected
- * too — preserve paths surface verbatim in the divergence-error hint
- * (`venfork preserve add <path>`), so disallowing whitespace keeps that
- * copy/paste-safe without quoting and rules out an entire bug class for a
- * negligible cost (workflow/script paths conventionally don't use spaces).
+ * too. The printed `venfork preserve add|remove` commands are paste-safe
+ * because `shellQuote` single-quotes each path, not because of these rules.
  *
  * Leading `-` is forbidden so a preserved filename can't be parsed as a git
  * option (e.g. `git add --all`). Every internal call site already passes
@@ -737,8 +735,7 @@ export function invalidPreserveError(entries: readonly string[]): ConfigError {
  * @param entries Preserve entries.
  */
 export function preserveRemoveHint(...entries: string[]): string {
-  const quoted = entries.map((entry) => `'${entry.replaceAll("'", "'\\''")}'`);
-  return `venfork preserve remove ${quoted.join(' ')}`;
+  return `venfork preserve remove ${entries.map(shellQuote).join(' ')}`;
 }
 
 function parseConfig(

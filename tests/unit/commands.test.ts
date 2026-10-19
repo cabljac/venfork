@@ -1436,9 +1436,8 @@ describe('syncCommand', () => {
       { exitCode: 0, stdout: 'agent.yml\0', stderr: '' }
     );
 
-    await expect(syncCommand('main')).rejects.toBeInstanceOf(
-      SyncDivergenceError
-    );
+    const rejected = await syncCommand('main').catch((error) => error);
+    expect(rejected).toBeInstanceOf(SyncDivergenceError);
     // The upstream→origin force-push must NOT have happened.
     expect(
       execaCalls.some((cmd) =>
@@ -1450,9 +1449,11 @@ describe('syncCommand', () => {
     // The error message must surface the orphaned file with a concrete
     // `venfork preserve add` hint — the case-by-name guidance the user
     // needs to recognize "oh, that's the entry I just removed."
-    const messages = noteCalls.map((n) => n.message).join('\n---\n');
-    expect(messages).toContain('venfork preserve add agent.yml');
-    expect(messages).toContain('agent.yml');
+    expect(rejected.message).toContain('(agent.yml)');
+    expect(rejected.hint).toContain("`venfork preserve add 'agent.yml'`");
+    expect(noteCalls.map((n) => n.message).join('\n')).not.toContain(
+      'Force-sync'
+    );
   });
 
   test('legacy "+1 commit" subjects from older venfork versions still classify as managed (no spurious divergence)', async () => {

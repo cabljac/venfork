@@ -590,7 +590,7 @@ venfork preserve clear
 - The sync workflow and anything under `.venfork/` cannot be preserved: venfork owns them. A commit with the managed trailer that also changes any other file counts as your work, so sync stops on it as divergence.
 - If the `venfork-config` branch is missing while `origin/<default>` still carries a managed commit, sync refuses. Restore the branch. `venfork setup` never overwrites an existing config branch.
 
-**Directory entries:** an old config can still hold a directory entry. `venfork stage` and `venfork sync` treat an entry that is a directory on origin's default branch as invalid and refuse to run until you run `venfork preserve remove '<directory>'` and add each file. Every `venfork preserve remove` command venfork prints single-quotes its entries, so a shell does not expand `*.md`.
+**Directory entries:** an old config can still hold a directory entry. `venfork stage` and `venfork sync` treat an entry that is a directory on origin's default branch as invalid and refuse to run until you run `venfork preserve remove '<directory>'` and add each file. Every `venfork preserve add` and `venfork preserve remove` command venfork prints single-quotes its paths, so a shell passes them through unchanged (`*.md` is not expanded, `$(...)` does not run).
 
 **Invalid entries:** an entry written by an older venfork, or by hand, that is not a valid single-file path (for example `docs/*.md`) makes sync abort and shows up in `venfork preserve list` and `venfork doctor`. Remove it with `venfork preserve remove <entry>`, using the entry exactly as listed. `remove` works on invalid entries too.
 
@@ -614,7 +614,10 @@ Every command accepts `--json`: `setup`, `clone`, `sync`, `schedule`, `stage` (b
 ```json
 { "schemaVersion": 1, "ok": true, "result": { } }
 { "schemaVersion": 1, "ok": false, "error": { "code": "missing-input", "message": "...", "flag": "--yes" } }
+{ "schemaVersion": 1, "ok": false, "error": { "code": "branch-not-found", "message": "...", "hint": "Run `git branch` to list local branches.", "details": { "branch": "feat" } } }
 ```
+
+An error can carry `hint`, the next step (often a command to run), and `details`, facts a script can act on. Without `--json`, the hint prints after the message on the same line. `details` per code: `branch-not-found` `{ branch }`; `sync-divergence` `{ branch, origin: { count, files }, public: { count, files }, command? }`, where `command` is the `venfork preserve add <files>` that keeps origin's files, each path single-quoted, present only when 1 to 10 of the files can be preserved (`origin.files` always lists every file); `precondition` for a preserved file sync cannot restore `{ path, command }`, where `command` is the `venfork preserve remove` for it; `stage-leak` `{ branch, paths, leak: "path" | "content", commit? }`; `mirror-reference` `{ where, matched }`; `redaction` `{ snippet }`; `remote-not-found` `{ remote }`; `config` `{ reason }`; `pin-downgrade` `{ pinned, running }`; `missing-input` `{ flag, question }`.
 
 `schemaVersion` changes only when a field is removed or changes meaning. New fields can be added in the same version.
 
@@ -641,7 +644,6 @@ Any command line that contains `--json` before any `--` gets the envelope, whate
 | `stage-leak` | Stage would publish a mirror-only path or its content, or it cannot check the mirror history (too many reflog entries or commits, a directory where venfork writes a file, a file over 100 MB). Text that names the mirror is `mirror-reference`, and a bad internal block is `redaction` |
 | `pin-downgrade` | origin pins a newer venfork than the one running |
 | `unmigrated-mirror` | The mirror's sync workflow predates venfork 0.11 |
-| `command-failed` | The command failed and reported why on stderr |
 | `runtime` | Another venfork runtime failure |
 | `internal` | An unexpected error that venfork did not classify |
 

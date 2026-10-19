@@ -1,6 +1,6 @@
 import type { Writable } from 'node:stream';
 import * as clack from '@clack/prompts';
-import { CommandExitError, isEntryReported } from '../errors.js';
+import { CommandExitError, errorText, isEntryReported } from '../errors.js';
 
 /** A stream that ui output is written to. */
 export type UiStream = Writable & { isTTY?: boolean };
@@ -153,7 +153,7 @@ export const stderrUi: Ui = createUi(() => process.stderr);
 export function reportFailure(error: unknown, spinner?: UiSpinner): unknown {
   spinner?.clear();
   if (isEntryReported(error)) return error;
-  stderrUi.log.error(error instanceof Error ? error.message : String(error));
+  stderrUi.log.error(errorText(error));
   return new CommandExitError(1, error);
 }
 
