@@ -42,7 +42,7 @@ vf_origin_commit src/hotfix.txt hot; venfork sync </dev/null 2>&1 | grep "Sync a
 venfork sync --json </dev/null 2>/dev/null | jq -r .error.code; echo "${PIPESTATUS[0]}" # sync-divergence, 1
 ```
 
-- Concurrent lease: build the stale copy (README), `vf_upstream_commit`, then `vf_origin_commit` a teammate commit, swap the fetch URL, `venfork sync` exits 1 with "origin/main moved since this sync fetched it". The teammate commit stays on origin.
+- Concurrent lease: build the stale copy (features/README.md), `vf_upstream_commit`, then `vf_origin_commit` a teammate commit, swap the fetch URL, `venfork sync` exits 1 with "origin/main moved since this sync fetched it". The teammate commit stays on origin.
 - `venfork sync upstream-pr/1 </dev/null 2>&1; echo $?` prints the usage error naming `venfork pull pr 1` and 2.
 - Pin guard: after `schedule set`, `vf_origin_commit .github/workflows/venfork-sync.yml "$(git -C "$VF_ORIGIN" show main:.github/workflows/venfork-sync.yml | sed "s/venfork@$(venfork --version)/venfork@9.9.9/")" "$(printf 'chore: venfork-managed mirror commit\n\nVenfork-Managed: 1')"`, `vf_upstream_commit src/n.txt n`, `venfork sync`: exit 1, "origin pins venfork 9.9.9, you are running <the version `venfork --version` prints>".
 - Cancel: there is no prompt. `venfork sync --json` killed with SIGINT prints the `cancelled` envelope and exits 130 (`tests/integration/cli.test.ts`); killed with SIGTERM it prints the same envelope ("Interrupted by SIGTERM") and exits 143 (also pinned). To drive it, put a `git` wrapper first on `PATH` that sleeps on `fetch`, start `venfork sync --json &`, then `kill -INT` it.

@@ -53,7 +53,7 @@ function codeUnderTestUrl(): Promise<string> {
   return installUrlPromise;
 }
 
-e2eDescribe('venfork e2e — scheduled sync flow', () => {
+e2eDescribe('venfork e2e - scheduled sync flow', () => {
   beforeAll(async () => {
     await ensureGhAuth();
     await ensureDeleteRepoScope();
@@ -179,7 +179,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     );
     expect(pokedUpstreamSha).not.toBe(initialUpstreamSha);
 
-    // 5. Run `venfork sync` locally — exercises the full sync path with
+    // 5. Run `venfork sync` locally - exercises the full sync path with
     //    user-side credentials covering both the mirror and the public fork.
     await runVenfork(['sync'], { cwd: localMirrorPath });
 
@@ -209,7 +209,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     // Second commit is the upstream poke commit.
     expect(mirrorMessagesFinal[1]).toContain('e2e poke poke.txt');
 
-    // Parent of mirror tip equals upstream tip — proves +1 model.
+    // Parent of mirror tip equals upstream tip - proves +1 model.
     await $({ cwd: localMirrorPath })`git fetch origin ${defaultBranch}`;
     const parentSha = (
       await $({
@@ -513,7 +513,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
       cwd: localMirrorPath,
     });
 
-    // Find the upstream issue. Don't use gh's `--search` — its index is
+    // Find the upstream issue. Don't use gh's `--search` - its index is
     // eventually consistent. Even the plain list endpoint has cache lag
     // for freshly-created issues, so retry a few times.
     type IssueListEntry = { number: number; url: string; body: string };

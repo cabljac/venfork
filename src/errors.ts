@@ -313,7 +313,7 @@ export class PinDowngradeError extends VenforkError {
 
 /** The steps that migrate a mirror whose sync workflow predates venfork 0.11. */
 export const UNMIGRATED_MIRROR_STEPS =
-  'Set VENFORK_PUSH_TOKEN, then run `venfork sync` locally once with venfork 0.11 or later; see the README section on upgrading from 0.10.';
+  'Set VENFORK_PUSH_TOKEN, then run `venfork sync` locally once with venfork 0.11 or later; see https://github.com/cabljac/venfork/blob/main/docs/reference/migration.md';
 
 /**
  * Thrown by a scheduled run when origin's sync workflow predates the pinned

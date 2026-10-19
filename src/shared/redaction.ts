@@ -129,7 +129,7 @@ export function stripInternalBlocks(body: string): string {
  * Looks up the most relevant internal PR for `branch` on the private mirror.
  * When `pinnedNumber` is set, fetches that exact PR via `gh pr view` (skips
  * the list lookup). Otherwise prefers the most recent open PR, then the most
- * recent of any state. Returns null if none exists or the lookup fails — the
+ * recent of any state. Returns null if none exists or the lookup fails - the
  * caller falls back to a generated synthetic body.
  */
 export async function findInternalPr(
@@ -153,7 +153,7 @@ export async function findInternalPr(
     }
   }
   // Prefer an open PR; if none, take the most recent of any state.
-  // Pass each flag/value as a separate execa interpolation — passing
+  // Pass each flag/value as a separate execa interpolation - passing
   // `--state open` as a single string makes execa treat it as one arg
   // and gh silently filters wrong (returns zero results).
   for (const state of ['open', 'all'] as const) {

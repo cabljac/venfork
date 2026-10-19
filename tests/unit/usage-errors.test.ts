@@ -67,32 +67,37 @@ const cases: ReadonlyArray<
     'sync',
     parseSyncCliArgs,
     ['--bogus'],
-    'Usage: venfork sync [--report-issues] [--no-input] [--json]',
+    'Usage: venfork sync [--report-issues] [--yes] [--no-input] [--json]',
   ],
   [
     'doctor',
     parseDoctorCliArgs,
     ['--bogus'],
-    'Usage: venfork doctor [--no-input] [--json]',
+    'Usage: venfork doctor [--yes] [--no-input] [--json]',
   ],
   [
     'schedule',
     parseScheduleCliArgs,
     ['--bogus'],
-    '|disable> [--no-input] [--json]',
+    '|disable> [--yes] [--no-input] [--json]',
   ],
   [
     'workflows',
     parseWorkflowsCliArgs,
     ['nope'],
-    '[workflow-file ...] [--no-input] [--json]',
+    '[workflow-file ...] [--yes] [--no-input] [--json]',
   ],
-  ['keep', parseKeepCliArgs, ['nope'], '[path ...] [--no-input] [--json]'],
+  [
+    'keep',
+    parseKeepCliArgs,
+    ['nope'],
+    '[path ...] [--yes] [--no-input] [--json]',
+  ],
   [
     'pull',
     parsePullCliArgs,
     ['pr', '1', '--bogus'],
-    '[--no-push] [--no-input] [--json]',
+    '[--no-push] [--yes] [--no-input] [--json]',
   ],
 ];
 

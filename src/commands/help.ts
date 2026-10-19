@@ -73,7 +73,8 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
     when the mirror has a schedule or kept files
   Applies the workflow allow and block lists (see venfork workflows)
   Syncs main/master branch without affecting your current work
-  --json prints one JSON envelope on stdout (see README "JSON output")`,
+  --json prints one JSON envelope on stdout, described at
+    https://github.com/cabljac/venfork/blob/main/docs/reference/json.md`,
   ],
   [
     'schedule',

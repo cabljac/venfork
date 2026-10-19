@@ -25,7 +25,7 @@ tests:
 
 ## How a user reaches it
 
-`venfork clone <mirror> [--own-upstream] [--upstream <url>] [--public-fork <url>] [--no-input] [--json]`. `<mirror>` is the private mirror as a GitHub URL or `owner/repo`; `--upstream` and `--public-fork` take the same forms, and a malformed one exits 2 before gh auth.
+`venfork clone <mirror> [--own-upstream] [--upstream <url>] [--public-fork <url>] [--yes] [--no-input] [--json]`. `<mirror>` is the private mirror as a GitHub URL or `owner/repo`; `--upstream` and `--public-fork` take the same forms, and a malformed one exits 2 before gh auth.
 
 ## How to drive it
 

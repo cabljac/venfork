@@ -35,7 +35,7 @@ tests:
 venfork help >/dev/null 2>&1; echo $?                                   # 0
 venfork help 2>/dev/null | grep -c -e "Get started" -e "Automation"   # 2
 venfork help exit-codes 2>/dev/null | grep -c "^143 "                  # 1
-venfork help sync 2>/dev/null | head -1                                 # venfork sync [--report-issues] [--no-input] [--json]
+venfork help sync 2>/dev/null | head -1                                 # venfork sync [--report-issues] [--yes] [--no-input] [--json]
 venfork help bogus 2>&1; echo $?                                        # Unknown command: bogus. ..., 2
 venfork pull pr --help 2>/dev/null | head -1                            # venfork pull pr <pr-number-or-url> ...
 venfork --version                                                       # the package.json version
@@ -55,7 +55,7 @@ venfork help | head -1 >/dev/null; echo "${PIPESTATUS[0]}"              # 0
 
 - Exit code, and which stream holds the text: `venfork help 2>/dev/null` is not empty, `venfork 2>/dev/null` is empty.
 - With `--json`, stdout is one line and `jq -r .error.code` is `usage`.
-- `tests/unit/docs-drift.test.ts` checks that every dispatched command has a README heading and that every flag and subcommand in a command's help usage appears in its README section.
+- `tests/unit/docs-drift.test.ts` checks that every dispatched command has a heading in the user docs (README.md plus docs/reference/*.md) and that every flag and subcommand in a command's help usage appears in that command's section of those docs.
 
 ## What usually lies
 

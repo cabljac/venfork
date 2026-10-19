@@ -161,7 +161,7 @@ describe('parseSetupCliArgs', () => {
   });
 
   test('--own-upstream coexists with the positional private mirror name', () => {
-    // Positional arg #2 is `privateMirrorName`, not a fork name — only
+    // Positional arg #2 is `privateMirrorName`, not a fork name - only
     // --fork-name (or --fork-name=) sets `publicForkRepoName`. So
     // --own-upstream + a private mirror name must NOT throw.
     expect(

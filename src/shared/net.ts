@@ -196,7 +196,7 @@ const SEED_PUSH_CONFIG = [
  * Whether a failed seed push is worth retrying. Retry only recognized
  * server-side/transport failures during a large transfer (timeouts,
  * gateways, dropped connections). Auth/permission/not-found/protected-branch
- * and any unrecognized failure fail fast — retrying those just delays a
+ * and any unrecognized failure fail fast - retrying those just delays a
  * permanent setup error.
  */
 export function isTransientPushError(err: unknown): boolean {
@@ -312,7 +312,7 @@ async function pushSeedRef(
 /**
  * Seed a fresh private mirror from a local upstream clone.
  *
- * A single `git push` of a large repo's full history 408s — GitHub enforces
+ * A single `git push` of a large repo's full history 408s - GitHub enforces
  * a request-duration limit and the monolithic pack POST exceeds it. So push
  * the default branch in commit batches (each POST stays small), then push the
  * real tip. History/SHAs are identical to upstream, which `sync`/`stage`/PRs

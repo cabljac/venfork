@@ -82,7 +82,7 @@ export function renderPulledComments(
   if (!comments || comments.length === 0) return '';
   const blocks = comments.map((c) => {
     const who = c.author?.login ? `@${c.author.login}` : '(unknown)';
-    const when = c.createdAt ? ` — ${c.createdAt}` : '';
+    const when = c.createdAt ? ` - ${c.createdAt}` : '';
     return `**${who}**${when}:\n\n${c.body?.trim() || '(empty)'}`;
   });
   const label = comments.length === 1 ? 'comment' : 'comments';

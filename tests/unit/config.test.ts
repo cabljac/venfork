@@ -585,7 +585,7 @@ describe('updateVenforkConfig', () => {
       })
     ).rejects.toThrow(/Authentication failed/);
 
-    // Only one push attempt — we don't retry auth failures.
+    // Only one push attempt - we don't retry auth failures.
     expect(pushAttempt).toBe(1);
   });
 });

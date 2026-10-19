@@ -1,7 +1,7 @@
 import { isPromptFlag, scanArgs, unexpectedArgument } from './shared/args.js';
 import { JSON_FLAG } from './shared/json-output.js';
 
-const USAGE = 'venfork doctor [--no-input] [--json]';
+const USAGE = 'venfork doctor [--yes] [--no-input] [--json]';
 
 /** Parsed flags for `venfork doctor`. */
 export type ParsedDoctorArgs = {

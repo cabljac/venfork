@@ -159,9 +159,9 @@ export async function syncCommand(options?: {
     // `allowPreserved` is asymmetric on purpose: mirror-only files live on
     // origin (the private mirror) and never get pushed to public. So a
     // preserved-only commit on origin is expected and benign, but the same
-    // shape on public would mean someone pushed to public outside venfork —
+    // shape on public would mean someone pushed to public outside venfork -
     // which is a real divergence we want to abort on.
-    // Build the allowlist Set once outside the per-remote loop — both
+    // Build the allowlist Set once outside the per-remote loop - both
     // origin and public divergence checks reuse it across however many
     // divergent commits each remote has.
     const preserveAllowed = new Set(preserveList);

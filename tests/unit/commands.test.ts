@@ -1330,7 +1330,7 @@ describe('syncCommand', () => {
   test('preserve carries the user-committed content forward (v2 wins, not v1, not upstream, not absent)', async () => {
     // Mirror tip already has agent.yml@v1; user commits v2 directly to
     // origin/main and pushes. Sync runs. Post-sync, the worktree write that
-    // feeds the +1 commit must contain v2 — not v1, not upstream's version,
+    // feeds the +1 commit must contain v2 - not v1, not upstream's version,
     // not absent. This pins the contract that previousMirrorTip is captured
     // *after* fetch and *before* the force-push, so it sees the user's
     // most-recent commit.
@@ -1407,7 +1407,7 @@ describe('syncCommand', () => {
     // Sequence simulated: previously, `preserve: ['agent.yml']` was set and a
     // user commit landed on origin (passing divergence under the allowlist).
     // The user has now run `venfork keep remove agent.yml`. The commit is
-    // still on origin/main but preserve no longer covers it — divergence
+    // still on origin/main but preserve no longer covers it - divergence
     // check should flag it and abort. The error must surface the file by
     // name with a concrete `venfork keep add` hint, so the user
     // remembers what they removed.
@@ -1417,7 +1417,7 @@ describe('syncCommand', () => {
         version: '1',
         publicForkUrl: 'git@github.com:test/repo.git',
         upstreamUrl: 'git@github.com:upstream/repo.git',
-        // preserve intentionally absent — the entry was just removed.
+        // preserve intentionally absent - the entry was just removed.
       }),
       stderr: '',
     });
@@ -1468,7 +1468,7 @@ describe('syncCommand', () => {
     // Older venfork emitted `chore: add/update scheduled sync workflow
     // (venfork)` for the +1 commit. Mirrors created with that version
     // still have those subjects in their history. After upgrading, the
-    // divergence check must continue to recognize them — otherwise the
+    // divergence check must continue to recognize them - otherwise the
     // first sync after upgrade aborts with a false-positive on every
     // mirror in the wild.
     mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
@@ -1506,7 +1506,7 @@ describe('syncCommand', () => {
       // Expected in mocked environment
     }
 
-    // Sync must NOT have aborted on the legacy-message commit — the
+    // Sync must NOT have aborted on the legacy-message commit - the
     // upstream→origin force-push should still happen.
     expect(
       execaCalls.some((cmd) =>
@@ -1528,7 +1528,7 @@ describe('syncCommand', () => {
       }),
       stderr: '',
     });
-    // origin has 1 commit ahead of upstream — the user's preserve commit.
+    // origin has 1 commit ahead of upstream - the user's preserve commit.
     mockResponses.set('git rev-list upstream0tip..origin0tip', {
       exitCode: 0,
       stdout: 'feedfacecafebabe\n',
@@ -1548,7 +1548,7 @@ describe('syncCommand', () => {
         stderr: '',
       }
     );
-    // Subject doesn't match the workflow message — would normally count as divergent.
+    // Subject doesn't match the workflow message - would normally count as divergent.
     mockResponses.set(
       'git log -1 --no-show-signature --format=%s feedfacecafebabe',
       {
@@ -1812,7 +1812,7 @@ describe('stageCommand', () => {
         stderr: '',
       }
     );
-    // Feature commits — not workflow-only.
+    // Feature commits - not workflow-only.
     mockResponses.set('git log -1 --no-show-signature --format=%s feat111', {
       exitCode: 0,
       stdout: 'feat: real feature work',
@@ -1959,7 +1959,7 @@ describe('stageCommand', () => {
     );
     mockResponses.set('git diff-tree --cc --name-only --no-commit-id evilmrg', {
       exitCode: 0,
-      // A manual resolution outside .github/workflows — real work that
+      // A manual resolution outside .github/workflows - real work that
       // would be lost if we silently linearized the merge away.
       stdout: 'src/conflicted.ts',
       stderr: '',
@@ -2162,7 +2162,7 @@ describe('stageCommand', () => {
       stdout: 'cafef00d',
       stderr: '',
     });
-    // Schedule disabled — keep the simpler push path.
+    // Schedule disabled - keep the simpler push path.
     mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,
       stdout: JSON.stringify({
@@ -2873,7 +2873,7 @@ describe('stageCommand', () => {
       { exitCode: 0, stdout: '[]', stderr: '' }
     );
     // gh pr create exits non-zero with an "already exists" error containing
-    // the existing PR URL — createUpstreamPr surfaces alreadyExists: true.
+    // the existing PR URL - createUpstreamPr surfaces alreadyExists: true.
     mockResponses.set('gh pr create --repo up/repo', {
       exitCode: 1,
       stdout: '',
@@ -4673,7 +4673,7 @@ describe('syncCommand - error paths', () => {
     // A user-authored commit that edits, say, ci.yml on the default branch.
     // It only touches files under .github/workflows, but does NOT touch the
     // managed venfork-sync.yml. The narrowed isWorkflowCommit must classify
-    // this as user-authored — sync should refuse to clobber it, not silently
+    // this as user-authored - sync should refuse to clobber it, not silently
     // filter it as a managed commit.
     mockResponses.set('git rev-list upstream0tip..origin0tip', {
       exitCode: 0,
@@ -5179,7 +5179,7 @@ describe('pullRequestCommand', () => {
     expect(execaCalls.some((cmd) => cmd.includes('git ls-remote origin'))).toBe(
       false
     );
-    // updateVenforkConfig pushes the venfork-config branch — must not happen.
+    // updateVenforkConfig pushes the venfork-config branch - must not happen.
     expect(
       execaCalls.some((cmd) => cmd.includes('venfork-config:venfork-config'))
     ).toBe(false);
@@ -5600,7 +5600,7 @@ describe('issueCommand', () => {
       { author: { login: 'bob' }, body: 'second' },
     ]);
     expect(out).toContain('### Upstream comments (2)');
-    expect(out).toContain('**@alice** — 2026-01-02:');
+    expect(out).toContain('**@alice** - 2026-01-02:');
     expect(out).toContain('first');
     expect(out).toContain('**@bob**:');
     expect(out).toContain('second');
@@ -5772,7 +5772,7 @@ describe('no-public mode', () => {
     });
 
     test('removes a stale `public` remote when re-running in no-public mode', async () => {
-      // Simulate a repo that previously had a `public` remote configured —
+      // Simulate a repo that previously had a `public` remote configured -
       // `git remote get-url public` succeeds with a URL. Re-running setup
       // with --own-upstream should explicitly remove it so the local layout
       // matches the recorded config.
@@ -5894,7 +5894,7 @@ describe('no-public mode', () => {
         stdout: 'git@github.com:upstream/repo.git',
         stderr: '',
       });
-      // Simulate the branch existing on upstream — ls-remote returns a SHA.
+      // Simulate the branch existing on upstream - ls-remote returns a SHA.
       mockResponses.set('git ls-remote --exit-code', {
         exitCode: 0,
         stdout: 'cafef00d\trefs/heads/feature-branch',
@@ -5923,7 +5923,7 @@ describe('no-public mode', () => {
   describe('cloneCommand --own-upstream for legacy mirrors', () => {
     test('skips public-fork detection when --own-upstream is set and no config exists', async () => {
       // No mock for `git show FETCH_HEAD:.venfork/config.json` and the
-      // default `gh repo clone` mock returns empty stdout — fetchVenforkConfig
+      // default `gh repo clone` mock returns empty stdout - fetchVenforkConfig
       // returns null. The flag becomes the source of truth.
       try {
         await cloneCommand('git@github.com:acme/legacy-private.git', {
