@@ -35,7 +35,7 @@ The success and recovery paths need real GitHub (e2e tier 1, opt-in). On the fix
 ```bash
 cd "$VF_ROOT"
 venfork setup </dev/null 2>&1; echo $?                                 # 2, "Pass the <upstream> argument."
-venfork setup a/b b-private </dev/null 2>&1; echo $?                   # 2, "Continue with personal account?" ... "Pass --yes."
+venfork setup a/b b-private </dev/null 2>&1; echo $?                   # 2, "Continue with personal account?" ... "Add --yes to confirm."
 venfork setup a/b b-private --json </dev/null 2>/dev/null | jq -c '[.error.code, .error.flag]'   # ["missing-input","--yes"]
 venfork setup a/b --org c </dev/null 2>&1 | grep -o "Private mirror repo name? b-private.*"   # default used, then exit 1 at gh
 venfork setup a/b --no-public --fork-name x </dev/null 2>&1; echo $?   # 2, "--no-public cannot be combined with --fork-name"

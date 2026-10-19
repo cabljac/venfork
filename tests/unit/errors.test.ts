@@ -146,9 +146,12 @@ describe('UsageError', () => {
 });
 
 describe('MissingInputError', () => {
-  test('names both streams canPrompt needs a terminal on', () => {
-    expect(new MissingInputError('--yes', 'Push?').message).toBe(
-      'Cannot ask "Push?": venfork does not prompt without a terminal on stdin and stderr, in CI, with --no-input or with VENFORK_NONINTERACTIVE=1. Pass --yes.'
+  test('is one sentence naming the question and the one flag to add', () => {
+    expect(new MissingInputError('--yes', 'Push?', 'Not staged.').message).toBe(
+      'Not staged. "Push?" needs an answer and venfork cannot prompt here. Add --yes to confirm.'
+    );
+    expect(new MissingInputError('--upstream <url>', 'Upstream?').message).toBe(
+      '"Upstream?" needs an answer and venfork cannot prompt here. Pass --upstream <url>.'
     );
   });
 });

@@ -18,7 +18,7 @@ tests:
 - Rebuilds the branch linearly on `upstream/<default>` by cherry-pick with hooks off. Managed commits are dropped. Merge commits are dropped; a merge with a manual conflict resolution is refused.
 - Gates every rebuilt commit (see `leak-invariants.md`): `StageLeakError` for mirror-only paths or content, `MirrorReferenceError` for mirror terms in author, committer, message, file content or file name, and for bot-authored commits.
 - Every publish refusal of the gate is `error.code` `stage-leak`, except text that names the mirror (`mirror-reference`, also bot commits, marker text and config-shaped JSON in a file) and a broken internal block in a PR body (`redaction`). `stage-leak` covers `StageLeakError` and these plain `VenforkError`s: a cherry-pick that fails on a preserved path upstream does not have, a reflog or a mirror-only history longer than the scan cap, a directory in mirror history where venfork writes a file, a blob over 100 MB.
-- Shows commits and files, then asks "Push to public fork?" (no-public: "Push to upstream?"). `--yes` answers it. Unless stdin and stderr are both a TTY, and with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`, the confirm without `--yes` exits 2 naming `--yes` (`MissingInputError`) before it fetches, and nothing is pushed; stdout stays empty.
+- Shows commits and files, then asks "Push to public fork?" (no-public: "Push to upstream?"). `--yes` answers it. Unless stdin and stderr are both a TTY, and with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`, the confirm without `--yes` exits 2 before it fetches with one line, `error: Not staged. "Push to public fork?" needs an answer and venfork cannot prompt here. Add --yes to confirm.` (`MissingInputError`), and nothing is pushed; stdout stays empty.
 - Pushes `<head>:refs/heads/<branch>` with `--force-with-lease=<ref>:<tip from ls-remote>` and `--no-follow-tags`. No-public pushes to the upstream URL directly (the remote's push URL stays `DISABLE`).
 - `--json` never prompts, even at a TTY (it implies `--no-input`). Outside a git repository, stage fails with `not-in-repository` (exit 1) before it reaches the confirm. Without `--yes` it is `ok: false`, `error: { code: 'missing-input', flag: '--yes' }`, exit 2. On success `result` is `{ branch, head, target: 'public' | 'upstream', compareUrl, prAction?, prUrl?, internalPrUrl? }`; `prAction` (`created`, `updated`, `unchanged`, `failed`) is present only with `--pr`.
 - `--pr`/`--draft`: finds the internal PR on the mirror, redacts it (`stripInternalBlocks`, `RedactionError`), runs `gh pr create`, updates an existing PR body unless `--no-update-existing`, writes `shippedBranches[branch]`.
@@ -31,7 +31,7 @@ tests:
 
 ```bash
 git checkout -q -b feat upstream/main && echo f > src/feat.txt && git add . && git commit -qm "feat: add feat"
-venfork stage feat </dev/null 2>&1; echo $?                    # 2, "Pass --yes."; nothing on $VF_PUBLIC
+venfork stage feat </dev/null 2>&1; echo $?                    # 2, "Add --yes to confirm."; nothing on $VF_PUBLIC
 VENFORK_NONINTERACTIVE=1 venfork stage feat </dev/null 2>&1; echo $?   # 2 as well: it does not confirm
 venfork stage feat --json </dev/null 2>/dev/null; echo $?      # missing-input envelope naming --yes, 2
 venfork stage feat --yes </dev/null >/dev/null 2>&1; echo $?    # 0

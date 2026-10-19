@@ -5,7 +5,6 @@ import {
   type VenforkConfig,
   type VenforkConfigPatch,
 } from '../config.js';
-import { CommandExitError, isEntryReported } from '../errors.js';
 import { normalizeWorkflowList } from '../shared/mirror-commit.js';
 import * as p from '../shared/ui.js';
 import type { WorkflowsAction } from '../workflows-args.js';
@@ -139,9 +138,6 @@ export async function workflowsCommand(
     );
     return workflowsResult(updated);
   } catch (error) {
-    if (isEntryReported(error)) throw error;
-    p.log.error(error instanceof Error ? error.message : String(error));
-    p.outro('❌ Workflows command failed');
-    throw new CommandExitError(1, error);
+    throw p.reportFailure(error);
   }
 }

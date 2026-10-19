@@ -42,6 +42,8 @@ export interface TextPromptOptions extends PromptOptions {
 export interface ConfirmPromptOptions {
   message: string;
   initialValue?: boolean;
+  /** What did not happen without an answer, e.g. `Not staged.`. */
+  stopped?: string;
 }
 
 function ciIsSet(): boolean {
@@ -105,8 +107,11 @@ export async function promptConfirm(
   context: PromptContext = DEFAULT_PROMPT_CONTEXT
 ): Promise<boolean | symbol> {
   if (context.yes) return true;
-  if (!canPrompt(context)) throw new MissingInputError('--yes', opts.message);
-  return p.confirm({ ...opts, output: process.stderr });
+  const { stopped, ...clackOpts } = opts;
+  if (!canPrompt(context)) {
+    throw new MissingInputError('--yes', opts.message, stopped);
+  }
+  return p.confirm({ ...clackOpts, output: process.stderr });
 }
 
 /**
@@ -116,10 +121,11 @@ export async function promptConfirm(
  */
 export function assertCanConfirm(
   message: string,
-  context: PromptContext = DEFAULT_PROMPT_CONTEXT
+  context: PromptContext = DEFAULT_PROMPT_CONTEXT,
+  stopped?: string
 ): void {
   if (!context.yes && !canPrompt(context)) {
-    throw new MissingInputError('--yes', message);
+    throw new MissingInputError('--yes', message, stopped);
   }
 }
 

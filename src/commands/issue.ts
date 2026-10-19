@@ -3,7 +3,6 @@ import { updateVenforkConfig } from '../config.js';
 import {
   CommandExitError,
   GitHubError,
-  isEntryReported,
   PreconditionError,
   RemoteNotFoundError,
   UsageError,
@@ -30,6 +29,9 @@ import {
   createUpstreamIssue,
 } from '../shared/upstream-publish.js';
 import { parseRepoPath } from '../utils.js';
+
+/** Starts the missing-input error of the open-issue confirm. */
+const NOT_OPENED = 'Not opened.';
 
 /** One comment on a GitHub issue as returned by `gh issue view --json comments`. */
 export interface IssueComment {
@@ -175,7 +177,7 @@ export async function issueCommand(
         mirrorRepoPath
       );
       const question = `Open the issue on ${upstreamRepoPath}?`;
-      assertCanConfirm(question, options.prompt);
+      assertCanConfirm(question, options.prompt, NOT_OPENED);
 
       s.start(`Reading internal issue #${internalNumber}`);
       const internal = await readIssue(mirrorRepoPath, internalNumber, repoDir);
@@ -212,6 +214,7 @@ export async function issueCommand(
         {
           message: question,
           initialValue: false,
+          stopped: NOT_OPENED,
         },
         options.prompt
       );
@@ -261,7 +264,7 @@ export async function issueCommand(
       upstreamRepoPath
     );
     const question = `Open the issue on ${mirrorRepoPath}?`;
-    assertCanConfirm(question, options.prompt);
+    assertCanConfirm(question, options.prompt, NOT_OPENED);
 
     s.start(`Reading upstream issue #${upstreamNumber}`);
     const upstream = await readIssue(upstreamRepoPath, upstreamNumber, repoDir);
@@ -289,6 +292,7 @@ export async function issueCommand(
       {
         message: question,
         initialValue: false,
+        stopped: NOT_OPENED,
       },
       options.prompt
     );
@@ -330,10 +334,6 @@ export async function issueCommand(
       source: { number: upstream.number, url: upstream.url },
     };
   } catch (error) {
-    if (isEntryReported(error)) throw error;
-    s.stop('Error occurred');
-    p.log.error(error instanceof Error ? error.message : String(error));
-    p.outro('❌ Issue command failed');
-    throw new CommandExitError(1, error);
+    throw p.reportFailure(error, s);
   }
 }

@@ -5,12 +5,7 @@ import {
   scheduleAuthOf,
   type VenforkConfig,
 } from '../config.js';
-import {
-  CommandExitError,
-  isEntryReported,
-  PreconditionError,
-  UsageError,
-} from '../errors.js';
+import { PreconditionError, UsageError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import { checkCronExpression, SCHEDULE_USAGE } from '../schedule-args.js';
 import { applyConfigChange } from '../shared/config-change.js';
@@ -221,10 +216,6 @@ export async function scheduleCommand(
       `Unknown schedule action '${action}'. Usage: ${SCHEDULE_USAGE}`
     );
   } catch (error) {
-    if (isEntryReported(error)) throw error;
-    s.stop('Error occurred');
-    p.log.error(error instanceof Error ? error.message : String(error));
-    p.outro('❌ Schedule command failed');
-    throw new CommandExitError(1, error);
+    throw p.reportFailure(error, s);
   }
 }

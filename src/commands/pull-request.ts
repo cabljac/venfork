@@ -1,10 +1,8 @@
 import { $ } from 'execa';
 import { updateVenforkConfig } from '../config.js';
 import {
-  CommandExitError,
   GitError,
   GitHubError,
-  isEntryReported,
   PreconditionError,
   RemoteNotFoundError,
   UsageError,
@@ -251,10 +249,6 @@ export async function pullRequestCommand(
     p.outro('✨ Pull request imported!');
     return result();
   } catch (error) {
-    if (isEntryReported(error)) throw error;
-    s.stop('Error occurred');
-    p.log.error(error instanceof Error ? error.message : String(error));
-    p.outro('❌ Pull request import failed');
-    throw new CommandExitError(1, error);
+    throw p.reportFailure(error, s);
   }
 }

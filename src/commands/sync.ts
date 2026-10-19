@@ -6,10 +6,8 @@ import {
   type VenforkConfig,
 } from '../config.js';
 import {
-  CommandExitError,
   ConfigError,
   GitError,
-  isEntryReported,
   PreconditionError,
   SyncDivergenceError,
 } from '../errors.js';
@@ -400,16 +398,10 @@ export async function syncCommand(
       ...(publicResult ? { public: publicResult } : {}),
     };
   } catch (error) {
-    if (isEntryReported(error)) throw error;
     if (error instanceof SyncDivergenceError || error instanceof ConfigError) {
-      if (error instanceof ConfigError) s.stop('Config error');
+      s.clear();
       throw error;
     }
-    s.stop('Error occurred');
-    p.log.error(error instanceof Error ? error.message : String(error));
-    if (!quiet) {
-      p.outro('❌ Sync failed');
-    }
-    throw new CommandExitError(1, error);
+    throw p.reportFailure(error, s);
   }
 }

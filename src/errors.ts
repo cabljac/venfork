@@ -314,10 +314,13 @@ export class MissingInputError extends VenforkError {
     /** The flag or argument that supplies the answer, e.g. `--yes`. */
     public readonly flag: string,
     /** The question that could not be asked. */
-    public readonly question: string
+    public readonly question: string,
+    /** What did not happen, e.g. `Not staged.`; starts the message. */
+    stopped?: string
   ) {
+    const next = flag === '--yes' ? 'Add --yes to confirm.' : `Pass ${flag}.`;
     super(
-      `Cannot ask "${question}": venfork does not prompt without a terminal on stdin and stderr, in CI, with --no-input or with VENFORK_NONINTERACTIVE=1. Pass ${flag}.`,
+      `${stopped ? `${stopped} ` : ''}"${question}" needs an answer and venfork cannot prompt here. ${next}`,
       'missing-input'
     );
     this.name = 'MissingInputError';

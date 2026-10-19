@@ -309,8 +309,8 @@ main(argv)
   .catch(async (error) => {
     if (json) await writeEnvelope(errorEnvelope(error));
     if (!(error instanceof CommandExitError)) {
-      console.error(
-        `Error: ${error instanceof Error ? error.message : String(error)}`
+      stderrUi.log.error(
+        error instanceof Error ? error.message : String(error)
       );
     }
     process.exit(exitCodeFor(error));
