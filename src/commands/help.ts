@@ -4,7 +4,7 @@ import { stdoutUi, type Ui } from '../shared/ui.js';
 const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   [
     'setup',
-    `venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--own-upstream] [--yes] [--no-input] [--json]
+    `venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--own-upstream] [--approval <level>] [--yes] [--no-input] [--json]
   Create private mirror + public fork for vendor workflow
   <upstream>: GitHub HTTPS/SSH URL, or shorthand owner/repo (e.g. facebook/react)
 
@@ -17,6 +17,9 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
                        configured; \`venfork stage\` later pushes branches directly to upstream.
                        Use when you own the upstream repo (no need to round-trip through a fork).
                        Mutually exclusive with --fork-name.
+  • --approval <level> Approval venfork stage needs on the mirror PR: two-person (the
+                       default, also on), reviewed or off. Change it later with
+                       venfork stage approval
   • --yes, -y          Answer the personal-account confirm with yes
   • --no-input         Never prompt: [name] defaults to <repo>-private; a missing
                        <upstream> or an unconfirmed personal account exits 2
@@ -160,13 +163,17 @@ const SUBCOMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
     `venfork stage approval [on|reviewed|two-person|off] [--yes] [--no-input] [--json]
   Show (no argument) or set the approval the mirror PR of a branch needs
   before venfork stage publishes it. Stored in the mirror's venfork settings
-  • off         No review needed (the default)
+  • off         No review needed (the default for mirrors made before 0.15)
   • reviewed    An approving review on the PR head from a person with write
                 access who is not the PR author, and passing checks
   • two-person  As reviewed, and the approver is not the person running stage
+                (the default for a new mirror)
   • on          Same as two-person
   The mirror PR must target the mirror default branch
   venfork stage issue is not gated: it publishes issue text, not code
+  Lowering the level asks a person at a terminal; --yes does not answer it.
+  Without a terminal the level is still written, and the next stage in this
+  clone asks
   A guardrail against accidental or agent-driven publishing, not enforcement:
     anyone who can push can publish without venfork
   --json prints { level } after the action as one JSON envelope on stdout`,

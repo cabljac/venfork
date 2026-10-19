@@ -2,7 +2,7 @@
 
 Every command, its flags and what it does. The README front page lists the commands; this page has the detail.
 
-### `venfork setup <upstream> [name] [--org <organization>] [--fork-name <repo>] [--own-upstream] [--yes] [--no-input] [--json]`
+### `venfork setup <upstream> [name] [--org <organization>] [--fork-name <repo>] [--own-upstream] [--approval <level>] [--yes] [--no-input] [--json]`
 
 Creates the complete vendor workflow setup (with `--json`, setup never prompts and prints one JSON envelope on stdout; see [JSON output](json.md#json-output)):
 
@@ -27,6 +27,7 @@ Creates the complete vendor workflow setup (with `--json`, setup never prompts a
 - `--org <organization>` - (Optional) Create repos under organization instead of personal account
 - `--fork-name <repo>` - (Optional) Public fork repo name under that org/user (default: same basename as upstream)
 - `--own-upstream` - (Optional) Skip the public-fork hop; stage pushes directly to upstream
+- `--approval <level>` - The approval level of the new mirror: `two-person` (the default; `on` means the same), `reviewed` or `off`. A solo vendor who approves PRs that an agent opens picks `reviewed`; a solo vendor with no agent picks `off`. `off` prints a warning. Setup records the level in the clone it creates (see "A lowered level" under `venfork stage approval`). A script that runs `setup` and then `stage` with no reviewer passes `--approval off` or `--approval reviewed` here, because lowering the level later needs a person at a terminal. On a re-run against an existing mirror the stored level stays; use `venfork stage approval` to change it.
 - `--yes`, `-y` - (Optional) Answer the personal-account confirm with yes. `--org <your username>` (compared with your gh login ignoring case) also counts as consent: the repos go under your personal account with no confirm. `VENFORK_ORG` set to your username does not: it is ambient, so the confirm still runs (and needs `--yes` without a terminal).
 - `--no-input` - (Optional) Never prompt. A missing `name` defaults to `{repo}-private` (the choice is logged on stderr). A missing `upstream`, or a personal account without `--yes`, exits 2. See [Non-interactive use](headless.md#non-interactive-use).
 
@@ -258,12 +259,12 @@ A comment that mentions venfork but is not a well-formed marker (for example a t
 
 Show or set how much review a branch needs before `venfork stage` publishes it. The level is stored as `approval` in the mirror's venfork settings, so every clone of the mirror reads the same level. With no argument it prints the current level. `venfork stage branch approval` stages a branch named `approval`.
 
-- `off` - No review needed. This is the default.
+- `off` - No review needed. Mirrors made before 0.15 have no `approval` setting, which means `off`, so upgrading changes nothing for them.
 - `reviewed` - The branch's PR on the private mirror needs an approving review on its current head from a person (not a bot) with write access to the mirror who is not the PR author, and every check on that head must pass.
-- `two-person` - As `reviewed`, and the approver must also be someone other than the GitHub user who runs `venfork stage`.
+- `two-person` - As `reviewed`, and the approver must also be someone other than the GitHub user who runs `venfork stage`. A new mirror made by `venfork setup` starts at `two-person` (`setup --approval <level>` picks another level). `venfork clone` never changes the level.
 - `on` - The same as `two-person`.
 
-Setting `off` prints a warning. With `--json`, `result` is `{ "level" }` after the action.
+Setting `off` prints a warning. Lowering the level (`two-person` to `reviewed` to `off`) asks "Lower approval from ... to ...?" at a terminal; `--yes` does not answer it. Without a terminal the lower level is still written, this clone remembers the level it lowered from, and the next `venfork stage` in this clone asks a person to confirm it (see "A lowered level" below). When venfork-config changes on origin during the confirm, nothing is written; run the command again. With `--json`, `result` is `{ "level" }` after the action.
 
 When the level is not `off`, `venfork stage <branch>` (with or without `--no-pr`) checks the mirror PR after it fetches and before it rebuilds anything:
 
@@ -279,7 +280,7 @@ The gate covers `venfork stage <branch>` only. `venfork stage issue` is not gate
 
 A refusal exits 1 with code `approval` and a hint. The two refusals a solo vendor meets first, "two-person approval needs a reviewer other than you" and "has no open PR", name `venfork stage approval reviewed`. `--dry-run` runs the same checks, reports a refusal as a warning and in `result.approval`, and still shows the preview. A level from a newer venfork is refused (`config`) instead of being read as `off`.
 
-**A lowered level.** Each clone remembers the last approval level it saw, in a file in the clone's own repository data (`venfork/approval.json` in the git common dir). Git never pushes it. Stage compares the mirror's level with that memory (by rank: `off` < `reviewed` < `two-person`), because an agent with write access to the mirror could lower the level and then stage. When the level is lower, stage asks a person at a terminal "The approval gate was lowered. Stage ...?". `--yes` does not answer this confirm. When venfork cannot prompt (with `--json`, `--no-input` or no terminal), the stage stops with `approval`, reason `gate-weakened`, and names the change. `--dry-run` reports it as `result.weakened` and does not ask. After a person confirms, the clone remembers the new level. When the level is equal or higher, stage records it and does not ask. So a level that was lowered and raised back before the stage is not flagged. When the memory file exists but venfork cannot read it, venfork treats it as `two-person` and says so.
+**A lowered level.** Each clone remembers the last approval level it saw, in a file in the clone's own repository data (`venfork/approval.json` in the git common dir). Git never pushes it. `venfork setup` records the new mirror's level, and `venfork stage approval` records the level it sets. `venfork clone` records nothing. Stage compares the mirror's level with that memory (by rank: `off` < `reviewed` < `two-person`), because an agent with write access to the mirror could lower the level and then stage. When the level is lower, stage asks a person at a terminal "The approval gate was lowered. Stage ...?". `--yes` does not answer this confirm. When venfork cannot prompt (with `--json`, `--no-input` or no terminal), the stage stops with `approval`, reason `gate-weakened`, and names the change. `--dry-run` reports it as `result.weakened` and does not ask. After a person confirms, the clone remembers the new level. When the level is equal or higher, stage records it and does not ask. So a level that was lowered and raised back before the stage is not flagged. When the memory file exists but venfork cannot read it, venfork treats it as `two-person` and says so.
 
 The memory is a convenience, not protection. A fresh clone has no memory, so it does not know an earlier level: its first stage records the level it finds and does not ask. Venfork does not read the venfork-config history for a lowered level. To protect the level, add a branch protection rule or ruleset on the `venfork-config` branch that limits who can push it. The scheduled sync workflow and `sync --report-issues` only read that branch; the commands that write it are `setup`, `stage` (the PR step records the link), `stage issue`, `pull pr`, `pull issue`, `keep`, `schedule`, `workflows` and `stage approval`, so the ruleset must allow the people who run them.
 

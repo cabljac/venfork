@@ -213,3 +213,33 @@ describe('parseSetupCliArgs prompt flags', () => {
     });
   });
 });
+
+describe('parseSetupCliArgs --approval', () => {
+  test('absent leaves the level to setup; each level parses', () => {
+    expect(parseSetupCliArgs(['acme/widget'])).not.toHaveProperty('approval');
+    for (const level of ['off', 'reviewed', 'two-person'] as const) {
+      expect(
+        parseSetupCliArgs(['acme/widget', '--approval', level]).approval
+      ).toBe(level);
+    }
+    expect(
+      parseSetupCliArgs(['acme/widget', '--approval=reviewed']).approval
+    ).toBe('reviewed');
+  });
+
+  test('on means two-person, as in venfork stage approval', () => {
+    expect(
+      parseSetupCliArgs(['acme/widget', '--approval', 'on']).approval
+    ).toBe('two-person');
+  });
+
+  test('an unknown level is a usage error', () => {
+    for (const word of ['always', 'constructor']) {
+      expect(() =>
+        parseSetupCliArgs(['acme/widget', '--approval', word])
+      ).toThrow(
+        `--approval must be on, two-person, reviewed or off, not '${word}'`
+      );
+    }
+  });
+});
