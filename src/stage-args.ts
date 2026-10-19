@@ -1,3 +1,4 @@
+import type { ApprovalLevel } from './config.js';
 import { UsageError } from './errors.js';
 import {
   consumeValue,
@@ -54,7 +55,32 @@ export type ParsedStageIssueArgs = {
   json: boolean;
 };
 
-export type ParsedStageArgs = ParsedStageBranchArgs | ParsedStageIssueArgs;
+/** Parsed `venfork stage approval [level]` arguments. */
+export type ParsedStageApprovalArgs = {
+  kind: 'approval';
+  /** The level to set; absent prints the current level. `on` is `two-person`. */
+  level?: ApprovalLevel;
+  /** `--yes` / `--no-input`. */
+  prompt: PromptContext;
+  /** Print the `--json` envelope on stdout. */
+  json: boolean;
+};
+
+export type ParsedStageArgs =
+  | ParsedStageBranchArgs
+  | ParsedStageIssueArgs
+  | ParsedStageApprovalArgs;
+
+/** Usage line for `venfork stage approval`. */
+export const STAGE_APPROVAL_USAGE =
+  'venfork stage approval [on|reviewed|two-person|off] [--yes] [--no-input] [--json]';
+
+const APPROVAL_WORDS: Record<string, ApprovalLevel> = {
+  on: 'two-person',
+  'two-person': 'two-person',
+  reviewed: 'reviewed',
+  off: 'off',
+};
 
 /** Usage line for `venfork stage <branch>`. */
 export const STAGE_USAGE =
@@ -62,9 +88,9 @@ export const STAGE_USAGE =
 
 /**
  * Parse `venfork stage ...` argv after the `stage` token.
- * Forms: `stage <branch>`, `stage branch <name>`, `stage issue <n-or-url>`.
- * The first positional selects the form, so a branch named `issue` or
- * `branch` must use `stage branch <name>`.
+ * Forms: `stage <branch>`, `stage branch <name>`, `stage issue <n-or-url>`,
+ * `stage approval [level]`. The first positional selects the form, so a
+ * branch named `issue`, `approval` or `branch` must use `stage branch <name>`.
  */
 export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   let prFlag: string | undefined;
@@ -124,21 +150,45 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   });
 
   const [first, ...rest] = positional;
+  const branchFlags = [
+    dryRun && '--dry-run',
+    prFlag,
+    noPr && '--no-pr',
+    draft && '--draft',
+    base !== undefined && '--base',
+    internalPrNumber !== undefined && '--internal-pr',
+    noUpdateExisting && '--no-update-existing',
+  ].filter((flag): flag is string => typeof flag === 'string');
+  if (first === 'approval') {
+    const used = [...branchFlags, ...(titleFlag ? [titleFlag] : [])];
+    if (used.length > 0) {
+      throw new UsageError(
+        `${used.join(', ')} only applies to stage branch, not stage approval. To stage a branch named 'approval', run \`venfork stage branch approval\`.`
+      );
+    }
+    if (rest.length > 1)
+      throw unexpectedArgument(rest[1], STAGE_APPROVAL_USAGE);
+    const word = rest[0];
+    const level = word === undefined ? undefined : APPROVAL_WORDS[word];
+    if (word !== undefined && level === undefined) {
+      throw new UsageError(
+        `Unknown approval level '${word}'. Usage: ${STAGE_APPROVAL_USAGE}. To stage a branch named 'approval', run \`venfork stage branch approval\`.`
+      );
+    }
+    return {
+      kind: 'approval',
+      ...(level ? { level } : {}),
+      prompt: promptFlags.prompt,
+      json: promptFlags.json,
+    };
+  }
   if (first === 'issue') {
     if (rest.length === 0) {
       throw new UsageError(
         "venfork stage issue requires an issue number or URL. To stage a branch named 'issue', run `venfork stage branch issue`."
       );
     }
-    const branchOnly = [
-      dryRun && '--dry-run',
-      prFlag,
-      noPr && '--no-pr',
-      draft && '--draft',
-      base !== undefined && '--base',
-      internalPrNumber !== undefined && '--internal-pr',
-      noUpdateExisting && '--no-update-existing',
-    ].filter((flag): flag is string => typeof flag === 'string');
+    const branchOnly = branchFlags;
     if (branchOnly.length > 0) {
       throw new UsageError(
         `${branchOnly.join(', ')} only applies to stage branch, not stage issue`

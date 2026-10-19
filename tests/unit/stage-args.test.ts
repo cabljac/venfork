@@ -334,3 +334,66 @@ describe('parseStageCliArgs prompt flags', () => {
     });
   });
 });
+
+describe('parseStageCliArgs: stage approval', () => {
+  test('bare `stage approval` asks for the current level', () => {
+    expect(parseStageUnion(['approval'])).toEqual({
+      kind: 'approval',
+      prompt: { yes: false, noInput: false },
+      json: false,
+    });
+  });
+
+  test('`on` means two-person; each level parses as itself', () => {
+    for (const [word, level] of [
+      ['on', 'two-person'],
+      ['two-person', 'two-person'],
+      ['reviewed', 'reviewed'],
+      ['off', 'off'],
+    ] as const) {
+      expect(parseStageUnion(['approval', word, '--json'])).toEqual({
+        kind: 'approval',
+        level,
+        prompt: { yes: false, noInput: true },
+        json: true,
+      });
+    }
+  });
+
+  test('an unknown level is a usage error naming the explicit branch form', () => {
+    expect(() => parseStageUnion(['approval', 'maybe'])).toThrow(
+      "Unknown approval level 'maybe'"
+    );
+    expect(() => parseStageUnion(['approval', 'maybe'])).toThrow(
+      'venfork stage branch approval'
+    );
+  });
+
+  test('branch flags and a second level are usage errors', () => {
+    expect(() => parseStageUnion(['approval', 'on', '--draft'])).toThrow(
+      '--draft only applies to stage branch, not stage approval'
+    );
+    expect(() => parseStageUnion(['approval', '--title', 'x'])).toThrow(
+      '--title only applies to stage branch, not stage approval'
+    );
+    expect(() => parseStageUnion(['approval', 'on', 'off'])).toThrow(
+      "Unexpected argument 'off'"
+    );
+  });
+
+  test('a branch flag names the explicit form for a branch named approval', () => {
+    for (const argv of [
+      ['approval', 'on', '--pr'],
+      ['approval', '--draft'],
+      ['approval', '--title', 'x'],
+    ]) {
+      expect(() => parseStageUnion(argv)).toThrow(
+        "To stage a branch named 'approval', run `venfork stage branch approval`."
+      );
+    }
+  });
+
+  test('`stage branch approval` stages a branch named approval', () => {
+    expect(parseStageCliArgs(['branch', 'approval']).branch).toBe('approval');
+  });
+});

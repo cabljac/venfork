@@ -3,6 +3,7 @@
 import { parseCloneCliArgs } from './clone-args.js';
 import { commandHelp, helpTopic } from './commands/help.js';
 import {
+  approvalCommand,
   cloneCommand,
   doctorCommand,
   isHealthy,
@@ -133,6 +134,9 @@ function parseCommand(
     }
     case 'stage': {
       const parsed = parseStageCliArgs(args);
+      if (parsed.kind === 'approval') {
+        return resultOf(() => approvalCommand(parsed.level));
+      }
       if (parsed.kind === 'issue') {
         return resultOf(() =>
           issueCommand('stage', parsed.ref, {

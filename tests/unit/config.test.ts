@@ -100,6 +100,7 @@ import {
   preserveRemoveHint,
   readVenforkConfigFromRepo,
   scheduleAuthOf,
+  approvalOf,
   updateVenforkConfig,
 } from '../../src/config.js';
 import { ConfigError } from '../../src/errors.js';
@@ -731,5 +732,81 @@ describe('scheduleAuth', () => {
     expect(() => scheduleAuthOf({ scheduleAuth: 'future' })).toThrow(
       'scheduleAuth "future" is not supported by this venfork version'
     );
+  });
+});
+
+describe('approval', () => {
+  test('approvalOf is off when unset and returns a known level', () => {
+    expect(approvalOf(null)).toBe('off');
+    expect(approvalOf({})).toBe('off');
+    expect(approvalOf({ approval: 'reviewed' })).toBe('reviewed');
+    expect(approvalOf({ approval: 'two-person' })).toBe('two-person');
+  });
+
+  test('approvalOf refuses a level from a newer venfork instead of reading it as off', () => {
+    expect(() => approvalOf({ approval: 'three-person' })).toThrow(ConfigError);
+    expect(() => approvalOf({ approval: 'three-person' })).toThrow(
+      'run: venfork stage approval two-person'
+    );
+  });
+
+  test('approvalOf refuses a stored value that is not a string', () => {
+    for (const approval of [1, null, true, { level: 'off' }]) {
+      expect(() => approvalOf({ approval })).toThrow(ConfigError);
+    }
+  });
+
+  test('reading keeps a level, drops off, and keeps an unknown level', async () => {
+    for (const [stored, read] of [
+      ['two-person', 'two-person'],
+      ['reviewed', 'reviewed'],
+      ['three-person', 'three-person'],
+      ['off', undefined],
+      ['', undefined],
+      [1, 1],
+      [null, null],
+      [{ level: 'off' }, { level: 'off' }],
+    ] as const) {
+      mockResponses.set(
+        'git show FETCH_HEAD:.venfork/config.json',
+        mockReadResponse({ ...baseConfig, approval: stored })
+      );
+      const config = await readVenforkConfigFromRepo('/tmp/repo');
+      expect(config?.approval).toEqual(read);
+    }
+  });
+
+  test('an unrelated patch keeps a stored value approvalOf cannot read', async () => {
+    mockResponses.set(
+      'git show FETCH_HEAD:.venfork/config.json',
+      mockReadResponse({ ...baseConfig, approval: 1 })
+    );
+    const updated = await updateVenforkConfig('/tmp/repo', {
+      enabledWorkflows: ['ci.yml'],
+    });
+    expect(updated.approval).toBe(1);
+    const written = JSON.parse(writeFileCalls.at(-1)?.content ?? '{}');
+    expect(written.approval).toBe(1);
+    expect(() => approvalOf(updated)).toThrow(ConfigError);
+  });
+
+  test('a patch sets the level, and off or null removes it', async () => {
+    mockResponses.set(
+      'git show FETCH_HEAD:.venfork/config.json',
+      mockReadResponse({ ...baseConfig })
+    );
+    expect(
+      (await updateVenforkConfig('/tmp/repo', { approval: 'reviewed' }))
+        .approval
+    ).toBe('reviewed');
+
+    mockResponses.set(
+      'git show FETCH_HEAD:.venfork/config.json',
+      mockReadResponse({ ...baseConfig, approval: 'two-person' })
+    );
+    for (const approval of ['off', null] as const) {
+      const updated = await updateVenforkConfig('/tmp/repo', { approval });
+      expect(updated).not.toHaveProperty('approval');
+    }
   });
 });

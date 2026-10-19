@@ -44,7 +44,7 @@ export async function assertInRepository(
  * fail fast when gh is not authenticated. `pull` needs gh once its arguments parse, so a usage error
  * is reported first. `stage` needs gh for
  * `stage issue` and for a branch stage, which opens the upstream PR unless
- * `--no-pr`.
+ * `--no-pr`; `stage approval` reads and writes only venfork-config.
  */
 export function requiresGhAuth(command: string, args: string[]): boolean {
   if (ALWAYS_GH.has(command)) return true;
@@ -60,7 +60,8 @@ export function requiresGhAuth(command: string, args: string[]): boolean {
     try {
       const parsed = parseStageCliArgs(args);
       return (
-        parsed.kind === 'issue' || Boolean(parsed.createPr || parsed.draft)
+        parsed.kind === 'issue' ||
+        (parsed.kind === 'branch' && Boolean(parsed.createPr || parsed.draft))
       );
     } catch {
       return false;

@@ -1,3 +1,4 @@
+export { type ApprovalResult, approvalCommand } from './commands/approval.js';
 export { cloneCommand } from './commands/clone.js';
 export {
   type DoctorCheck,

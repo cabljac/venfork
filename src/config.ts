@@ -91,6 +91,13 @@ export interface VenforkConfig {
    * is a mode from a newer venfork, kept as-is so a read does not fail.
    */
   scheduleAuth?: string;
+  /**
+   * Approval stage needs on the mirror PR before it publishes a branch:
+   * `'reviewed'` or `'two-person'`; absent means `'off'`. Any other value
+   * (a level from a newer venfork, or a corrupt one) is kept as-is so a read
+   * does not fail and `approvalOf` refuses it.
+   */
+  approval?: unknown;
   enabledWorkflows?: string[];
   disabledWorkflows?: string[];
   /**
@@ -158,6 +165,35 @@ export function scheduleAuthOf(
   );
 }
 
+/** How much review `venfork stage` needs on the mirror PR before it publishes. */
+export type ApprovalLevel = 'off' | 'reviewed' | 'two-person';
+
+/** Every approval level, weakest first. */
+export const APPROVAL_LEVELS: readonly ApprovalLevel[] = [
+  'off',
+  'reviewed',
+  'two-person',
+];
+
+/**
+ * The approval level of `config`; `'off'` when it is unset.
+ *
+ * @param config Venfork config, or `null` when the mirror has none.
+ * @throws ConfigError when the level is one this version does not know, so
+ * an older venfork never stages past a gate it cannot read.
+ */
+export function approvalOf(
+  config: Pick<VenforkConfig, 'approval'> | null | undefined
+): ApprovalLevel {
+  const level = config?.approval;
+  if (level === undefined) return 'off';
+  const known = APPROVAL_LEVELS.find((candidate) => candidate === level);
+  if (known) return known;
+  throw new ConfigError(
+    `approval ${JSON.stringify(level)} is not supported by this venfork version. Upgrade venfork, or run: venfork stage approval two-person`
+  );
+}
+
 const CONFIG_BRANCH = 'venfork-config';
 
 /** The error for a command that needs `venfork-config` when origin has none. */
@@ -176,6 +212,7 @@ export type VenforkConfigPatch = Omit<
   Partial<VenforkConfig>,
   | 'schedule'
   | 'scheduleAuth'
+  | 'approval'
   | 'invalidPreserve'
   | 'enabledWorkflows'
   | 'disabledWorkflows'
@@ -189,6 +226,8 @@ export type VenforkConfigPatch = Omit<
   schedule?: VenforkConfig['schedule'] | null;
   /** `null` (or `'token'`) returns to token auth; omitted keeps the current mode. */
   scheduleAuth?: ScheduleAuth | null;
+  /** `null` (or `'off'`) turns the approval gate off; omitted keeps the level. */
+  approval?: ApprovalLevel | null;
   /** Replaces the whole allowlist; `null` clears it. */
   enabledWorkflows?: string[] | null;
   /** Replaces the whole block list; `null` clears it. */
@@ -579,6 +618,10 @@ function normalizeConfig(
     delete normalized.scheduleAuth;
   }
 
+  if (normalized.approval === '' || normalized.approval === 'off') {
+    delete normalized.approval;
+  }
+
   if (normalized.schedule) {
     const cron =
       typeof normalized.schedule.cron === 'string'
@@ -919,6 +962,7 @@ export function applyPatchAndNormalize(
     shippedIssues: _shippedIssuesPatch,
     pulledIssues: _pulledIssuesPatch,
     scheduleAuth: scheduleAuthPatch,
+    approval: approvalPatch,
     ...basePatch
   } = patch;
 
@@ -940,6 +984,12 @@ export function applyPatchAndNormalize(
     delete merged.scheduleAuth;
   } else if (scheduleAuthPatch !== undefined) {
     merged.scheduleAuth = scheduleAuthPatch;
+  }
+
+  if (approvalPatch === null || approvalPatch === 'off') {
+    delete merged.approval;
+  } else if (approvalPatch !== undefined) {
+    merged.approval = approvalPatch;
   }
 
   if (patch.enabledWorkflows === null) {

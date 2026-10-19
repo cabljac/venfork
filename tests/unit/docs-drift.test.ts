@@ -254,7 +254,8 @@ describe('the user docs match the CLI contract', () => {
           /(?:\bvenfork|\bvf_yes|"\$VF_CLI")\s+stage\s+([^\s`;|<>&#)]+)/g
         )) {
           const target = m[1] ?? '';
-          if (target === 'issue' || target.startsWith('-')) continue;
+          if (target === 'issue' || target === 'approval') continue;
+          if (target.startsWith('-')) continue;
           const rest = line.slice(m.index ?? 0).split(/[;|`]|&&/)[0] ?? '';
           if (/<[a-z-]+>|\[/.test(rest)) continue;
           if (rest.trim() === 'venfork stage branch issue') continue;

@@ -92,8 +92,9 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
     `venfork stage <branch> [--no-pr] [--draft] [--dry-run] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]
 venfork stage branch <name> [same options]
 venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]
+venfork stage approval [on|reviewed|two-person|off] [--yes] [--no-input] [--json]
   Push a branch (or an issue) from the mirror outward, to the public fork or upstream
-  Branch names \`issue\` and \`branch\` need the explicit form: venfork stage branch issue
+  Branch names \`issue\`, \`approval\` and \`branch\` need the explicit form: venfork stage branch issue
   Branch: push to public fork for PR to upstream
   Rebuilds the branch as linear history on upstream (merges and venfork's sync
     commit dropped, new SHAs) and refuses commits that carry mirror-only files or
@@ -114,6 +115,8 @@ venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--jso
   • --json                 Print one JSON envelope on stdout; implies --no-input
   Issue: read the internal mirror issue, strip venfork:internal blocks, open the
     upstream counterpart, record the link
+  Approval: show or set the review a branch needs on its mirror PR before stage
+    publishes it (see venfork stage approval --help)
   This is when your work becomes visible to the client`,
   ],
   [
@@ -149,6 +152,20 @@ venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json
 ];
 
 const SUBCOMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
+  [
+    'stage approval',
+    `venfork stage approval [on|reviewed|two-person|off] [--yes] [--no-input] [--json]
+  Show (no argument) or set the approval the mirror PR of a branch needs
+  before venfork stage publishes it. Stored in the mirror's venfork settings
+  • off         No review needed (the default)
+  • reviewed    An approving review on the PR head from a person with write
+                access who is not the PR author, and passing checks
+  • two-person  As reviewed, and the approver is not the person running stage
+  • on          Same as two-person
+  A guardrail against accidental or agent-driven publishing, not enforcement:
+    anyone who can push can publish without venfork
+  --json prints { level } after the action as one JSON envelope on stdout`,
+  ],
   [
     'pull pr',
     `venfork pull pr <pr-number-or-url> [--branch-name <name>] [--no-push] [--yes] [--no-input] [--json]
