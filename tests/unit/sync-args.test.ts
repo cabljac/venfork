@@ -4,47 +4,45 @@ import { parseSyncCliArgs } from '../../src/sync-args.js';
 describe('parseSyncCliArgs', () => {
   test('no arguments syncs the default branch', () => {
     expect(parseSyncCliArgs([])).toEqual({
-      branch: undefined,
       reportIssues: false,
       json: false,
     });
   });
 
-  test('branch and --report-issues in any order', () => {
-    expect(parseSyncCliArgs(['--report-issues', 'develop'])).toEqual({
-      branch: 'develop',
+  test('reads --report-issues and --json', () => {
+    expect(parseSyncCliArgs(['--report-issues', '--json'])).toEqual({
       reportIssues: true,
-      json: false,
-    });
-  });
-
-  test('reads --json', () => {
-    expect(parseSyncCliArgs(['main', '--json'])).toEqual({
-      branch: 'main',
-      reportIssues: false,
       json: true,
     });
   });
 
-  test('rejects unknown options and extra branches', () => {
+  test('rejects unknown options', () => {
     expect(() => parseSyncCliArgs(['--force'])).toThrow(
       "Unknown option '--force'"
     );
-    expect(() => parseSyncCliArgs(['a', 'b'])).toThrow('Usage: venfork sync');
+  });
+
+  test('a branch is a usage error that points at pull pr', () => {
+    expect(() => parseSyncCliArgs(['develop'])).toThrow(
+      "venfork sync takes no branch ('develop')"
+    );
+    expect(() => parseSyncCliArgs(['develop'])).toThrow(
+      'run `venfork pull pr <n>` again'
+    );
+    expect(() => parseSyncCliArgs(['upstream-pr/12', '--json'])).toThrow(
+      'run `venfork pull pr 12` again'
+    );
   });
 });
 
 describe('parseSyncCliArgs and --', () => {
-  test('-- ends options, so a dash-leading branch can follow it', () => {
+  test('-- ends options, and a positional after it is still refused', () => {
     expect(parseSyncCliArgs(['--json', '--'])).toEqual({
-      branch: undefined,
       reportIssues: false,
       json: true,
     });
-    expect(parseSyncCliArgs(['--report-issues', '--', '-weird'])).toEqual({
-      branch: '-weird',
-      reportIssues: true,
-      json: false,
-    });
+    expect(() => parseSyncCliArgs(['--report-issues', '--', '-weird'])).toThrow(
+      "venfork sync takes no branch ('-weird')"
+    );
   });
 });

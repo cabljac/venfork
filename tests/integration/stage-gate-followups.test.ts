@@ -219,9 +219,9 @@ describe('a directory entry from an old config is invalid', () => {
     await fx.commitOnOrigin({ [DIR_FILE]: 'client plan\n' });
     const before = await fx.pushCount(fx.origin, 'refs/heads/main');
 
-    await expect(
-      syncCommand(undefined, { cwd: fx.work, quiet: true })
-    ).rejects.toThrow(HINT);
+    await expect(syncCommand({ cwd: fx.work, quiet: true })).rejects.toThrow(
+      HINT
+    );
 
     expect(await fx.pushCount(fx.origin, 'refs/heads/main')).toBe(before);
   });

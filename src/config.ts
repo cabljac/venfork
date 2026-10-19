@@ -24,7 +24,7 @@ export interface ShippedBranch {
 }
 
 /**
- * Record kept by `venfork pull pr` so `venfork sync <branch>` can
+ * Record kept by `venfork pull pr` so a re-run of `venfork pull pr <n>` can
  * refresh a pulled-in upstream PR against the latest `pull/<n>/head` ref.
  */
 export interface PulledPr {

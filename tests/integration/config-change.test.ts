@@ -141,7 +141,7 @@ test('a full change from another clone between write and push survives', async (
   expect(err.message).toContain('venfork-config changed concurrently');
   expect(await configCron()).toBe('30 2 * * *');
   expect(await originCron()).toBe('30 2 * * *');
-  await syncCommand(undefined, { cwd: fx.work, quiet: true });
+  await syncCommand({ cwd: fx.work, quiet: true });
   expect(await originCron()).toBe('30 2 * * *');
 });
 

@@ -33,7 +33,7 @@ tests:
 ```bash
 venfork help >/dev/null 2>&1; echo $?                                   # 0
 venfork help 2>/dev/null | grep -c -e "Available Commands" -e "Exit Codes"   # 2
-venfork help sync 2>/dev/null | head -1                                 # venfork sync [branch] [--report-issues] [--no-input] [--json]
+venfork help sync 2>/dev/null | head -1                                 # venfork sync [--report-issues] [--no-input] [--json]
 venfork help bogus 2>&1; echo $?                                        # Unknown command: bogus. ..., 2
 venfork pull pr --help 2>/dev/null | head -1                            # venfork pull pr <pr-number-or-url> ...
 venfork --version                                                       # the package.json version

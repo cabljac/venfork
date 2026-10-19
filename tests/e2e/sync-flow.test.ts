@@ -430,7 +430,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
     expect(upstreamPr.isDraft).toBe(true);
   }, 300_000);
 
-  test('tier 4: pull pr imports an upstream PR; sync refreshes it', async () => {
+  test('tier 4: pull pr imports an upstream PR; re-running pull pr refreshes it', async () => {
     const defaultBranch = await getRepoDefaultBranch(
       UPSTREAM_OWNER,
       names.upstream
@@ -473,8 +473,10 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
       content: `updated content ${RUN_ID}\n`,
     });
 
-    // venfork sync <branch> should refresh the local + mirror branch.
-    await runVenfork(['sync', localBranch], { cwd: localMirrorPath });
+    // Re-running pull pr should refresh the local + mirror branch.
+    await runVenfork(['pull', 'pr', String(opened.number)], {
+      cwd: localMirrorPath,
+    });
 
     const refreshedLocalHead = (
       await $({

@@ -124,15 +124,7 @@ function parseCommand(
     }
     case 'sync': {
       const parsed = parseSyncCliArgs(args);
-      return async () => {
-        const result = await syncCommand(parsed.branch, {
-          reportIssues: parsed.reportIssues,
-        });
-        return {
-          result,
-          exitCode: partialFailureExitCode({ command: 'sync', result }),
-        };
-      };
+      return resultOf(() => syncCommand({ reportIssues: parsed.reportIssues }));
     }
     case 'schedule': {
       const parsed = parseScheduleCliArgs(args);

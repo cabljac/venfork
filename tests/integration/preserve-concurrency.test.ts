@@ -73,7 +73,7 @@ afterEach(async () => {
   active = undefined;
 });
 
-const sync = () => syncCommand(undefined, { cwd: fx.work, quiet: true });
+const sync = () => syncCommand({ cwd: fx.work, quiet: true });
 const preserveList = async () =>
   ((await fx.readRawConfig()).preserve as string[] | undefined)?.sort();
 

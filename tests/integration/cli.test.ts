@@ -658,7 +658,7 @@ describe('clone on a legacy mirror without venfork-config', () => {
 
 describe('per-command help', () => {
   for (const [command, usage] of [
-    ['sync', 'venfork sync [branch] [--report-issues]'],
+    ['sync', 'venfork sync [--report-issues]'],
     ['doctor', 'venfork doctor [--yes] [--no-input] [--json]'],
     ['stage', 'venfork stage <branch>'],
   ]) {
@@ -676,7 +676,7 @@ describe('per-command help', () => {
 
   for (const [args, usage] of [
     [['help', 'doctor'], 'venfork doctor [--yes] [--no-input] [--json]'],
-    [['--help', 'sync'], 'venfork sync [branch] [--report-issues]'],
+    [['--help', 'sync'], 'venfork sync [--report-issues]'],
     [['-h', 'stage'], 'venfork stage <branch>'],
     [['help', 'pull', 'pr'], 'venfork pull pr <pr-number-or-url>'],
   ] as const) {
@@ -856,6 +856,7 @@ describe('usage errors exit 2 with the error on stderr', () => {
     ],
     [['clone', 'a/b-private', '--public-fork', 'x y'], 'Invalid --public-fork'],
     [['sync', 'a', 'b'], 'Usage: venfork sync'],
+    [['sync', 'upstream-pr/7'], 'run `venfork pull pr 7` again'],
     [['schedule', 'set', 'not a cron'], "Invalid cron expression 'not a cron'"],
     [['schedule', 'status', '--app'], "--app applies only to 'schedule set'"],
     [['stage', 'feat', '--internal-pr', 'x'], '--internal-pr requires'],
@@ -1448,39 +1449,6 @@ async function openUpstreamPr(fx: MirrorFixture, n: number): Promise<void> {
 }
 
 describe('partial success exits 1', () => {
-  test('sync <pulled-pr> exits 1 with the success envelope when origin rejects the push', async () => {
-    const fx = await createMirrorFixture();
-    try {
-      await openUpstreamPr(fx, 7);
-      await rejectOriginPushes(fx);
-
-      const json = await runCliWithoutTty(fx.work, [
-        'sync',
-        'upstream-pr/7',
-        '--json',
-      ]);
-      expect(json.exitCode).toBe(1);
-      expect(parseEnvelope(json.stdout)).toMatchObject({
-        ok: true,
-        result: { kind: 'pulled-pr', status: 'push-failed', prNumber: 7 },
-      });
-
-      const text = await runCliWithoutTty(fx.work, ['sync', 'upstream-pr/7']);
-      expect(text.exitCode).toBe(1);
-      expect(text.stderr).not.toContain('Push failed');
-      const lines = outcomeLines(text.stderr);
-      const errors = lines.filter((line) => line.startsWith('error: '));
-      expect(errors).toHaveLength(1);
-      expect(lines[0]).toStartWith(
-        "error: Could not push upstream-pr/7 to origin; the local branch is updated. Fix the push, then run `venfork sync 'upstream-pr/7'` again. Reason: "
-      );
-      expect(lines[0]).toContain('push refused by test');
-      expect(text.stderr).toContain('Sync incomplete');
-    } finally {
-      await fx.cleanup();
-    }
-  });
-
   test('pull pr exits 1 when origin rejects the push, and its hint recovers', async () => {
     const fx = await createMirrorFixture();
     try {
@@ -1523,7 +1491,7 @@ describe('partial success exits 1', () => {
       expect(lines[0]).toContain('push refused by test');
       expect(failed.stderr).toContain('Pull incomplete');
       const hint = lines[0].match(/run `([^`]+)` again\./)?.[1];
-      expect(hint).toBe("venfork pull pr 7 --branch-name 'upstream-pr/7'");
+      expect(hint).toBe('venfork pull pr 7');
 
       await allowPushes();
       const retried = await runCliWithoutTty(

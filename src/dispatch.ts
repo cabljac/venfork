@@ -1,6 +1,6 @@
 import type { PullPrResult } from './commands/pull-request.js';
 import type { StageResult } from './commands/stage.js';
-import { type SyncResult, syncCommand } from './commands.js';
+import { syncCommand } from './commands.js';
 import { NotInRepositoryError } from './errors.js';
 import { parsePullCliArgs } from './pull-args.js';
 import { parseStageCliArgs } from './stage-args.js';
@@ -72,8 +72,7 @@ export function requiresGhAuth(command: string, args: string[]): boolean {
 /** A finished command run whose result can report a partial failure. */
 export type PartialOutcome =
   | { command: 'stage'; result: StageResult }
-  | { command: 'pull pr'; result: PullPrResult; push: boolean }
-  | { command: 'sync'; result: SyncResult };
+  | { command: 'pull pr'; result: PullPrResult; push: boolean };
 
 /**
  * 1 when a command did part of its job and failed the rest, else 0: stage
@@ -89,11 +88,6 @@ export function partialFailureExitCode(outcome: PartialOutcome): 0 | 1 {
         : 0;
     case 'pull pr':
       return outcome.push && !outcome.result.pushed ? 1 : 0;
-    case 'sync':
-      return outcome.result.kind === 'pulled-pr' &&
-        outcome.result.status === 'push-failed'
-        ? 1
-        : 0;
   }
 }
 
@@ -107,6 +101,6 @@ export function setupSyncMirror(
   sync: typeof syncCommand = syncCommand
 ): (cwd: string) => Promise<void> {
   return async (cwd) => {
-    await sync(undefined, { cwd, quiet: true });
+    await sync({ cwd, quiet: true });
   };
 }

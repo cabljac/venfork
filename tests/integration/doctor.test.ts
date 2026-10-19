@@ -53,7 +53,7 @@ async function scheduledAndSynced(): Promise<void> {
   await updateVenforkConfig(fx.work, {
     schedule: { enabled: true, cron: '0 */6 * * *' },
   });
-  await syncCommand(undefined, { cwd: fx.work, quiet: true });
+  await syncCommand({ cwd: fx.work, quiet: true });
 }
 
 describe('doctor against real repos', () => {
@@ -196,7 +196,7 @@ describe('doctor against real repos', () => {
     expect(checks.workflow.ok).toBe(false);
     expect(checks.workflow.detail).toContain('missing');
 
-    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await syncCommand({ cwd: fx.work, quiet: true });
     await updateVenforkConfig(fx.work, {
       schedule: { enabled: true, cron: '0 * * * *' },
     });
@@ -386,7 +386,7 @@ describe('doctor and the managed-commit invariant', () => {
       fix: 'Run `venfork sync` to fold the 2 commits into one managed commit.',
     });
 
-    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await syncCommand({ cwd: fx.work, quiet: true });
 
     checks = byId(await runDoctorChecks({ cwd: fx.work }));
     expect(checks.invariant).toEqual({
@@ -484,12 +484,12 @@ describe('the preserve check asks the tip builder sync uses', () => {
   async function preservedAndSynced(entry: string): Promise<void> {
     await seedPreserve(fx, [entry]);
     await fx.commitOnOrigin({ [entry]: 'mirror\n' });
-    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await syncCommand({ cwd: fx.work, quiet: true });
   }
 
   test('a directory entry fails as it does in sync', async () => {
     await fx.commitOnUpstream({ 'docs/a.md': 'a\n' });
-    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await syncCommand({ cwd: fx.work, quiet: true });
     await seedPreserve(fx, ['docs']);
 
     const checks = byId(await runDoctorChecks({ cwd: fx.work }));
@@ -509,9 +509,9 @@ describe('the preserve check asks the tip builder sync uses', () => {
     expect(checks.preserve.fix).toContain(
       "venfork preserve remove 'MIRROR.md'"
     );
-    await expect(
-      syncCommand(undefined, { cwd: fx.work, quiet: true })
-    ).rejects.toThrow(new CommandExitError(1));
+    await expect(syncCommand({ cwd: fx.work, quiet: true })).rejects.toThrow(
+      new CommandExitError(1)
+    );
   });
 
   test('an upstream file at an ancestor of a preserved path fails as it does in sync', async () => {
@@ -532,14 +532,14 @@ describe('the preserve check asks the tip builder sync uses', () => {
 
     expect(checks.preserve.ok).toBe(true);
     await expect(
-      syncCommand(undefined, { cwd: fx.work, quiet: true })
+      syncCommand({ cwd: fx.work, quiet: true })
     ).resolves.toMatchObject({ kind: 'default-branch' });
   });
 });
 
 describe('doctor and GitHub App auth', () => {
   const schedule = { enabled: true, cron: '0 */6 * * *' };
-  const syncAt = (cwd: string) => syncCommand(undefined, { cwd, quiet: true });
+  const syncAt = (cwd: string) => syncCommand({ cwd, quiet: true });
 
   test('a no-public mirror gets the mint step and an up-to-date workflow check', async () => {
     const noPublic = await createMirrorFixture({ mode: 'no-public' });

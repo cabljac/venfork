@@ -51,7 +51,7 @@ afterEach(async () => {
   active = undefined;
 });
 
-const sync = () => syncCommand(undefined, { cwd: fx.work, quiet: true });
+const sync = () => syncCommand({ cwd: fx.work, quiet: true });
 
 /** Checks out origin's default branch in the fixture's second clone. */
 async function originDev(): Promise<string> {

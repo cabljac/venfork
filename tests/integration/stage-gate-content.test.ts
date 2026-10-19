@@ -153,7 +153,7 @@ const ROADMAP = [
 async function mirrorWithRoadmap(): Promise<GateOptions> {
   await fx.commitOnOrigin({ [DOC]: `${ROADMAP}\n` }, 'docs: notes');
   await seedPreserve(fx, [DOC]);
-  await syncCommand(undefined, { cwd: fx.work, quiet: true });
+  await syncCommand({ cwd: fx.work, quiet: true });
   await git('fetch', '--quiet', 'origin');
   const scan = await collectMirrorBlobs(
     ['refs/remotes/origin/main', 'refs/heads/main'],
@@ -196,7 +196,7 @@ describe('preserved text is refused when a copy only differs in form', () => {
 
   test('a copy of upstream text that the preserved file also carries ships', async () => {
     await fx.commitOnUpstream({ 'NOTES.md': `${ROADMAP}\n` });
-    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await syncCommand({ cwd: fx.work, quiet: true });
     await fx.commitOnOrigin(
       { 'NOTES.md': `${ROADMAP}\nPrivate addendum for the client team\n` },
       'docs: addendum'

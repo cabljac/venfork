@@ -1,13 +1,9 @@
-import { $ } from 'execa';
 import {
   assertNoInvalidPreserve,
   readVenforkConfigFromRepo,
-  updateVenforkConfig,
-  type VenforkConfig,
 } from '../config.js';
 import {
   ConfigError,
-  GitError,
   PreconditionError,
   SyncDivergenceError,
 } from '../errors.js';
@@ -26,35 +22,13 @@ import {
   resolveCommit,
   updateOriginTip,
 } from '../shared/mirror-commit.js';
-import { netExec, netFailureReason, netFetch } from '../shared/net.js';
+import { netFetch } from '../shared/net.js';
 import { assertPreserveEntriesAreNotDirectories } from '../shared/stage-gate.js';
 import {
   reportSyncBlocked,
   resolveSyncBlocked,
 } from '../shared/sync-report.js';
 import * as p from '../shared/ui.js';
-import { shellQuote } from '../utils.js';
-
-/**
- * Returns the upstream PR number for `branch` if it's a pulled-in PR. First
- * checks `venfork-config.pulledPrs` (recorded by `venfork pull pr`),
- * then falls back to the `upstream-pr/<n>` naming convention. Returns null
- * if the branch is not a pulled PR (sync routes to the default flow).
- */
-function resolvePulledPr(
-  branch: string,
-  config: VenforkConfig | null
-): { prNumber: number; tracked: boolean } | null {
-  const recorded = config?.pulledPrs?.[branch];
-  if (recorded?.upstreamPrNumber) {
-    return { prNumber: recorded.upstreamPrNumber, tracked: true };
-  }
-  const conventionMatch = branch.match(/^upstream-pr\/(\d+)$/);
-  if (conventionMatch) {
-    return { prNumber: Number(conventionMatch[1]), tracked: false };
-  }
-  return null;
-}
 
 /** `--json` result of a default-branch sync. */
 export interface DefaultBranchSyncResult {
@@ -68,95 +42,8 @@ export interface DefaultBranchSyncResult {
   public?: { tip: string; pushed: boolean };
 }
 
-/** `--json` result of `venfork sync <branch>` on a pulled upstream PR. */
-export interface PulledPrSyncResult {
-  kind: 'pulled-pr';
-  /** `push-failed` when the local branch moved but origin could not. */
-  status: 'pushed' | 'up-to-date' | 'push-failed';
-  branch: string;
-  prNumber: number;
-  head: string;
-}
-
 /** What `venfork sync` did, reported as the `--json` result. */
-export type SyncResult = DefaultBranchSyncResult | PulledPrSyncResult;
-
-async function syncPulledPr(
-  branch: string,
-  prNumber: number,
-  cwd: string,
-  s: ReturnType<typeof p.spinner>
-): Promise<PulledPrSyncResult> {
-  s.start(`Fetching pull/${prNumber}/head from upstream`);
-  const fetchResult = await netExec(cwd, {
-    bufferOutput: true,
-  })`git fetch upstream pull/${prNumber}/head:${branch}`;
-  if (fetchResult.exitCode !== 0) {
-    // git fetch refuses to clobber a divergent local branch; force into the
-    // local ref since the source of truth for pulled PRs is upstream.
-    const forceResult = await netExec(cwd, {
-      bufferOutput: true,
-    })`git fetch upstream +pull/${prNumber}/head:${branch}`;
-    if (forceResult.exitCode !== 0) {
-      throw new GitError(
-        `git fetch upstream pull/${prNumber}/head failed: ${netFailureReason(forceResult)}`,
-        'git fetch upstream'
-      );
-    }
-  }
-  const headSha = (await $({ cwd })`git rev-parse ${branch}`).stdout.trim();
-  s.stop(`Fetched ${headSha.slice(0, 9)} → ${branch}`);
-
-  s.start(`Pushing ${branch} to origin`);
-  const result: PulledPrSyncResult = {
-    kind: 'pulled-pr',
-    status: 'up-to-date',
-    branch,
-    prNumber,
-    head: headSha,
-  };
-  try {
-    const pushed = await pushBranchWithLease({
-      remote: 'origin',
-      branch,
-      target: headSha,
-      expected: await resolveCommit(`refs/remotes/origin/${branch}`, cwd),
-      cwd,
-    });
-    if (pushed) result.status = 'pushed';
-  } catch (err) {
-    s.clear();
-    p.log.error(
-      `Could not push ${branch} to origin; the local branch is updated. Fix the push, then run \`venfork sync ${shellQuote(branch)}\` again. Reason: ${err instanceof Error ? err.message : String(err)}`
-    );
-    return { ...result, status: 'push-failed' };
-  }
-  s.stop(`Pushed ${branch} to origin`);
-
-  try {
-    await updateVenforkConfig(cwd, {
-      pulledPrs: {
-        [branch]: {
-          upstreamPrNumber: prNumber,
-          upstreamPrUrl: `https://github.com/${(
-            await $({ cwd })`git remote get-url upstream`
-          ).stdout
-            .trim()
-            .replace(
-              /.*[:/]([^/]+\/[^/]+?)(?:\.git)?$/,
-              '$1'
-            )}/pull/${prNumber}`,
-          head: headSha,
-          lastSyncedAt: new Date().toISOString(),
-        },
-      },
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    p.log.warn(`Could not update pulledPrs entry: ${msg}`);
-  }
-  return result;
-}
+export type SyncResult = DefaultBranchSyncResult;
 
 /**
  * Warns, before anything is pushed, about commits that sync will replace
@@ -192,10 +79,11 @@ function warnWeakManaged(commits: DroppedManagedCommit[]): void {
  * sync closes it.
  * @returns What sync did, for `--json`.
  */
-export async function syncCommand(
-  targetBranch?: string,
-  options?: { cwd?: string; quiet?: boolean; reportIssues?: boolean }
-): Promise<SyncResult> {
+export async function syncCommand(options?: {
+  cwd?: string;
+  quiet?: boolean;
+  reportIssues?: boolean;
+}): Promise<SyncResult> {
   const quiet = options?.quiet ?? false;
 
   if (!quiet) {
@@ -206,30 +94,6 @@ export async function syncCommand(
 
   try {
     const repoDir = options?.cwd ?? process.cwd();
-
-    // Branch-specific path: if the targetBranch is a pulled-in upstream PR,
-    // refresh it from `pull/<n>/head` instead of running the default-branch
-    // +1-commit sync flow.
-    if (targetBranch) {
-      const initialConfig = await readVenforkConfigFromRepo(repoDir);
-      const pulledPr = resolvePulledPr(targetBranch, initialConfig);
-      if (pulledPr) {
-        const result = await syncPulledPr(
-          targetBranch,
-          pulledPr.prNumber,
-          repoDir,
-          s
-        );
-        if (!quiet) {
-          p.outro(
-            result.status === 'push-failed'
-              ? `Sync incomplete: ${targetBranch} is updated locally, not on origin.`
-              : `✨ ${targetBranch} synced with upstream PR #${pulledPr.prNumber}`
-          );
-        }
-        return result;
-      }
-    }
 
     // Fetch before reading the config: config writers write the config
     // before they push the tip, so a tip fetched after the config was read
@@ -246,8 +110,7 @@ export async function syncCommand(
     s.stop('Fetched from all remotes');
 
     // Step 2: Detect default branch if not specified
-    const defaultBranch =
-      targetBranch || (await getDefaultBranch('upstream', options?.cwd));
+    const defaultBranch = await getDefaultBranch('upstream', options?.cwd);
     const preserveList = config?.preserve ?? [];
     const upstreamTip = await resolveCommit(
       `refs/remotes/upstream/${defaultBranch}`,

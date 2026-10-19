@@ -1016,7 +1016,7 @@ describe('setupCommand result', () => {
 describe('syncCommand', () => {
   test('passes gh credentials to network git ops only', async () => {
     try {
-      await syncCommand('main');
+      await syncCommand();
     } catch {
       // Expected - may fail in test environment
     }
@@ -1042,7 +1042,7 @@ describe('syncCommand', () => {
 
   test('fetches from all remotes', async () => {
     try {
-      await syncCommand('main');
+      await syncCommand();
     } catch {
       // Expected - may fail in test environment
     }
@@ -1063,7 +1063,7 @@ describe('syncCommand', () => {
 
   test('pushes to origin and public default branches', async () => {
     try {
-      await syncCommand('main');
+      await syncCommand();
     } catch {
       // Expected
     }
@@ -1084,7 +1084,7 @@ describe('syncCommand', () => {
   });
 
   test('never follows tags when pushing the mirror and the public fork', async () => {
-    await syncCommand('main');
+    await syncCommand();
 
     const pushCalls = execaCalls.filter((cmd) => cmd.includes('git push'));
     expect(pushCalls.length).toBeGreaterThan(0);
@@ -1107,7 +1107,7 @@ describe('syncCommand', () => {
 
   test('checks for divergent commits', async () => {
     try {
-      await syncCommand('main');
+      await syncCommand();
     } catch {
       // Expected
     }
@@ -1132,7 +1132,7 @@ describe('syncCommand', () => {
     });
 
     try {
-      await syncCommand('main');
+      await syncCommand();
     } catch {
       // Expected in mocked environment
     }
@@ -1181,7 +1181,7 @@ describe('syncCommand', () => {
     });
 
     try {
-      await syncCommand('main');
+      await syncCommand();
     } catch {
       // Expected in mocked environment
     }
@@ -1212,7 +1212,7 @@ describe('syncCommand', () => {
     );
 
     try {
-      await syncCommand('main');
+      await syncCommand();
     } catch {
       // Expected in mocked environment
     }
@@ -1269,7 +1269,7 @@ describe('syncCommand', () => {
     accessExists = (p) => p.includes('.github/workflows/ci.yml');
 
     try {
-      await syncCommand('main');
+      await syncCommand();
     } catch {
       // Expected in mocked environment
     }
@@ -1311,7 +1311,7 @@ describe('syncCommand', () => {
 
     let caught = false;
     try {
-      await syncCommand('main');
+      await syncCommand();
     } catch {
       caught = true;
     }
@@ -1381,7 +1381,7 @@ describe('syncCommand', () => {
     );
 
     try {
-      await syncCommand('main');
+      await syncCommand();
     } catch {
       // Expected in mocked environment
     }
@@ -1444,7 +1444,7 @@ describe('syncCommand', () => {
       { exitCode: 0, stdout: 'agent.yml\0', stderr: '' }
     );
 
-    const rejected = await syncCommand('main').catch((error) => error);
+    const rejected = await syncCommand().catch((error) => error);
     expect(rejected).toBeInstanceOf(SyncDivergenceError);
     // The upstream→origin force-push must NOT have happened.
     expect(
@@ -1501,7 +1501,7 @@ describe('syncCommand', () => {
     );
 
     try {
-      await syncCommand('main');
+      await syncCommand();
     } catch {
       // Expected in mocked environment
     }
@@ -1567,7 +1567,7 @@ describe('syncCommand', () => {
     );
 
     try {
-      await syncCommand('main');
+      await syncCommand();
     } catch {
       // Expected in mocked environment
     }
@@ -4566,7 +4566,7 @@ describe('syncCommand - error paths', () => {
         : Promise.reject(new Error(stderr))
     );
 
-    await expect(syncCommand('main')).rejects.toThrow(new CommandExitError(1));
+    await expect(syncCommand()).rejects.toThrow(new CommandExitError(1));
     expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
   });
 
@@ -4578,9 +4578,7 @@ describe('syncCommand - error paths', () => {
       stderr: '',
     });
 
-    await expect(syncCommand('main')).rejects.toBeInstanceOf(
-      SyncDivergenceError
-    );
+    await expect(syncCommand()).rejects.toBeInstanceOf(SyncDivergenceError);
     expect(process.exit).not.toHaveBeenCalled();
   });
 
@@ -4592,9 +4590,7 @@ describe('syncCommand - error paths', () => {
       stderr: '',
     });
 
-    await expect(syncCommand('main')).rejects.toBeInstanceOf(
-      SyncDivergenceError
-    );
+    await expect(syncCommand()).rejects.toBeInstanceOf(SyncDivergenceError);
     expect(process.exit).not.toHaveBeenCalled();
   });
 
@@ -4637,9 +4633,7 @@ describe('syncCommand - error paths', () => {
       }
     );
 
-    await expect(syncCommand('main')).rejects.toBeInstanceOf(
-      SyncDivergenceError
-    );
+    await expect(syncCommand()).rejects.toBeInstanceOf(SyncDivergenceError);
 
     expect(execaCalls.some((cmd) => cmd.includes('git push origin'))).toBe(
       false
@@ -4666,9 +4660,7 @@ describe('syncCommand - error paths', () => {
       }
     );
 
-    await expect(syncCommand('main')).rejects.toBeInstanceOf(
-      SyncDivergenceError
-    );
+    await expect(syncCommand()).rejects.toBeInstanceOf(SyncDivergenceError);
     expect(process.exit).not.toHaveBeenCalled();
     expect(
       execaCalls.some((cmd) =>
@@ -4702,9 +4694,7 @@ describe('syncCommand - error paths', () => {
       }
     );
 
-    await expect(syncCommand('main')).rejects.toBeInstanceOf(
-      SyncDivergenceError
-    );
+    await expect(syncCommand()).rejects.toBeInstanceOf(SyncDivergenceError);
     expect(process.exit).not.toHaveBeenCalled();
     expect(
       execaCalls.some((cmd) =>
@@ -4723,7 +4713,7 @@ describe('syncCommand - error paths', () => {
       }
     );
 
-    await syncCommand('main');
+    await syncCommand();
 
     expect(
       execaCalls.some((cmd) =>
@@ -4744,7 +4734,7 @@ describe('syncCommand - error paths', () => {
       Promise.reject(new Error('fatal: bad revision'))
     );
 
-    await expect(syncCommand('main')).rejects.toThrow(new CommandExitError(1));
+    await expect(syncCommand()).rejects.toThrow(new CommandExitError(1));
     expect(execaCalls.some((cmd) => cmd.includes('git push'))).toBe(false);
   });
 
@@ -4763,7 +4753,7 @@ describe('syncCommand - error paths', () => {
       )
     );
 
-    await expect(syncCommand('main')).rejects.toThrow(new CommandExitError(1));
+    await expect(syncCommand()).rejects.toThrow(new CommandExitError(1));
 
     expect(clack.log.error).toHaveBeenLastCalledWith(
       'upstream/main not found after fetch. Check the upstream remote and the default branch name.',
@@ -4787,9 +4777,9 @@ describe('syncCommand - error paths', () => {
         stderr: '',
       });
 
-      await expect(
-        syncCommand('main', { reportIssues: true })
-      ).rejects.toBeInstanceOf(SyncDivergenceError);
+      await expect(syncCommand({ reportIssues: true })).rejects.toBeInstanceOf(
+        SyncDivergenceError
+      );
 
       expect(
         execaCalls.some((cmd) =>
@@ -4819,7 +4809,7 @@ describe('syncCommand - error paths', () => {
         stderr: '',
       });
 
-      await syncCommand('main', { reportIssues: true });
+      await syncCommand({ reportIssues: true });
 
       expect(
         execaCalls.some((cmd) =>
@@ -4832,7 +4822,7 @@ describe('syncCommand - error paths', () => {
   });
 
   test('without --report-issues sync never calls gh', async () => {
-    await syncCommand('main');
+    await syncCommand();
 
     expect(execaCalls.some((cmd) => cmd.startsWith('gh '))).toBe(false);
   });
@@ -4842,7 +4832,7 @@ describe('syncCommand - error paths', () => {
       Promise.reject(new Error('Fetch failed'))
     );
 
-    await expect(syncCommand('main')).rejects.toThrow(new CommandExitError(1));
+    await expect(syncCommand()).rejects.toThrow(new CommandExitError(1));
   });
 
   test('handles push errors', async () => {
@@ -4850,7 +4840,7 @@ describe('syncCommand - error paths', () => {
       Promise.reject(new Error('Push failed'))
     );
 
-    await expect(syncCommand('main')).rejects.toThrow(new CommandExitError(1));
+    await expect(syncCommand()).rejects.toThrow(new CommandExitError(1));
   });
 });
 
@@ -5072,7 +5062,24 @@ describe('stageCommand - error paths', () => {
 });
 
 describe('pullRequestCommand', () => {
-  function setupPrCommonMocks() {
+  const recorded = {
+    'upstream-pr/42': {
+      upstreamPrNumber: 42,
+      upstreamPrUrl: 'https://github.com/up/repo/pull/42',
+      head: 'oldsha',
+      lastSyncedAt: '2026-04-28T09:00:00Z',
+    },
+  };
+
+  function setupPrCommonMocks(
+    options: {
+      branch?: string;
+      localTip?: string;
+      originTip?: string;
+      pulledPrs?: Record<string, unknown>;
+    } = {}
+  ) {
+    const branch = options.branch ?? 'upstream-pr/42';
     mockResponses.set('git remote get-url upstream', {
       exitCode: 0,
       stdout: 'git@github.com:up/repo.git',
@@ -5093,33 +5100,34 @@ describe('pullRequestCommand', () => {
       }),
       stderr: '',
     });
-    // Local branch does NOT already exist (rev-parse --verify fails)
-    mockResponses.set('git rev-parse --verify upstream-pr/42', {
-      exitCode: 1,
-      stdout: '',
-      stderr: 'fatal: bad revision',
+    mockResponses.set(`git rev-parse --verify refs/heads/${branch}^{commit}`, {
+      exitCode: options.localTip ? 0 : 1,
+      stdout: options.localTip ?? '',
+      stderr: options.localTip ? '' : 'fatal: needed a single revision',
     });
-    mockResponses.set('git fetch upstream pull/42/head:upstream-pr/42', {
+    mockResponses.set('git rev-parse --verify FETCH_HEAD^{commit}', {
       exitCode: 0,
-      stdout: '',
+      stdout: 'newsha\n',
       stderr: '',
     });
-    mockResponses.set('git rev-parse upstream-pr/42', {
+    mockResponses.set(`git ls-remote origin refs/heads/${branch}`, {
       exitCode: 0,
-      stdout: 'aaaaaaaaaaaaaaaa\n',
+      stdout: options.originTip
+        ? `${options.originTip}\trefs/heads/${branch}\n`
+        : '',
       stderr: '',
     });
-    mockResponses.set('git push origin upstream-pr/42', {
-      exitCode: 0,
-      stdout: '',
-      stderr: '',
-    });
+    mockResponses.set(
+      `git rev-parse --verify refs/remotes/origin/${branch}^{commit}`,
+      { exitCode: 0, stdout: options.originTip ?? '', stderr: '' }
+    );
     mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,
       stdout: JSON.stringify({
         version: '1',
         publicForkUrl: 'git@github.com:owner/fork.git',
         upstreamUrl: 'git@github.com:up/repo.git',
+        ...(options.pulledPrs ? { pulledPrs: options.pulledPrs } : {}),
       }),
       stderr: '',
     });
@@ -5132,49 +5140,43 @@ describe('pullRequestCommand', () => {
 
     expect(result).toEqual({
       branch: 'upstream-pr/42',
-      head: 'aaaaaaaaaaaaaaaa',
+      head: 'newsha',
       prNumber: 42,
       prUrl: 'https://github.com/up/repo/pull/42',
       pushed: true,
+      refreshed: false,
     });
-
     expect(
       execaCalls.some(
         (cmd) => cmd.includes('gh pr view 42') && cmd.includes('--repo up/repo')
       )
     ).toBe(true);
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.includes('git fetch upstream pull/42/head:upstream-pr/42')
-      )
-    ).toBe(true);
-    expect(
-      execaCalls.some((cmd) => cmd.includes('git push origin upstream-pr/42'))
-    ).toBe(true);
+    expect(execaCalls).toContain('git fetch upstream pull/42/head');
+    expect(execaCalls).toContain('git branch upstream-pr/42 newsha');
+    expect(execaCalls).toContain(
+      'git push origin newsha:refs/heads/upstream-pr/42 --force-with-lease=refs/heads/upstream-pr/42: --no-follow-tags'
+    );
   });
 
   test('URL arg resolves to the same PR number', async () => {
     setupPrCommonMocks();
-    try {
-      await pullRequestCommand('https://github.com/up/repo/pull/42');
-    } catch {
-      // ignore
-    }
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.includes('git fetch upstream pull/42/head:upstream-pr/42')
-      )
-    ).toBe(true);
+
+    await pullRequestCommand('https://github.com/up/repo/pull/42');
+
+    expect(execaCalls).toContain('git fetch upstream pull/42/head');
   });
 
   test('--no-push skips push to origin AND skips pulledPrs linkage', async () => {
     // The linkage skip is important: with --no-push the mirror doesn't have
-    // the branch, so a later `venfork sync <branch>` shouldn't push it
+    // the branch, so a later re-run shouldn't treat it as the mirror copy
     // (which it would do if a pulledPrs entry were recorded).
     setupPrCommonMocks();
     const result = await pullRequestCommand('42', { push: false });
     expect(result.pushed).toBe(false);
     expect(execaCalls.some((cmd) => cmd.includes('git push origin'))).toBe(
+      false
+    );
+    expect(execaCalls.some((cmd) => cmd.includes('git ls-remote origin'))).toBe(
       false
     );
     // updateVenforkConfig pushes the venfork-config branch — must not happen.
@@ -5184,87 +5186,38 @@ describe('pullRequestCommand', () => {
   });
 
   test('--branch-name overrides the local branch', async () => {
-    mockResponses.set('git remote get-url upstream', {
-      exitCode: 0,
-      stdout: 'git@github.com:up/repo.git',
-      stderr: '',
-    });
-    mockResponses.set('gh pr view 42 --repo up/repo', {
-      exitCode: 0,
-      stdout: JSON.stringify({
-        number: 42,
-        title: 't',
-        body: '',
-        url: 'https://github.com/up/repo/pull/42',
-        state: 'OPEN',
-        baseRefName: 'main',
-        headRefName: 'feat/x',
-      }),
-      stderr: '',
-    });
-    mockResponses.set('git fetch upstream pull/42/head:review/up-42', {
-      exitCode: 0,
-      stdout: '',
-      stderr: '',
-    });
-    mockResponses.set('git rev-parse review/up-42', {
-      exitCode: 0,
-      stdout: 'bbbbbbbbbbbbbbbb\n',
-      stderr: '',
-    });
-    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
-      exitCode: 0,
-      stdout: JSON.stringify({
-        version: '1',
-        publicForkUrl: 'git@github.com:owner/fork.git',
-        upstreamUrl: 'git@github.com:up/repo.git',
-      }),
-      stderr: '',
+    setupPrCommonMocks({ branch: 'review/up-42' });
+
+    const result = await pullRequestCommand('42', {
+      branchName: 'review/up-42',
     });
 
-    try {
-      await pullRequestCommand('42', { branchName: 'review/up-42' });
-    } catch {
-      // ignore
-    }
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.includes('git fetch upstream pull/42/head:review/up-42')
-      )
-    ).toBe(true);
+    expect(result.branch).toBe('review/up-42');
+    expect(execaCalls).toContain('git branch review/up-42 newsha');
   });
 
-  test('refuses to clobber an existing local branch (no --branch-name)', async () => {
-    mockResponses.set('git remote get-url upstream', {
-      exitCode: 0,
-      stdout: 'git@github.com:up/repo.git',
-      stderr: '',
-    });
-    mockResponses.set('gh pr view 42 --repo up/repo', {
-      exitCode: 0,
-      stdout: JSON.stringify({
-        number: 42,
-        title: 't',
-        body: '',
-        url: 'https://github.com/up/repo/pull/42',
-        state: 'OPEN',
-        baseRefName: 'main',
-        headRefName: 'feat/x',
-      }),
-      stderr: '',
-    });
-    // Local branch already exists.
-    mockResponses.set('git rev-parse --verify upstream-pr/42', {
-      exitCode: 0,
-      stdout: 'existinghead',
-      stderr: '',
+  test('refuses an existing local branch that holds another PR (no --branch-name)', async () => {
+    setupPrCommonMocks({
+      localTip: 'existinghead',
+      pulledPrs: {
+        'upstream-pr/42': {
+          ...recorded['upstream-pr/42'],
+          upstreamPrNumber: 41,
+        },
+      },
     });
 
     await expect(pullRequestCommand('42')).rejects.toThrow(
       new CommandExitError(1)
     );
     expect(
-      execaCalls.some((cmd) => cmd.includes('git fetch upstream pull/42'))
+      execaCalls.some(
+        (cmd) =>
+          cmd.startsWith('git push') ||
+          cmd.startsWith('git update-ref') ||
+          cmd.startsWith('git reset') ||
+          cmd.startsWith('git branch ')
+      )
     ).toBe(false);
   });
 
@@ -5280,207 +5233,137 @@ describe('pullRequestCommand', () => {
   });
 });
 
-describe('syncCommand - pulled PR branches', () => {
-  test('pushes a pulled PR branch with an explicit lease on the mirror copy', async () => {
-    mockResponses.set('git rev-parse upstream-pr/7', {
-      exitCode: 0,
-      stdout: 'newsha\n',
-      stderr: '',
-    });
-    mockResponses.set(
-      'git rev-parse --verify refs/remotes/origin/upstream-pr/7^{commit}',
-      {
-        exitCode: 0,
-        stdout: 'mirrorsha\n',
-        stderr: '',
-      }
-    );
+describe('pullRequestCommand re-run refreshes the pulled branch', () => {
+  test('the push is leased on the origin tip fetched in this run', async () => {
+    setupRefresh();
 
-    const result = await syncCommand('upstream-pr/7');
+    const result = await pullRequestCommand('42');
 
-    expect(result).toEqual({
-      kind: 'pulled-pr',
-      status: 'pushed',
-      branch: 'upstream-pr/7',
-      prNumber: 7,
+    expect(result).toMatchObject({
       head: 'newsha',
+      pushed: true,
+      refreshed: true,
     });
     expect(execaCalls).toContain(
-      'git push origin newsha:refs/heads/upstream-pr/7 --force-with-lease=refs/heads/upstream-pr/7:mirrorsha --no-follow-tags'
+      'git fetch origin +refs/heads/upstream-pr/42:refs/remotes/origin/upstream-pr/42'
+    );
+    expect(execaCalls).toContain(
+      'git rev-list --count mirrorsha --not newsha oldsha'
+    );
+    expect(execaCalls).toContain(
+      'git update-ref refs/heads/upstream-pr/42 newsha oldsha'
+    );
+    expect(execaCalls).toContain(
+      'git push origin newsha:refs/heads/upstream-pr/42 --force-with-lease=refs/heads/upstream-pr/42:mirrorsha --no-follow-tags'
     );
   });
 
-  test('refreshes upstream-pr/<n> via pull/<n>/head and updates origin', async () => {
-    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+  test('commits outside the PR on the mirror copy refuse before anything moves', async () => {
+    setupRefresh();
+    mockResponses.set('git rev-list --count mirrorsha', {
       exitCode: 0,
-      stdout: JSON.stringify({
-        version: '1',
-        publicForkUrl: 'git@github.com:owner/fork.git',
-        upstreamUrl: 'git@github.com:up/repo.git',
-        pulledPrs: {
-          'upstream-pr/42': {
-            upstreamPrNumber: 42,
-            upstreamPrUrl: 'https://github.com/up/repo/pull/42',
-            head: 'oldsha',
-            lastSyncedAt: '2026-04-28T09:00:00Z',
-          },
-        },
-      }),
+      stdout: '2\n',
       stderr: '',
     });
-    mockResponses.set('git fetch upstream pull/42/head:upstream-pr/42', {
-      exitCode: 0,
-      stdout: '',
-      stderr: '',
-    });
-    mockResponses.set('git rev-parse upstream-pr/42', {
-      exitCode: 0,
-      stdout: 'newsha\n',
-      stderr: '',
-    });
-    mockResponses.set(
-      'git push origin newsha:refs/heads/upstream-pr/42 --force-with-lease',
-      {
-        exitCode: 0,
-        stdout: '',
-        stderr: '',
-      }
+
+    await expect(pullRequestCommand('42')).rejects.toThrow(
+      new CommandExitError(1)
     );
 
-    try {
-      await syncCommand('upstream-pr/42');
-    } catch {
-      // updateVenforkConfig may fail under mocks — fine
-    }
-
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.includes('git fetch upstream pull/42/head:upstream-pr/42')
-      )
-    ).toBe(true);
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.includes(
-          'git push origin newsha:refs/heads/upstream-pr/42 --force-with-lease'
-        )
-      )
-    ).toBe(true);
-    // Should NOT run the default-branch divergence flow.
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.includes('git push origin upstream0tip:refs/heads/main')
-      )
-    ).toBe(false);
-  });
-
-  test('falls back to convention when no pulledPrs entry exists', async () => {
-    mockResponses.set('git fetch upstream pull/99/head:upstream-pr/99', {
-      exitCode: 0,
-      stdout: '',
-      stderr: '',
-    });
-    mockResponses.set('git rev-parse upstream-pr/99', {
-      exitCode: 0,
-      stdout: 'sha99\n',
-      stderr: '',
-    });
-    mockResponses.set('git push origin upstream-pr/99 --force-with-lease', {
-      exitCode: 0,
-      stdout: '',
-      stderr: '',
-    });
-    // No config entry — relies on the upstream-pr/N convention match.
-    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
-      exitCode: 0,
-      stdout: JSON.stringify({
-        version: '1',
-        publicForkUrl: 'git@github.com:owner/fork.git',
-        upstreamUrl: 'git@github.com:up/repo.git',
-      }),
-      stderr: '',
-    });
-
-    try {
-      await syncCommand('upstream-pr/99');
-    } catch {
-      // ignore
-    }
-    expect(
-      execaCalls.some((cmd) =>
-        cmd.includes('git fetch upstream pull/99/head:upstream-pr/99')
-      )
-    ).toBe(true);
-  });
-
-  test('non-pulled branch falls through to default-branch sync flow', async () => {
-    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
-      exitCode: 0,
-      stdout: JSON.stringify({
-        version: '1',
-        publicForkUrl: 'git@github.com:owner/fork.git',
-        upstreamUrl: 'git@github.com:up/repo.git',
-      }),
-      stderr: '',
-    });
-
-    try {
-      await syncCommand('main');
-    } catch {
-      // ignore
-    }
-    // Must not have hit the pull/N/head fetch path.
-    expect(
-      execaCalls.some((cmd) => cmd.includes('git fetch upstream pull/'))
-    ).toBe(false);
-  });
-
-  test('does NOT update pulledPrs when push to origin fails', async () => {
-    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
-      exitCode: 0,
-      stdout: JSON.stringify({
-        version: '1',
-        publicForkUrl: 'git@github.com:owner/fork.git',
-        upstreamUrl: 'git@github.com:up/repo.git',
-        pulledPrs: {
-          'upstream-pr/42': {
-            upstreamPrNumber: 42,
-            upstreamPrUrl: 'https://github.com/up/repo/pull/42',
-            head: 'oldsha',
-            lastSyncedAt: '2026-04-28T09:00:00Z',
-          },
-        },
-      }),
-      stderr: '',
-    });
-    mockResponses.set('git fetch upstream pull/42/head:upstream-pr/42', {
-      exitCode: 0,
-      stdout: '',
-      stderr: '',
-    });
-    mockResponses.set('git rev-parse upstream-pr/42', {
-      exitCode: 0,
-      stdout: 'newsha\n',
-      stderr: '',
-    });
-    // Mirror push fails — config write must NOT happen, otherwise pulledPrs
-    // would record a head/lastSyncedAt that doesn't match the mirror.
-    mockResponses.set(
-      'git push origin newsha:refs/heads/upstream-pr/42 --force-with-lease',
-      {
-        exitCode: 1,
-        stdout: '',
-        stderr: 'fatal: remote rejected',
-      }
+    expect(clack.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '2 commit(s) on origin/upstream-pr/42 are not in upstream PR #42'
+      ),
+      ON_STDERR
     );
+    expect(execaCalls.some((cmd) => cmd.includes('git update-ref'))).toBe(
+      false
+    );
+    expect(execaCalls.some((cmd) => cmd.includes('git push origin'))).toBe(
+      false
+    );
+  });
 
-    const result = await syncCommand('upstream-pr/42');
-    expect(result).toMatchObject({ kind: 'pulled-pr', status: 'push-failed' });
+  test('a failed mirror push leaves pulledPrs alone and reports pushed: false', async () => {
+    setupRefresh();
+    mockResponses.set('git push origin newsha:refs/heads/upstream-pr/42', {
+      exitCode: 1,
+      stdout: '',
+      stderr: 'fatal: remote rejected',
+    });
 
-    // No new write to venfork-config branch.
+    const result = await pullRequestCommand('42');
+
+    expect(result).toMatchObject({ pushed: false, refreshed: true });
     expect(
       execaCalls.some((cmd) => cmd.includes('venfork-config:venfork-config'))
     ).toBe(false);
   });
+
+  function setupRefresh() {
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set('gh pr view 42 --repo up/repo', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        number: 42,
+        title: 'Add cool feature',
+        body: '',
+        url: 'https://github.com/up/repo/pull/42',
+        state: 'OPEN',
+        baseRefName: 'main',
+        headRefName: 'feat/cool',
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-parse --verify refs/heads/upstream-pr/42^{commit}',
+      {
+        exitCode: 0,
+        stdout: 'oldsha',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git rev-parse --verify FETCH_HEAD^{commit}', {
+      exitCode: 0,
+      stdout: 'newsha\n',
+      stderr: '',
+    });
+    mockResponses.set('git rev-parse --verify oldsha^{commit}', {
+      exitCode: 0,
+      stdout: 'oldsha\n',
+      stderr: '',
+    });
+    mockResponses.set('git ls-remote origin refs/heads/upstream-pr/42', {
+      exitCode: 0,
+      stdout: 'mirrorsha\trefs/heads/upstream-pr/42\n',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-parse --verify refs/remotes/origin/upstream-pr/42^{commit}',
+      { exitCode: 0, stdout: 'mirrorsha\n', stderr: '' }
+    );
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+        pulledPrs: {
+          'upstream-pr/42': {
+            upstreamPrNumber: 42,
+            upstreamPrUrl: 'https://github.com/up/repo/pull/42',
+            head: 'oldsha',
+            lastSyncedAt: '2026-04-28T09:00:00Z',
+          },
+        },
+      }),
+      stderr: '',
+    });
+  }
 });
 
 describe('issueCommand', () => {
@@ -5926,7 +5809,7 @@ describe('no-public mode', () => {
       });
 
       try {
-        await syncCommand('main');
+        await syncCommand();
       } catch {
         // Expected
       }
@@ -5948,7 +5831,7 @@ describe('no-public mode', () => {
       });
 
       try {
-        await syncCommand('main');
+        await syncCommand();
       } catch {
         // Expected
       }

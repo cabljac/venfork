@@ -30,7 +30,7 @@ afterEach(async () => {
   active = undefined;
 });
 
-const sync = () => syncCommand(undefined, { cwd: fx.work, quiet: true });
+const sync = () => syncCommand({ cwd: fx.work, quiet: true });
 
 function enableSchedule(extra: Record<string, unknown> = {}) {
   return updateVenforkConfig(fx.work, {

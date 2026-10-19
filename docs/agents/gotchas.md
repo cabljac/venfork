@@ -40,3 +40,6 @@ In a `$` template, literal text is split on spaces and quotes are kept: `--jq '.
 
 ## netExec rewrites git templates
 `netExec` puts the gh credential `-c` flags right after `git`. A unit execa mock that matches command strings must pass the template through `withoutGhCredential` (`tests/harness/net-credential.ts`), or `git fetch origin` arrives as `git -c credential... fetch origin`.
+
+## pull pr can run on the fixture
+Set the upstream remote to `acme/widget`, a symlink to `upstream.git` inside the clone (excluded in `.git/info/exclude`): `parseRepoPath` reads owner/repo and git reads a relative path. Push the PR head to `refs/pull/<n>/head` and put a gh stub that answers `gh pr view` first on PATH. `tests/integration/pull-pr-refresh.test.ts` does this.

@@ -69,7 +69,7 @@ describe('schedule against real repos', () => {
     const tip = await fx.sha(fx.origin, 'main');
     const pushes = await fx.pushCount(fx.origin, 'refs/heads/main');
 
-    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await syncCommand({ cwd: fx.work, quiet: true });
 
     expect(await fx.sha(fx.origin, 'main')).toBe(tip);
     expect(await fx.pushCount(fx.origin, 'refs/heads/main')).toBe(pushes);
@@ -121,7 +121,7 @@ describe('schedule with GitHub App auth', () => {
     const tip = await fx.sha(fx.origin, 'main');
     const pushes = await fx.pushCount(fx.origin, 'refs/heads/main');
 
-    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await syncCommand({ cwd: fx.work, quiet: true });
 
     expect(await fx.sha(fx.origin, 'main')).toBe(tip);
     expect(await fx.pushCount(fx.origin, 'refs/heads/main')).toBe(pushes);
@@ -148,7 +148,7 @@ describe('schedule with GitHub App auth', () => {
       'scheduleAuth'
     );
 
-    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await syncCommand({ cwd: fx.work, quiet: true });
     expect(await fx.sha(fx.origin, 'main')).toBe(tokenTip);
   });
 

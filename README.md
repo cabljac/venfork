@@ -102,7 +102,7 @@ venfork pull pr 1234
 # upstream-pr/1234 now exists on the mirror; team can review/test against your internal codebase
 
 # Refresh as the upstream contributor pushes updates
-venfork sync upstream-pr/1234
+venfork pull pr 1234
 ```
 
 ## Commands
@@ -226,7 +226,7 @@ venfork clone git@github.com:acme-corp/awesome-project-private.git
 - An empty answer is rejected and the prompt asks again; cancelling a prompt (Ctrl-C) exits 130
 - Without a terminal (see [Non-interactive use](#non-interactive-use)) these prompts exit 2 instead and name the flag: `--public-fork <url>` for the public fork, `--upstream <url>` for upstream. Use `--no-public --upstream <url>` when the mirror has no public fork
 
-### `venfork sync [branch] [--report-issues] [--yes] [--no-input] [--json]`
+### `venfork sync [--report-issues] [--yes] [--no-input] [--json]`
 
 With `--json`, sync prints one JSON envelope on stdout (see [JSON output](#json-output)).
 
@@ -237,14 +237,14 @@ Update default branches from upstream. With scheduled sync or a preserve list en
 
 Normally you run this from your private mirror directory (or any subfolder of that repo). The same behavior is also used internally when **`venfork setup`** completes in recovery mode (existing GitHub repos), using the new clone’s path automatically.
 
-**Arguments:**
-- `branch` - (Optional) Upstream branch to sync (default: auto-detected, usually `main` or `master`)
+Sync takes no branch: it always syncs upstream's default branch (auto-detected, usually `main` or `master`). `venfork sync <branch>` is a usage error (exit 2); to refresh a pulled upstream PR, run `venfork pull pr <n>` again.
+
+**Flags:**
 - `--report-issues` - Open or refresh a `venfork-sync-blocked` issue on the mirror when sync is blocked, and close it after a successful sync. The scheduled workflow passes this flag (see "When a scheduled sync fails" below)
 
 **Examples:**
 ```bash
 venfork sync           # Sync default branches with upstream
-venfork sync develop   # Sync develop branch with upstream/develop
 ```
 
 **What it does:**
@@ -364,7 +364,7 @@ Pull a third-party upstream PR into the private mirror so your team can review i
 - `pr-number-or-url` - Either a bare integer (`1234`) or a github.com PR URL.
 
 **Flags:**
-- `--branch-name <name>` - Use a custom local/mirror branch name instead of `upstream-pr/<n>`. **Note**: with a custom branch name, the linkage in `venfork-config.pulledPrs[<branch>]` is the only way `venfork sync <branch>` finds the upstream PR — the `upstream-pr/<n>` convention fallback only matches branches with that exact name.
+- `--branch-name <name>` - Use a custom local/mirror branch name instead of `upstream-pr/<n>`. To refresh it later, pass the same `--branch-name` again: the re-run finds the branch by its `pulledPrs[<branch>]` record. The name must not be an existing branch that is not a pulled copy of this PR, nor the mirror's default branch or `venfork-config`.
 - `--no-push` - Fetch into a local branch only; don't push to the mirror.
 
 **Examples:**
@@ -383,21 +383,17 @@ venfork pull pr 1234 --branch-name review/oauth-pr
 1. Reads the upstream PR's metadata (`gh pr view`) and prints a summary (title, author, state, base, body preview, link).
 2. Fetches `pull/<n>/head` from the upstream remote into a local branch.
 3. Pushes that branch to `origin` (the private mirror) so the team can see it.
-4. Records a `pulledPrs[<branch>]` entry in `venfork-config` so `venfork sync <branch>` knows which upstream PR to refresh from.
+4. Records a `pulledPrs[<branch>]` entry in the mirror's venfork settings, so a re-run knows the branch holds this PR.
 
 **Refreshing a pulled PR**
 
 When the upstream contributor updates their PR, refresh your local + mirror copy with:
 
 ```bash
-venfork sync upstream-pr/1234
+venfork pull pr 1234
 ```
 
-`venfork sync <branch>` falls into the pulled-PR path when:
-- `venfork-config.pulledPrs[<branch>]` exists (recorded by `pull pr`), OR
-- The branch matches the `upstream-pr/<n>` naming convention.
-
-In that case it refetches `pull/<n>/head` from upstream and force-with-lease pushes the result to origin. The default-branch sync (the +1-managed-commit flow) is unaffected.
+A re-run refreshes the branch when it already holds the PR: `pulledPrs[<branch>]` records this PR number, or there is no record and the branch is named `upstream-pr/<n>`. It fetches `pull/<n>/head` and the mirror copy, moves the local branch (or creates it, in a fresh clone) and pushes to origin with a lease on the mirror copy it just fetched. A rebased PR is fine. The re-run refuses, and moves nothing, when the local branch or the mirror copy has commits that are not in the PR, such as an unpushed review fix or a teammate's commit: move them to another branch first. Commits that the mirror copy had before the re-run fetched it do not count as local commits, so a clone that a teammate's refresh of a rebased PR left behind refreshes too. A checked-out branch is moved with `git reset --keep`, so unstaged changes the PR does not touch are kept; staged changes are refused, so commit or stash them first. A local or mirror branch of that name that holds anything else (other than exactly the PR head) is refused, with or without `--branch-name`; pass `--branch-name` with a new name to pull the PR beside it.
 
 ### `venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]` and `venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]`
 
@@ -656,11 +652,10 @@ Any command line that contains `--json` before any `--` gets the envelope, whate
 **Results** (`result`), per command:
 
 - `sync` on the default branch: `{ "kind": "default-branch", "status": "pushed" | "up-to-date", "branch", "upstreamTip", "origin": { "tip", "pushed" }, "public"?: { "tip", "pushed" } }`. `public` is absent in no-public mode. `status` is `pushed` when origin or public moved.
-- `sync <branch>` on a pulled upstream PR: `{ "kind": "pulled-pr", "status": "pushed" | "up-to-date" | "push-failed", "branch", "prNumber", "head" }`. `push-failed` means the local branch moved but origin did not; the run exits 1, with or without `--json`.
+- `pull pr`: `{ "branch", "head", "prNumber", "prUrl", "pushed", "refreshed" }`. `refreshed` is true when this PR's copy already existed (the local branch, the mirror copy or a matching `pulledPrs` record), also when its head did not move. `pushed` is false with `--no-push` or a failed push; a failed push exits 1, with or without `--json`.
 - `stage <branch>`: `{ "branch", "head", "target": "public" | "upstream", "compareUrl", "prAction"?, "prUrl"?, "internalPrUrl"? }`. `head` is the rebuilt commit that was pushed. `prAction` is present unless `--no-pr`: `created`, `updated` (an open PR's body was refreshed), `unchanged` (an open PR was left as is) or `failed` (the push worked, the PR could not be opened or its body could not be updated; the run exits 1).
 - `stage <branch> --dry-run`: `{ "dryRun": true, "branch", "head", "target", "compareUrl", "base", "commits", "files", "removedLater", "prTitle"?, "prBody"?, "existingPrUrl"?, "internalPrUrl"? }`. Nothing was pushed: `head` is the preview rebuild's local commit (a real stage rebuilds again, so its SHA differs but its tree is the same), `commits` are its subjects oldest first, and `prTitle`/`prBody` are the redacted PR text that a real stage would publish (absent with `--no-pr`). `existingPrUrl` is the open upstream PR a real stage would update; with it, `prTitle` is absent (the title stays), and with `--no-update-existing` `prBody` is absent too.
 - `stage issue` and `pull issue`: `{ "number", "url", "source": { "number", "url" } }`. `number` and `url` are the issue venfork opened; `source` is the issue it was made from.
-- `pull pr`: `{ "branch", "head", "prNumber", "prUrl", "pushed" }`. `pushed` is false with `--no-push` or when the push to origin failed; a failed push exits 1.
 - `doctor`: `{ "checks": [{ "id", "ok": true | false | "skipped", "detail", "fix"? }], "links": { "shippedBranches", "pulledPrs", "shippedIssues", "pulledIssues" } | null, "healthy" }`. `healthy` is false when any check failed. Doctor that ran is `ok: true` even when a check failed; it then exits 1.
 - `setup`: `{ "mode": "standard" | "no-public", "mirror": { "repo", "url" }, "publicFork"?: { "repo", "url" }, "upstream": { "repo", "url" }, "directory" }`. `repo` is `owner/name` and `url` its `https://github.com/` page. `publicFork` is absent in no-public mode. `directory` is the absolute path of the local mirror checkout.
 - `clone`: `{ "mode": "standard" | "no-public", "directory", "remotes": { "origin", "public"?, "upstream" } }`. `remotes` holds each remote's fetch URL; `public` is absent in no-public mode.
@@ -701,7 +696,7 @@ venfork stage feat/auth --yes --no-input
 | Code | Meaning |
 | --- | --- |
 | `0` | Success, or you answered "no" to a confirm at a terminal |
-| `1` | Runtime failure, `venfork doctor` found a failing check, or a partial success: `stage` pushed but could not open the PR, or a `pull pr` or `sync <branch>` push to origin failed (the `--json` result says what landed) |
+| `1` | Runtime failure, `venfork doctor` found a failing check, or a partial success: `stage` pushed but could not open the PR, or a `pull pr` push to origin failed (the `--json` result says what landed) |
 | `2` | Usage error (unknown command or option, missing or unexpected argument, malformed flag value, flags that cannot be combined, or bare `venfork` with no command), or missing input or consent: venfork could not prompt and no flag supplied the answer |
 | `130` | Cancelled at a prompt (Ctrl-C, Esc, or input ended), interrupted by SIGINT, or the terminal closed during the run |
 | `143` | Terminated by SIGTERM |
@@ -802,7 +797,7 @@ The generated workflow also reads the `VENFORK_PUSH_TOKEN` secret (or, with `sch
 
 ### Concurrency
 
-Commands that mutate `venfork-config` (`stage`, `pull pr`, `stage issue`, `pull issue`, and `sync upstream-pr/<n>`) push to the orphan config branch with `--force-with-lease=venfork-config:<read-sha>`, leasing against the exact SHA the command read its starting state from.
+Commands that mutate `venfork-config` (`stage`, `pull pr`, `stage issue` and `pull issue`) push to the orphan config branch with `--force-with-lease=venfork-config:<read-sha>`, leasing against the exact SHA the command read its starting state from.
 
 When two venfork commands race the config update, the losing one's push is rejected with a "stale info" error. **venfork auto-handles this**: it re-reads the freshly-updated config (now including the winning run's changes), re-applies its own patch on top, and pushes again with the new lease SHA. Up to 3 retries before giving up.
 

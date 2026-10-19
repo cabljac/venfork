@@ -32,7 +32,7 @@ describe('sync invalid-preserve guard ordering', () => {
     const originBefore = await fx.sha(fx.origin, 'main');
     const publicBefore = await fx.sha(fx.publicFork as string, 'main');
 
-    const failure = await syncCommand(undefined, {
+    const failure = await syncCommand({
       cwd: fx.work,
       quiet: true,
     }).then(
