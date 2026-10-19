@@ -16,6 +16,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { stripVTControlCharacters } from 'node:util';
 import { $ } from 'execa';
+import { approvalRoutes, githubMirror } from '../harness/gh-mirror.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
@@ -2468,5 +2469,60 @@ describe('--json envelope on stdout, no TTY', () => {
         message: expect.stringContaining('gh) is not installed'),
       },
     });
+  });
+});
+
+describe('stage approval gate from the CLI', () => {
+  test('a refused stage prints one error line and an approval envelope with hint and details, exit 1', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const gh = await githubMirror(fx);
+      await cutFeatureBranch(fx);
+      await fx.git(fx.work, 'push', '--quiet', 'origin', 'feature');
+      const head = await fx.sha(fx.work, 'feature');
+      const config = await fx.readRawConfig();
+      await fx.writeRawConfig(
+        JSON.stringify({ ...config, approval: 'two-person' })
+      );
+      await gh.setRoutes(
+        approvalRoutes({
+          branch: 'feature',
+          headSha: head,
+          stager: 'solo',
+          reviews: [{ login: 'solo', state: 'APPROVED' }],
+        })
+      );
+      const env = { PATH: process.env.PATH ?? '' };
+
+      const text = await runCliWithoutTty(
+        fx.work,
+        ['stage', 'feature', '--no-pr', '--yes'],
+        env
+      );
+      const json = await runCliWithoutTty(
+        fx.work,
+        ['stage', 'feature', '--no-pr', '--yes', '--json'],
+        env
+      );
+
+      expect(text.exitCode).toBe(1);
+      const errors = text.stderr
+        .split('\n')
+        .filter((line) => line.includes('error:'));
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain('venfork stage approval reviewed');
+      expect(json.exitCode).toBe(1);
+      expect(parseEnvelope(json.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: 'approval',
+          hint: expect.stringContaining('venfork stage approval reviewed'),
+          details: { reason: 'self-approved', level: 'two-person' },
+        },
+      });
+      expect(await hasBranch(fx.publicFork ?? '', 'feature')).toBe(false);
+    } finally {
+      await fx.cleanup();
+    }
   });
 });

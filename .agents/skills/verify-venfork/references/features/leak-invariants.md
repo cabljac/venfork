@@ -13,6 +13,7 @@ Run the drives from `$VF_WORK` after Launch. Each refusal exits 1 and leaves no 
 | Mirror names | `assertNoMirrorReference` with `mirrorDenyList` (origin URL, `owner/name`, Pages URL, repo name, `venfork`) on branch name, author, committer, message, file name and content, PR and issue title/body; `MirrorReferenceError` | `mirror-reference` | `src/shared/deny-list.ts`, `src/shared/stage-gate.ts` |
 | Internal blocks | `stripInternalBlocks` on PR and issue bodies and titles; `RedactionError` on a broken marker; marker-shaped text in files and messages is refused even with `VENFORK_ALLOW_SELF_REFERENCE=1` | `redaction` (bodies, titles), `mirror-reference` (files, messages) | `src/shared/redaction.ts` |
 | Bot commits and tags | stage refuses commits authored or committed by `venfork-bot`; pushes with `--no-follow-tags` | `mirror-reference` | `src/shared/stage-gate.ts`, `src/commands/stage.ts` |
+| The approval process (reviewers, approval, gate level) | stage writes nothing about the gate into commits, the upstream PR title or body, or the public fork; the gate's gh calls are reads on the mirror | - | `src/shared/approval.ts`, `tests/integration/approval-gate.test.ts` |
 | Pushes to upstream from the clone | `upstream` push URL is `DISABLE`; only no-public stage pushes upstream, by URL | - | `src/commands/setup.ts`, `src/commands/stage.ts` |
 
 With `--json`, match a refusal on `error.code`, not on the message.

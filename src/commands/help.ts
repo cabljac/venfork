@@ -162,6 +162,8 @@ const SUBCOMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
                 access who is not the PR author, and passing checks
   • two-person  As reviewed, and the approver is not the person running stage
   • on          Same as two-person
+  The mirror PR must target the mirror default branch
+  venfork stage issue is not gated: it publishes issue text, not code
   A guardrail against accidental or agent-driven publishing, not enforcement:
     anyone who can push can publish without venfork
   --json prints { level } after the action as one JSON envelope on stdout`,

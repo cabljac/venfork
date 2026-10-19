@@ -18,6 +18,7 @@ tests:
 - Any other stored value (a level from a newer venfork, or a non-string) is kept on read and by every other config write, and refused by `approvalOf` with `ConfigError` (it suggests `venfork stage approval two-person`), so an older CLI never treats it as `off`. Only `"off"` and `""` read as off.
 - Usage errors (exit 2): an unknown level (the message names the explicit form `stage branch approval`), a second level, and any branch flag (`--draft`, `--title`, `--dry-run`, `--pr`, ...); the branch-flag message also names `stage branch approval`. `stage approval` needs no gh.
 - `--json`: `result` is `{ level }` after the action.
+- The level gates `venfork stage <branch>` only. `venfork stage issue` is not gated: it publishes redacted issue text, not code.
 
 ## How a user reaches it
 

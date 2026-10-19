@@ -119,6 +119,9 @@ venfork pull pr 1234
 | `venfork schedule set <cron>` | Sync on a schedule with GitHub Actions |
 | `venfork keep add <path>` | Keep a mirror-only file across sync |
 | `venfork workflows block <file>` | Stop an upstream workflow from running on the mirror |
+| `venfork stage approval on` | Make stage wait for an approving review on the mirror PR |
+
+`venfork stage approval` is a guardrail against publishing by accident or by an agent, not enforcement: anyone with push access can publish without venfork. It gates `venfork stage <branch>` only; `venfork stage issue` publishes redacted issue text, not code, and is not gated.
 
 Every command takes `--yes`, `--no-input` and `--json`. Run `venfork help` for this list and `venfork <command> --help` for a command's options.
 
