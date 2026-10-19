@@ -13,6 +13,8 @@ import {
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 import { $ } from 'execa';
 import {
   createMirrorFixture,
@@ -689,15 +691,55 @@ describe('per-command help', () => {
     });
   }
 
-  test('venfork help and --help still print the full help', async () => {
+  test('venfork help, --help and -h print the one-screen command list', async () => {
     for (const args of [['help'], ['--help'], ['-h']]) {
       const result = await runCli(...args);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('venfork setup <upstream>');
-      expect(result.stdout).toContain(
-        'venfork doctor [--yes] [--no-input] [--json]'
-      );
+      expect(result.stdout).toContain('Get started');
+      expect(result.stdout).toContain('stage <branch>');
+      expect(result.stdout).not.toContain('VENFORK_GIT_TIMEOUT');
     }
+  });
+
+  test('venfork help fits 36 lines of 80 columns in a terminal and in a pipe, with no row wrapped', async () => {
+    const forceTty = path.join(tmp, 'force-tty-80.mjs');
+    await writeFile(
+      forceTty,
+      [
+        "Object.defineProperty(process.stdout, 'isTTY', { value: true });",
+        "Object.defineProperty(process.stdout, 'columns', { value: 80 });",
+        "Object.defineProperty(process.stdout, 'rows', { value: 24 });",
+      ].join('\n')
+    );
+    const tty = await $({
+      cwd: tmp,
+      reject: false,
+      env: { PATH: stubPath, TERM: 'xterm-256color' },
+      extendEnv: false,
+    })`node --import ${pathToFileURL(forceTty).href} ${entry} help`;
+    const piped = await runCli('help');
+    const headings = new Set([
+      'Get started',
+      'Every day',
+      'Review upstream work',
+      'Automation',
+      'Advanced',
+      'Example',
+    ]);
+    for (const result of [tty, piped]) {
+      expect(result.exitCode).toBe(0);
+      const lines = stripVTControlCharacters(result.stdout).split('\n');
+      expect(lines.length).toBeLessThanOrEqual(36);
+      for (const line of lines) {
+        expect([...line].length).toBeLessThanOrEqual(80);
+      }
+    }
+    const boxed = stripVTControlCharacters(tty.stdout).split('\n');
+    expect(boxed.some((line) => line.startsWith('│    setup '))).toBe(true);
+    const flush = boxed
+      .filter((line) => /^│ {2}\S/.test(line))
+      .map((line) => line.slice(3, -1).trim());
+    expect(flush.filter((text) => !headings.has(text))).toEqual([]);
   });
 
   test('help ignores --yes, -y and --no-input like every other command', async () => {
@@ -705,32 +747,34 @@ describe('per-command help', () => {
       for (const help of ['help', '--help', '-h']) {
         const full = await runCli(help, flag);
         expect(full.exitCode).toBe(0);
-        expect(full.stdout).toContain('venfork setup <upstream>');
+        expect(full.stdout).toContain('Get started');
       }
       const one = await runCli('help', flag, 'doctor');
       expect(one.exitCode).toBe(0);
       expect(one.stdout).toContain(
         'venfork doctor [--yes] [--no-input] [--json]'
       );
-      expect(one.stdout).not.toContain('venfork setup <upstream>');
+      expect(one.stdout).not.toContain('Get started');
     }
   });
 
-  test('full help states the prompt rule for both streams and lists exit 143', async () => {
-    const result = await runCli('help');
+  test('help env states the prompt rule for both streams; help exit-codes lists 143', async () => {
+    const env = await runCli('help', 'env');
+    expect(env.exitCode).toBe(0);
+    expect(env.stdout).toContain('terminal on stdin and stderr');
+    expect(env.stdout).not.toContain('TTY on stdin');
 
-    expect(result.stdout).toContain('terminal on stdin and stderr');
-    expect(result.stdout).not.toContain('TTY on stdin');
-    expect(result.stdout).toMatch(/^\s*143 {2}/m);
+    const codes = await runCli('help', 'exit-codes');
+    expect(codes.exitCode).toBe(0);
+    expect(codes.stdout).toMatch(/^143 {2}/m);
   });
 
-  test('full help says every command accepts the prompt flags and exit 1 covers a partial success', async () => {
+  test('help says every command accepts the prompt flags and exit 1 covers a partial success', async () => {
     const result = await runCli('help');
+    const codes = await runCli('help', 'exit-codes');
 
-    expect(result.stdout).toContain(
-      'Every command accepts --yes, -y and --no-input'
-    );
-    expect(result.stdout).toMatch(/^\s*1 {4}.*partial success/m);
+    expect(result.stdout).toMatch(/--yes, --no-input +On every command/);
+    expect(codes.stdout).toMatch(/^1 {4}.*partial success/m);
   });
 
   test('help version, -v and --version print the --version entry', async () => {
@@ -899,7 +943,7 @@ describe('usage errors exit 2 with the error on stderr', () => {
 
     expect(result.exitCode).toBe(2);
     expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('venfork setup <upstream>');
+    expect(result.stderr).toContain('Get started');
   });
 
   test('a runtime failure still exits 1', async () => {

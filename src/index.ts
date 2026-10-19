@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { parseCloneCliArgs } from './clone-args.js';
-import { commandHelp } from './commands/help.js';
+import { commandHelp, helpTopic } from './commands/help.js';
 import {
   cloneCommand,
   doctorCommand,
@@ -248,10 +248,12 @@ async function main(args: string[]): Promise<void> {
       showHelp();
       return;
     }
-    const usage = commandHelp(
-      VERSION_WORDS.includes(target) ? '--version' : target,
-      targetRest
-    );
+    const usage =
+      helpTopic(target) ??
+      commandHelp(
+        VERSION_WORDS.includes(target) ? '--version' : target,
+        targetRest
+      );
     if (!usage) throw unknownCommand(target);
     console.log(usage);
     return;
