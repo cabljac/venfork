@@ -13,7 +13,7 @@ const IN_MIRROR = new Set([
   'pull',
   'schedule',
   'workflows',
-  'preserve',
+  'keep',
 ]);
 
 /**

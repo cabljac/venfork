@@ -384,7 +384,7 @@ describe('sync with the managed commit', () => {
     await fx.commitOnUpstream({ 'src/z.txt': 'z\n' });
 
     await expect(sync()).rejects.toThrow(
-      "  - tools: venfork preserve remove 'tools'"
+      "  - tools: venfork keep remove 'tools'"
     );
   });
 });

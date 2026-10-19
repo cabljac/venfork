@@ -3,7 +3,7 @@ import { quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
-import { preserveCommand, syncCommand } from '../../src/commands.js';
+import { keepCommand, syncCommand } from '../../src/commands.js';
 import { readVenforkConfigFromRepo } from '../../src/config.js';
 import { ConfigError, SyncDivergenceError } from '../../src/errors.js';
 import {
@@ -107,7 +107,7 @@ describe('invalid preserve entries', () => {
     expect(error).toBeInstanceOf(ConfigError);
     expect((error as Error).message).toContain('docs/*.md');
     expect((error as Error).message).toContain(
-      "venfork preserve remove 'docs/*.md'"
+      "venfork keep remove 'docs/*.md'"
     );
     expect(await fx.sha(fx.origin, 'main')).toBe(originBefore);
     expect(await fx.fileAt(fx.origin, 'main', 'docs/a.md')).toBe(
@@ -121,7 +121,7 @@ describe('invalid preserve entries', () => {
       JSON.stringify({ ...raw, preserve: ['docs/*.md', 'docs/a.md'] })
     );
 
-    await preserveCommand('remove', ['docs/*.md']);
+    await keepCommand('remove', ['docs/*.md']);
 
     expect((await fx.readRawConfig()).preserve).toEqual(['docs/a.md']);
   });

@@ -100,7 +100,7 @@ export async function cloneCommand(
     const owner = parseOwner(vendorCloneUrl);
 
     if (!owner || !vendorRepoName) {
-      throw new Error('Invalid vendor repository URL');
+      throw new Error('Invalid mirror repository URL');
     }
 
     const dirExists = await $`test -d ${vendorRepoName}`.then(
@@ -138,12 +138,12 @@ export async function cloneCommand(
         config.mode === 'no-public' ? 'no-public' : 'standard';
       if (options.noPublic && configMode === 'standard') {
         throw new PreconditionError(
-          'Refusing to clone with --no-public: the venfork-config branch records mode=standard. To convert an existing setup, re-run `venfork setup` instead.'
+          "Refusing to clone with --own-upstream: the mirror's venfork settings record a public fork. To convert an existing setup, re-run `venfork setup` instead."
         );
       }
       if (publicForkFlag && configMode === 'no-public') {
         throw new PreconditionError(
-          'Refusing to clone with --public-fork: the venfork-config branch records mode=no-public.'
+          "Refusing to clone with --public-fork: the mirror's venfork settings record --own-upstream (no public fork)."
         );
       }
       if (
@@ -151,12 +151,12 @@ export async function cloneCommand(
         !sameRepo(publicForkFlag, config.publicForkUrl ?? '')
       ) {
         throw new PreconditionError(
-          `Refusing to override venfork-config: --public-fork='${options.publicForkUrl}' but config records publicForkUrl='${config.publicForkUrl ?? '(missing)'}'.`
+          `Refusing to override the mirror's venfork settings: --public-fork='${options.publicForkUrl}' but config records publicForkUrl='${config.publicForkUrl ?? '(missing)'}'.`
         );
       }
       if (upstreamFlag && !sameRepo(upstreamFlag, config.upstreamUrl)) {
         throw new PreconditionError(
-          `Refusing to override venfork-config: --upstream='${options.upstreamUrl}' but config records upstreamUrl='${config.upstreamUrl}'.`
+          `Refusing to override the mirror's venfork settings: --upstream='${options.upstreamUrl}' but config records upstreamUrl='${config.upstreamUrl}'.`
         );
       }
 
@@ -167,10 +167,10 @@ export async function cloneCommand(
       const upstreamRepoPath = parseRepoPath(upstreamUrl);
 
       s.stop('Configuration found');
-      p.log.success(`✓ Using config from venfork-config branch`);
+      p.log.success(`✓ Using the mirror's venfork settings`);
       if (noPublic) {
         p.note(
-          `Mode: no-public\nUpstream: ${upstreamRepoPath}`,
+          `Public fork: none (--own-upstream)\nUpstream: ${upstreamRepoPath}`,
           'Configuration'
         );
       } else {
@@ -187,7 +187,7 @@ export async function cloneCommand(
       noPublic = options.noPublic === true;
       s.stop(
         noPublic
-          ? 'No configuration found, using --no-public layout'
+          ? 'No configuration found, using --own-upstream layout'
           : 'No configuration found, using auto-detection'
       );
 
@@ -200,7 +200,7 @@ export async function cloneCommand(
           const response = await promptText(
             {
               message:
-                'Upstream URL? (no venfork-config branch was found, so it cannot be auto-detected)',
+                'Upstream URL? (the mirror has no venfork settings, so it cannot be auto-detected)',
               flag: '--upstream <url>',
               placeholder: 'git@github.com:owner/repo.git',
               validate: validateUpstream,
@@ -360,7 +360,7 @@ async function detectPublicFork(
 
   p.log.warn('⚠️  Could not auto-detect public fork.');
   p.note(
-    `Tried: ${owner}/${publicRepoName}\n\nTip: pass --public-fork <url>, or --no-public --upstream <url> if this mirror has no public fork.`,
+    `Tried: ${owner}/${publicRepoName}\n\nTip: pass --public-fork <url>, or --own-upstream --upstream <url> if this mirror has no public fork.`,
     'Detection Failed'
   );
 

@@ -441,7 +441,7 @@ async function collectChecks(
     if (!remotes.public) modeProblems.push('no public remote');
     if (!config.publicForkUrl) modeProblems.push('config has no publicForkUrl');
   }
-  const modeName = noPublic ? 'no-public' : 'standard';
+  const modeName = noPublic ? 'own-upstream' : 'standard';
   checks.push(
     modeProblems.length === 0
       ? { id: 'mode', ok: true, detail: `${modeName} layout` }
@@ -588,7 +588,7 @@ async function collectChecks(
               id: 'divergence',
               ok: false,
               detail: divergences.join('; '),
-              fix: 'Move the commits to a feature branch, or `venfork preserve add <path>` for mirror-only files. Sync aborts until then.',
+              fix: 'Move the commits to a feature branch, or `venfork keep add <path>` for mirror-only files. Sync aborts until then.',
             }
       );
     }
@@ -620,8 +620,8 @@ async function collectChecks(
           ok: true,
           detail:
             preserveList.length === 0
-              ? 'no preserved paths'
-              : `${preserveList.length} preserved path(s) restorable on the next sync`,
+              ? 'no kept files'
+              : `${preserveList.length} kept file(s) restorable on the next sync`,
         });
       } catch (err) {
         if (err instanceof PinDowngradeError) {
@@ -1012,10 +1012,11 @@ export async function doctorCommand(
   const healthy = isHealthy({ checks });
 
   p.intro('🩺 Venfork Doctor');
-  const width = Math.max(...checks.map((check) => check.id.length));
+  const label = (id: string) => (id === 'preserve' ? 'keep' : id);
+  const width = Math.max(...checks.map((check) => label(check.id).length));
   const lines = checks.map((check) => {
     const mark = check.ok === true ? '✓' : check.ok === false ? '✗' : '-';
-    const row = `${mark} ${check.id.padEnd(width)}  ${check.detail}`;
+    const row = `${mark} ${label(check.id).padEnd(width)}  ${check.detail}`;
     return check.fix && check.ok === false
       ? `${row}\n  ${' '.repeat(width)}  fix: ${check.fix}`
       : row;

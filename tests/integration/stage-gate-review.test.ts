@@ -584,7 +584,7 @@ describe('stage refuses invalid preserve entries', () => {
     await featureFrom('upstream/main');
     await commitFile('docs/x.md', 'client plan, edited\n', 'docs: x');
 
-    await expectRefused("venfork preserve remove 'docs/'");
+    await expectRefused("venfork keep remove 'docs/'");
   });
 
   test('a glob and a trailing-slash entry each get a quoted hint', async () => {
@@ -596,7 +596,7 @@ describe('stage refuses invalid preserve entries', () => {
     await commitFile('src/a.txt', 'a\n', 'feat: a');
 
     await expectRefused(
-      "  - *.md: venfork preserve remove '*.md'\n  - docs/: venfork preserve remove 'docs/'"
+      "  - *.md: venfork keep remove '*.md'\n  - docs/: venfork keep remove 'docs/'"
     );
   });
 });

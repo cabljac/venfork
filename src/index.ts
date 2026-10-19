@@ -7,7 +7,7 @@ import {
   doctorCommand,
   isHealthy,
   issueCommand,
-  preserveCommand,
+  keepCommand,
   pullRequestCommand,
   scheduleCommand,
   setupCommand,
@@ -31,10 +31,7 @@ import {
   VenforkError,
 } from './errors.js';
 import { ensureGhAuth, isGitRepository } from './git.js';
-import {
-  normalizePreserveArgs,
-  parsePreserveCliArgs,
-} from './preserve-args.js';
+import { normalizeKeepArgs, parseKeepCliArgs } from './keep-args.js';
 import { parsePullCliArgs } from './pull-args.js';
 import { parseScheduleCliArgs } from './schedule-args.js';
 import { parseSetupCliArgs } from './setup-args.js';
@@ -60,6 +57,8 @@ const RENAMED: Record<string, string> = {
   issue:
     '`venfork issue` was split: use `venfork pull issue <number-or-url>` to bring an upstream issue in, or `venfork stage issue <number-or-url>` to publish a mirror issue.',
   status: '`venfork status` is now `venfork doctor`.',
+  preserve:
+    '`venfork preserve` is now `venfork keep`, for example `venfork keep add <path>`.',
 };
 
 const HELP_WORDS = ['help', '--help', '-h'];
@@ -170,10 +169,10 @@ function parseCommand(
       const parsed = parseWorkflowsCliArgs(args);
       return resultOf(() => workflowsCommand(parsed.action, parsed.workflows));
     }
-    case 'preserve': {
-      const parsed = parsePreserveCliArgs(args);
-      if (parsed.action === 'add') normalizePreserveArgs(parsed.paths);
-      return resultOf(() => preserveCommand(parsed.action, parsed.paths));
+    case 'keep': {
+      const parsed = parseKeepCliArgs(args);
+      if (parsed.action === 'add') normalizeKeepArgs(parsed.paths);
+      return resultOf(() => keepCommand(parsed.action, parsed.paths));
     }
     case 'pull': {
       const parsed = parsePullCliArgs(args);

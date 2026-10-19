@@ -47,7 +47,7 @@ mock.module('../../src/shared/config-change.js', () => ({
   },
 }));
 
-import { preserveCommand, syncCommand } from '../../src/commands.js';
+import { keepCommand, syncCommand } from '../../src/commands.js';
 import { CommandExitError } from '../../src/errors.js';
 import {
   createMirrorFixture,
@@ -87,7 +87,7 @@ describe('preserve changes are deltas on the list as written', () => {
       await seedPreserve(fx, ['z.txt']);
     };
 
-    await preserveCommand('remove', ['x.txt']);
+    await keepCommand('remove', ['x.txt']);
 
     expect(await preserveList()).toEqual(['y.txt', 'z.txt']);
     expect(await fx.fileAt(fx.origin, 'main', 'z.txt')).toBe('teammate work\n');
@@ -101,7 +101,7 @@ describe('preserve changes are deltas on the list as written', () => {
       await seedPreserve(fx, ['b.txt']);
     };
 
-    await preserveCommand('add', ['a.txt']);
+    await keepCommand('add', ['a.txt']);
 
     expect(await preserveList()).toEqual(['a.txt', 'b.txt']);
   });
@@ -110,7 +110,7 @@ describe('preserve changes are deltas on the list as written', () => {
     await seedPreserve(fx, ['x.txt']);
     const before = await fx.sha(fx.origin, 'venfork-config');
 
-    await expect(preserveCommand('remove', ['nope.txt'])).rejects.toThrow(
+    await expect(keepCommand('remove', ['nope.txt'])).rejects.toThrow(
       new CommandExitError(1)
     );
 

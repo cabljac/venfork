@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { parsePreserveCliArgs } from '../../src/preserve-args.js';
+import { parseKeepCliArgs } from '../../src/keep-args.js';
 
-describe('parsePreserveCliArgs', () => {
+describe('parseKeepCliArgs', () => {
   test('defaults to list', () => {
-    expect(parsePreserveCliArgs([])).toEqual({
+    expect(parseKeepCliArgs([])).toEqual({
       action: 'list',
       paths: [],
       json: false,
@@ -11,7 +11,7 @@ describe('parsePreserveCliArgs', () => {
   });
 
   test('parses list explicitly', () => {
-    expect(parsePreserveCliArgs(['list'])).toEqual({
+    expect(parseKeepCliArgs(['list'])).toEqual({
       action: 'list',
       paths: [],
       json: false,
@@ -20,7 +20,7 @@ describe('parsePreserveCliArgs', () => {
 
   test('parses add with multiple paths', () => {
     expect(
-      parsePreserveCliArgs([
+      parseKeepCliArgs([
         'add',
         '.github/workflows/caller.yml',
         'docs/MIRROR.md',
@@ -34,7 +34,7 @@ describe('parsePreserveCliArgs', () => {
 
   test('parses remove with multiple paths', () => {
     expect(
-      parsePreserveCliArgs(['remove', '.github/workflows/caller.yml'])
+      parseKeepCliArgs(['remove', '.github/workflows/caller.yml'])
     ).toEqual({
       action: 'remove',
       paths: ['.github/workflows/caller.yml'],
@@ -43,7 +43,7 @@ describe('parsePreserveCliArgs', () => {
   });
 
   test('parses clear', () => {
-    expect(parsePreserveCliArgs(['clear'])).toEqual({
+    expect(parseKeepCliArgs(['clear'])).toEqual({
       action: 'clear',
       paths: [],
       json: false,
@@ -51,7 +51,7 @@ describe('parsePreserveCliArgs', () => {
   });
 
   test('does not split paths on commas', () => {
-    expect(parsePreserveCliArgs(['add', 'a,b/c.yml'])).toEqual({
+    expect(parseKeepCliArgs(['add', 'a,b/c.yml'])).toEqual({
       action: 'add',
       paths: ['a,b/c.yml'],
       json: false,
@@ -59,39 +59,39 @@ describe('parsePreserveCliArgs', () => {
   });
 
   test('throws when add has no paths', () => {
-    expect(() => parsePreserveCliArgs(['add'])).toThrow();
+    expect(() => parseKeepCliArgs(['add'])).toThrow();
   });
 
   test('throws when remove has no paths', () => {
-    expect(() => parsePreserveCliArgs(['remove'])).toThrow();
+    expect(() => parseKeepCliArgs(['remove'])).toThrow();
   });
 
   test('throws on unknown action', () => {
-    expect(() => parsePreserveCliArgs(['nuke'])).toThrow();
+    expect(() => parseKeepCliArgs(['nuke'])).toThrow();
   });
 });
 
-describe('parsePreserveCliArgs strictness', () => {
+describe('parseKeepCliArgs strictness', () => {
   test('rejects unknown flags instead of preserving them as paths', () => {
-    expect(() => parsePreserveCliArgs(['add', '--bogus'])).toThrow(
-      "Unknown option '--bogus'. Usage: venfork preserve"
+    expect(() => parseKeepCliArgs(['add', '--bogus'])).toThrow(
+      "Unknown option '--bogus'. Usage: venfork keep"
     );
-    expect(() => parsePreserveCliArgs(['--bogus'])).toThrow(
+    expect(() => parseKeepCliArgs(['--bogus'])).toThrow(
       "Unknown option '--bogus'"
     );
   });
 
   test('rejects extra arguments to list and clear', () => {
-    expect(() => parsePreserveCliArgs(['list', 'extra'])).toThrow(
+    expect(() => parseKeepCliArgs(['list', 'extra'])).toThrow(
       "Unexpected argument 'extra'"
     );
-    expect(() => parsePreserveCliArgs(['clear', 'extra'])).toThrow(
+    expect(() => parseKeepCliArgs(['clear', 'extra'])).toThrow(
       "Unexpected argument 'extra'"
     );
   });
 
   test('-- ends options so a dash-leading path is accepted', () => {
-    expect(parsePreserveCliArgs(['add', '--', '-odd.txt']).paths).toEqual([
+    expect(parseKeepCliArgs(['add', '--', '-odd.txt']).paths).toEqual([
       '-odd.txt',
     ]);
   });

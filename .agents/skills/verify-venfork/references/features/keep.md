@@ -1,45 +1,45 @@
 ---
-command: preserve
-entry: src/commands/preserve.ts
+command: keep
+entry: src/commands/keep.ts
 shared: [config-change, divergence, json-output, managed-commit, mirror-commit, net, preserve-entries]
 config:
   read: [preserve, invalidPreserve]
   written: [preserve]
 tests:
-  unit: [tests/unit/preserve-args.test.ts, tests/unit/preserve-path.test.ts, tests/unit/config.test.ts, tests/unit/json-output.test.ts]
+  unit: [tests/unit/keep-args.test.ts, tests/unit/preserve-path.test.ts, tests/unit/config.test.ts, tests/unit/json-output.test.ts]
   integration: [tests/integration/cli.test.ts, tests/integration/preserve-concurrency.test.ts, tests/integration/integrity.test.ts, tests/integration/config.test.ts, tests/integration/stage-gate-followups.test.ts, tests/integration/sync.test.ts, tests/integration/tip-builder.test.ts, tests/integration/doctor.test.ts]
   e2e: []
 ---
 
 ## What exists
 
-- `list` (the default) prints the entries, plus invalid entries with the `venfork preserve remove '<entry>'` hint.
+- `list` (the default) prints the entries, plus invalid entries with the `venfork keep remove '<entry>'` hint.
 - `add <path>...` normalizes each path, then checks it is a file (regular, executable or symlink) on `origin/<default>`. It writes only the config. The next `sync` puts the file into the managed commit.
 - `remove <path>...` and `clear` drop entries. When origin's tip managed commit carries a dropped file, origin is re-stamped in the same step. When user commits sit on top of that managed commit, only the config is written and a warning says sync drops the file later.
 - `add`, and a `remove`/`clear` with no re-stamp, write the config as a delta with a leased push and up to 3 attempts (2 retries), so two crossing adds keep both entries. A `remove`/`clear` that re-stamps origin writes the config once with a lease and no retry.
-- Usage errors (exit 2, before the repository check, so also outside a git repository): "Invalid preserve path" (leading `/` or `-`, `..`, `.`, backslash, whitespace, glob `* ? [ ]`, the sync workflow, `.venfork/`), an unknown action, `add`/`remove` with no path. Runtime errors (exit 1): `PreconditionError` for "Cannot preserve '<p>': it does not exist on origin/main", "it is a directory" and "Not in the preserve list" (remove of an unknown entry; nothing is written), `ConfigError` reason `missing` ("venfork-config branch not found or invalid"), `SyncDivergenceError` and `GitError` from the re-stamp, `NotInRepositoryError` outside a git repository.
+- Usage errors (exit 2, before the repository check, so also outside a git repository): "Invalid keep path" (leading `/` or `-`, `..`, `.`, backslash, whitespace, glob `* ? [ ]`, the sync workflow, `.venfork/`), an unknown action, `add`/`remove` with no path. Runtime errors (exit 1): `PreconditionError` for "Cannot keep '<p>': it does not exist on origin/main", "it is a directory" and "Not in the keep list" (remove of an unknown entry; nothing is written), `ConfigError` reason `missing` ("venfork-config branch not found or invalid"), `SyncDivergenceError` and `GitError` from the re-stamp, `NotInRepositoryError` outside a git repository.
 - `--json` on every action prints one envelope line on stdout. `result` is the list after the action: `{ paths, invalidPaths }`. A path named `--json` goes after `--`.
 - Sync rules that preserve sets up: upstream wins when it adds the same path; an entry that is a directory or glob makes sync and stage refuse (`ConfigError`).
 
 ## How a user reaches it
 
-`venfork preserve`, `venfork preserve list`, `venfork preserve add <path>...`, `venfork preserve remove <path>...`, `venfork preserve clear`, each with optional `--json`. A path that starts with `-` goes after `--`. No prompt; `--no-input` is accepted and changes nothing.
+`venfork keep`, `venfork keep list`, `venfork keep add <path>...`, `venfork keep remove <path>...`, `venfork keep clear`, each with optional `--json`. A path that starts with `-` goes after `--`. No prompt; `--no-input` is accepted and changes nothing.
 
 ## How to drive it
 
 ```bash
 vf_origin_commit docs/INTERNAL.md "internal plan"                 # mirror-only file
-venfork sync </dev/null 2>&1 | grep "venfork preserve add"         # divergence hint names docs/INTERNAL.md, exit 1
-venfork preserve add docs/INTERNAL.md </dev/null 2>&1 | grep -A2 "Added to preserve list"
+venfork sync </dev/null 2>&1 | grep "venfork keep add"         # divergence hint names docs/INTERNAL.md, exit 1
+venfork keep add docs/INTERNAL.md </dev/null 2>&1 | grep -A2 "Added to keep list"
 venfork sync </dev/null >/dev/null 2>&1; git -C "$VF_ORIGIN" show --stat --format=%s main   # managed commit carries it
 N=$(vf_pushes "$VF_ORIGIN"); venfork sync </dev/null >/dev/null 2>&1; echo "$N $(vf_pushes "$VF_ORIGIN")"   # equal
-venfork preserve add src </dev/null 2>&1 | grep -o "Cannot preserve.*"       # directory, exit 1
-venfork preserve add 'src/*.txt' </dev/null 2>&1 | grep -o "Invalid preserve path '[^']*'"
-venfork preserve add docs/none.md </dev/null 2>&1 | grep -o "Cannot preserve.*"
-venfork preserve remove src/nothere </dev/null 2>&1 | grep -o "Not in the preserve list.*"
-venfork preserve list --json </dev/null 2>/dev/null | jq -c .result                # {"paths":["docs/INTERNAL.md"],"invalidPaths":[]}
-venfork preserve remove src/nothere --json </dev/null 2>/dev/null | jq -r .error.code   # precondition, exit 1
-venfork preserve remove docs/INTERNAL.md </dev/null >/dev/null 2>&1; git -C "$VF_ORIGIN" ls-tree -r --name-only main | grep -c INTERNAL   # 0
+venfork keep add src </dev/null 2>&1 | grep -o "Cannot keep.*"       # directory, exit 1
+venfork keep add 'src/*.txt' </dev/null 2>&1 | grep -o "Invalid keep path '[^']*'"
+venfork keep add docs/none.md </dev/null 2>&1 | grep -o "Cannot keep.*"
+venfork keep remove src/nothere </dev/null 2>&1 | grep -o "Not in the keep list.*"
+venfork keep list --json </dev/null 2>/dev/null | jq -c .result                # {"paths":["docs/INTERNAL.md"],"invalidPaths":[]}
+venfork keep remove src/nothere --json </dev/null 2>/dev/null | jq -r .error.code   # precondition, exit 1
+venfork keep remove docs/INTERNAL.md </dev/null >/dev/null 2>&1; git -C "$VF_ORIGIN" ls-tree -r --name-only main | grep -c INTERNAL   # 0
 ```
 
 - Upstream takes the path over: see `multi-command-journeys.md` journey 3.
@@ -50,7 +50,7 @@ venfork preserve remove docs/INTERNAL.md </dev/null >/dev/null 2>&1; git -C "$VF
 
 - `git -C "$VF_ORIGIN" show venfork-config:.venfork/config.json` has the `preserve` array.
 - `git -C "$VF_ORIGIN" show main:docs/INTERNAL.md` after sync. `git -C "$VF_PUBLIC" ls-tree -r --name-only main | grep -c INTERNAL` is 0.
-- `doctor --json`: `preserve` ok "1 preserved path(s) restorable on the next sync".
+- `doctor --json`: `preserve` ok "1 kept file(s) restorable on the next sync" (the text table labels the row `keep`).
 
 ## What usually lies
 

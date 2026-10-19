@@ -2,6 +2,7 @@ import { UsageError } from './errors.js';
 import {
   consumeValue,
   parsePromptFlags,
+  renamedFlag,
   scanArgs,
   unexpectedArgument,
 } from './shared/args.js';
@@ -21,12 +22,12 @@ export type ParsedCloneArgs = {
 
 /** Usage line for `venfork clone`. */
 export const CLONE_USAGE =
-  'venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--no-input] [--json]';
+  'venfork clone <mirror> [--own-upstream] [--upstream <url>] [--public-fork <url>] [--no-input] [--json]';
 
 /**
  * Parse `venfork clone ...` argv after the `clone` token.
  *
- * `--no-public`, `--upstream` and `--public-fork` are escape hatches for **legacy mirrors**
+ * `--own-upstream`, `--upstream` and `--public-fork` are escape hatches for **legacy mirrors**
  * that pre-date the `venfork-config` branch. When the config branch is
  * present, the layout is read from there and these flags are unnecessary
  * (clone refuses any that contradict the recorded layout).
@@ -39,7 +40,8 @@ export function parseCloneCliArgs(args: string[]): ParsedCloneArgs {
 
   const positional = scanArgs(args, CLONE_USAGE, (a, i) => {
     if (promptFlags.onOption(a) !== undefined) return 0;
-    if (a === '--no-public') {
+    if (a === '--no-public') throw renamedFlag(a, '--own-upstream');
+    if (a === '--own-upstream') {
       noPublic = true;
       return 0;
     }
@@ -80,7 +82,7 @@ export function githubRepoInput(value: string): string {
  * The canonical vendor repo, `--upstream` and `--public-fork` URLs. Throws
  * {@link UsageError} when the inputs are not valid in form: a missing or
  * malformed vendor repo, a malformed `--upstream` or `--public-fork`, or
- * `--public-fork` with `--no-public`.
+ * `--public-fork` with `--own-upstream`.
  */
 export function checkCloneInputs(inputs: {
   vendorRepoUrl?: string;
@@ -89,17 +91,17 @@ export function checkCloneInputs(inputs: {
   publicForkUrl?: string;
 }): { vendorCloneUrl: string; upstreamUrl?: string; publicForkUrl?: string } {
   if (!inputs.vendorRepoUrl?.trim()) {
-    throw new UsageError(`Missing vendor repository. Usage: ${CLONE_USAGE}`);
+    throw new UsageError(`Missing mirror repository. Usage: ${CLONE_USAGE}`);
   }
   const vendorCloneUrl = githubRepoInput(inputs.vendorRepoUrl);
   if (!vendorCloneUrl) {
     throw new UsageError(
-      'Invalid vendor repository. Use a GitHub URL or owner/repo (e.g. invertase/project-private).'
+      'Invalid mirror repository. Use a GitHub URL or owner/repo (e.g. invertase/project-private).'
     );
   }
   if (inputs.noPublic && inputs.publicForkUrl) {
     throw new UsageError(
-      '--public-fork cannot be combined with --no-public: --no-public means the mirror has no public fork.'
+      '--public-fork cannot be combined with --own-upstream: --own-upstream means the mirror has no public fork.'
     );
   }
   const upstreamUrl = inputs.upstreamUrl

@@ -845,17 +845,22 @@ describe('usage errors exit 2 with the error on stderr', () => {
     [['setup', 'a/b', '--bogus'], "Unknown option '--bogus'"],
     [['setup', 'a/b', 'c', 'd'], "Unexpected argument 'd'"],
     [['setup', 'a/b', '--org'], '--org requires a value'],
-    [['setup', 'a/b', '--no-public', '--fork-name', 'x'], 'cannot be combined'],
+    [
+      ['setup', 'a/b', '--own-upstream', '--fork-name', 'x'],
+      'cannot be combined',
+    ],
     [['setup', 'not a repo'], 'Invalid upstream repository'],
     [['setup', 'a/b', '--fork-name', 'bad name'], 'Invalid --fork-name'],
-    [['clone'], 'Missing vendor repository'],
-    [['clone', 'not a repo'], 'Invalid vendor repository'],
+    [['clone'], 'Missing mirror repository'],
+    [['clone', 'not a repo'], 'Invalid mirror repository'],
     [
-      ['clone', 'a/b-private', '--no-public', '--public-fork', 'a/b'],
-      '--public-fork cannot be combined with --no-public',
+      ['clone', 'a/b-private', '--own-upstream', '--public-fork', 'a/b'],
+      '--public-fork cannot be combined with --own-upstream',
     ],
     [['clone', 'a/b-private', '--public-fork', 'x y'], 'Invalid --public-fork'],
     [['sync', 'a', 'b'], 'Usage: venfork sync'],
+    [['preserve', 'list'], '`venfork preserve` is now `venfork keep`'],
+    [['setup', 'a/b', '--no-public'], '--no-public is now --own-upstream.'],
     [['sync', 'upstream-pr/7'], 'run `venfork pull pr 7` again'],
     [['schedule', 'set', 'not a cron'], "Invalid cron expression 'not a cron'"],
     [['schedule', 'status', '--app'], "--app applies only to 'schedule set'"],
@@ -868,9 +873,9 @@ describe('usage errors exit 2 with the error on stderr', () => {
     [['doctor', '--bogus'], "Unknown option '--bogus'"],
     [['workflows', 'nope'], 'Usage: venfork workflows'],
     [['workflows', 'allow'], 'Usage: venfork workflows allow'],
-    [['preserve', 'nope'], 'Usage: venfork preserve'],
-    [['preserve', 'add'], 'Usage: venfork preserve add'],
-    [['preserve', 'add', '../escape'], "Invalid preserve path '../escape'"],
+    [['keep', 'nope'], 'Usage: venfork keep'],
+    [['keep', 'add'], 'Usage: venfork keep add'],
+    [['keep', 'add', '../escape'], "Invalid keep path '../escape'"],
   ] as const) {
     test(`venfork ${args.join(' ')}`, async () => {
       const result = await runCliIn(tmp, ...args);
@@ -1293,7 +1298,7 @@ describe('one fixed flag set on every command', () => {
     const fx = await createMirrorFixture();
     try {
       const result = await runCliWithoutTty(fx.work, [
-        'preserve',
+        'keep',
         'list',
         '--yes',
         '--no-input',
@@ -1338,7 +1343,7 @@ describe('one error, one line', () => {
       expect(result.stderr).not.toContain('Force-sync');
       expect(outcomeLines(result.stderr)).toEqual([
         'done: Checked for divergence',
-        "error: Sync aborted to prevent data loss: origin/main has 1 commit(s) not in upstream/main (docs/INTERNAL.md). If the files belong only on the mirror, run `venfork preserve add 'docs/INTERNAL.md'`. Otherwise move the commits to a branch and retry.",
+        "error: Sync aborted to prevent data loss: origin/main has 1 commit(s) not in upstream/main (docs/INTERNAL.md). If the files belong only on the mirror, run `venfork keep add 'docs/INTERNAL.md'`. Otherwise move the commits to a branch and retry.",
       ]);
     } finally {
       await fx.cleanup();
@@ -1369,18 +1374,18 @@ describe('one error, one line', () => {
     }
   });
 
-  test('a failed preserve add prints only its error line', async () => {
+  test('a failed keep add prints only its error line', async () => {
     const fx = await createMirrorFixture();
     try {
       const result = await runCliWithoutTty(fx.work, [
-        'preserve',
+        'keep',
         'add',
         'missing.txt',
       ]);
 
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toBe(
-        "🧷 Venfork Preserve\nerror: Cannot preserve 'missing.txt': it does not exist on origin/main. Commit the file to origin/main first."
+        "🧷 Venfork Keep\nerror: Cannot keep 'missing.txt': it does not exist on origin/main. Commit the file to origin/main first."
       );
     } finally {
       await fx.cleanup();
@@ -1568,6 +1573,26 @@ describe('output streams', () => {
       await fx.cleanup();
     }
   });
+
+  test('doctor text on an own-upstream mirror uses the keep and --own-upstream names', async () => {
+    const fx = await createMirrorFixture({ mode: 'no-public' });
+    try {
+      const result = await runCliIn(fx.work, 'doctor');
+      const output = `${result.stdout}\n${result.stderr}`;
+
+      expect(result.exitCode).toBe(0);
+      expect(output).toMatch(/✓ mode +own-upstream layout/);
+      expect(output).toMatch(/✓ keep +no kept files/);
+      expect(output).not.toMatch(/no-public|preserv/i);
+
+      const json = doctorResult(
+        (await runCliIn(fx.work, 'doctor', '--json')).stdout
+      );
+      expect(json.checks.map((check) => check.id)).toContain('preserve');
+    } finally {
+      await fx.cleanup();
+    }
+  });
 });
 
 describe('--json envelope on stdout, no TTY', () => {
@@ -1621,12 +1646,12 @@ describe('--json envelope on stdout, no TTY', () => {
         error: {
           code: 'sync-divergence',
           message: expect.stringContaining('Sync aborted to prevent data loss'),
-          hint: expect.stringContaining("venfork preserve add 'src/hotfix.ts'"),
+          hint: expect.stringContaining("venfork keep add 'src/hotfix.ts'"),
           details: {
             branch: 'main',
             origin: { count: 1, files: ['src/hotfix.ts'] },
             public: { count: 0, files: [] },
-            command: "venfork preserve add 'src/hotfix.ts'",
+            command: "venfork keep add 'src/hotfix.ts'",
           },
         },
       });
@@ -1651,7 +1676,7 @@ describe('--json envelope on stdout, no TTY', () => {
         env: { PATH: process.env.PATH },
       })`sh -c ${`venfork() { printf '%s\\n' "$@"; }; ${envelope.error.details.command}`}`;
 
-      expect(pasted.stdout.split('\n')).toEqual(['preserve', 'add', file]);
+      expect(pasted.stdout.split('\n')).toEqual(['keep', 'add', file]);
       await expect(stat(path.join(tmp, 'PWNED'))).rejects.toThrow();
     } finally {
       await fx.cleanup();
@@ -1681,12 +1706,10 @@ describe('--json envelope on stdout, no TTY', () => {
           message: expect.stringContaining(
             "upstream now has a directory at 'INTERNAL.md'"
           ),
-          hint: expect.stringContaining(
-            "venfork preserve remove 'INTERNAL.md'"
-          ),
+          hint: expect.stringContaining("venfork keep remove 'INTERNAL.md'"),
           details: {
             path: 'INTERNAL.md',
-            command: "venfork preserve remove 'INTERNAL.md'",
+            command: "venfork keep remove 'INTERNAL.md'",
           },
         },
       });
@@ -1853,7 +1876,7 @@ describe('--json envelope on stdout, no TTY', () => {
       await seedPreserve(fx, ['docs/MIRROR.md', '../escape.txt']);
 
       const listed = await runCliWithoutTty(fx.work, [
-        'preserve',
+        'keep',
         'list',
         '--json',
       ]);
@@ -1865,7 +1888,7 @@ describe('--json envelope on stdout, no TTY', () => {
       });
 
       const removed = await runCliWithoutTty(fx.work, [
-        'preserve',
+        'keep',
         'remove',
         '../escape.txt',
         '--json',
@@ -1877,7 +1900,7 @@ describe('--json envelope on stdout, no TTY', () => {
       });
 
       const unknown = await runCliWithoutTty(fx.work, [
-        'preserve',
+        'keep',
         'remove',
         'nope.txt',
         '--json',
@@ -1888,11 +1911,34 @@ describe('--json envelope on stdout, no TTY', () => {
         ok: false,
         error: {
           code: 'precondition',
-          message: expect.stringContaining(
-            "Not in the preserve list: 'nope.txt'"
-          ),
+          message: expect.stringContaining("Not in the keep list: 'nope.txt'"),
         },
       });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('keep: text output never names the old preserve command', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.commitOnOrigin({ 'docs/MIRROR.md': 'mirror only\n' });
+      const runs = [
+        { args: ['keep', 'list'], exitCode: 0 },
+        { args: ['keep', 'add', 'docs/none.md'], exitCode: 1 },
+        { args: ['keep', 'add', 'docs'], exitCode: 1 },
+        { args: ['keep', 'add', 'docs/MIRROR.md'], exitCode: 0 },
+        { args: ['keep', 'list'], exitCode: 0 },
+        { args: ['keep', 'remove', 'docs/MIRROR.md'], exitCode: 0 },
+        { args: ['keep', 'clear'], exitCode: 0 },
+      ];
+      for (const run of runs) {
+        const result = await runCliWithoutTty(fx.work, run.args);
+        const output = `${result.stdout}\n${result.stderr}`;
+        expect({ args: run.args, exitCode: result.exitCode }).toEqual(run);
+        expect(output).toContain('Keep');
+        expect(output).not.toMatch(/preserv/i);
+      }
     } finally {
       await fx.cleanup();
     }
@@ -1906,7 +1952,7 @@ describe('--json envelope on stdout, no TTY', () => {
       for (const args of [
         ['schedule', 'status', '--json'],
         ['workflows', 'status', '--json'],
-        ['preserve', 'list', '--json'],
+        ['keep', 'list', '--json'],
       ]) {
         const result = await runCliWithoutTty(fx.work, args);
         expect(result.exitCode).toBe(1);
@@ -1954,7 +2000,7 @@ describe('--json envelope on stdout, no TTY', () => {
     ['doctor', '--json', 'extra'],
     ['schedule', 'set', '--json'],
     ['workflows', 'allow', '--json'],
-    ['preserve', 'bogus', '--json'],
+    ['keep', 'bogus', '--json'],
     ['clone', '--json'],
   ]) {
     test(`usage error: venfork ${args.join(' ')} prints the usage envelope, exit 2`, async () => {
@@ -1976,7 +2022,7 @@ describe('--json envelope on stdout, no TTY', () => {
     ['stage', 'feature', '--no-pr', '--yes', '--json'],
     ['schedule', 'status', '--json'],
     ['workflows', 'status', '--json'],
-    ['preserve', 'list', '--json'],
+    ['keep', 'list', '--json'],
   ]) {
     test(`outside a git repository, venfork ${args.join(' ')} is not-in-repository, exit 1`, async () => {
       const result = await runCliWithoutTty(tmp, args);
@@ -1999,7 +2045,7 @@ describe('--json envelope on stdout, no TTY', () => {
     ['stage', 'feature', '--no-pr', '--yes'],
     ['schedule', 'status'],
     ['workflows', 'status'],
-    ['preserve', 'list'],
+    ['keep', 'list'],
   ]) {
     test(`outside a git repository, venfork ${args.join(' ')} prints only the not-in-repository error`, async () => {
       const result = await runCliWithoutTty(tmp, args);

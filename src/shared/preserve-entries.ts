@@ -6,7 +6,7 @@ import { netFetch } from './net.js';
 const BLOB_MODES = new Set(['100644', '100755', '120000']);
 
 /**
- * Refuses preserve entries that are not single files on `origin/<default>`.
+ * Refuses keep entries that are not single files on `origin/<default>`.
  * A directory entry would let the stage gate miss every file under it, and
  * a missing path protects nothing.
  *
@@ -40,13 +40,13 @@ export async function assertPreserveEntriesAreFiles(
     const mode = found?.meta[0];
     if (mode === undefined) {
       throw new PreconditionError(
-        `Cannot preserve '${entry}': it does not exist on origin/${defaultBranch}. Commit the file to origin/${defaultBranch} first.`
+        `Cannot keep '${entry}': it does not exist on origin/${defaultBranch}. Commit the file to origin/${defaultBranch} first.`
       );
     }
     if (!BLOB_MODES.has(mode)) {
       const kind = found?.meta[1] === 'tree' ? 'a directory' : 'not a file';
       throw new PreconditionError(
-        `Cannot preserve '${entry}': it is ${kind} on origin/${defaultBranch}. Preserve supports single files only; list each file instead.`
+        `Cannot keep '${entry}': it is ${kind} on origin/${defaultBranch}. \`venfork keep\` supports single files only; list each file instead.`
       );
     }
   }

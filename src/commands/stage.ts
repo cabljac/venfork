@@ -229,7 +229,7 @@ async function rebuildLinearHead(
  * work (e.g. opening an upstream PR).
  *
  * `pushRemote` is the remote we push the staged branch to: `'public'` in the
- * standard 3-remote layout, `'upstream'` in `--no-public` mode (where the
+ * standard 3-remote layout, `'upstream'` in `--own-upstream` mode (where the
  * branch lands directly on upstream as a same-repo PR head).
  */
 export interface StagingPlan {

@@ -12,7 +12,7 @@ export {
   issueCommand,
   renderPulledComments,
 } from './commands/issue.js';
-export { preserveCommand } from './commands/preserve.js';
+export { keepCommand } from './commands/keep.js';
 export {
   type PullPrResult,
   type PullRequestOptions,

@@ -52,7 +52,7 @@ venfork stage main --no-pr --yes </dev/null; venfork stage venfork-config --no-p
 venfork stage feat --yes </dev/null 2>&1 | grep -o "Cannot open an upstream PR.*"   # the default PR step: local upstream is not GitHub
 ```
 
-- No-public: launch with `--no-public`; `vf_yes stage feat --no-pr` puts `feat` on `$VF_UPSTREAM`.
+- No-public: launch with `--own-upstream`; `vf_yes stage feat --no-pr` puts `feat` on `$VF_UPSTREAM`.
 - Hidden prompt: `script -q /dev/null sh -c 'node "$VF_CLI" stage feat --no-pr 2>/dev/null; echo EXIT=$?' </dev/null` prints `EXIT=2` (macOS `script`; on Linux `script -qec '...' /dev/null`). `$VF_PUBLIC` has no `feat`.
 - Concurrent lease: the lease is read by `ls-remote` right before the push. No CLI drive or test pins the "moved while staging" error.
 

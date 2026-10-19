@@ -230,7 +230,7 @@ describe('doctor against real repos', () => {
       expect(checks.mode).toEqual({
         id: 'mode',
         ok: true,
-        detail: 'no-public layout',
+        detail: 'own-upstream layout',
       });
 
       await noPublic.git(
@@ -302,9 +302,7 @@ describe('doctor and a broken config', () => {
 
     expect(checks.preserve.ok).toBe(false);
     expect(checks.preserve.detail).toContain('docs/*.md');
-    expect(checks.preserve.fix).toContain(
-      "venfork preserve remove 'docs/*.md'"
-    );
+    expect(checks.preserve.fix).toContain("venfork keep remove 'docs/*.md'");
   });
 
   test('an invalid cron skips cron-age with the reason', async () => {
@@ -495,7 +493,7 @@ describe('the preserve check asks the tip builder sync uses', () => {
     const checks = byId(await runDoctorChecks({ cwd: fx.work }));
 
     expect(checks.preserve.ok).toBe(false);
-    expect(checks.preserve.detail).toContain("venfork preserve remove 'docs'");
+    expect(checks.preserve.detail).toContain("venfork keep remove 'docs'");
   });
 
   test('an upstream directory at a preserved path fails as it does in sync', async () => {
@@ -506,9 +504,7 @@ describe('the preserve check asks the tip builder sync uses', () => {
 
     expect(checks.preserve.ok).toBe(false);
     expect(checks.preserve.detail).toContain('directory');
-    expect(checks.preserve.fix).toContain(
-      "venfork preserve remove 'MIRROR.md'"
-    );
+    expect(checks.preserve.fix).toContain("venfork keep remove 'MIRROR.md'");
     await expect(syncCommand({ cwd: fx.work, quiet: true })).rejects.toThrow(
       new CommandExitError(1)
     );

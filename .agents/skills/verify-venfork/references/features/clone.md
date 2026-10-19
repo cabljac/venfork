@@ -14,9 +14,9 @@ tests:
 ## What exists
 
 - Needs gh auth first (`AuthenticationError`).
-- Refuses a missing repo ("Missing vendor repository") or an invalid one ("Invalid vendor repository") with exit 2, before gh auth. An existing `./<name>` directory ("Directory '<name>' already exists.", `PreconditionError`) exits 1.
-- `gh repo clone <owner/name> <name>`, then reads `venfork-config` from the mirror. When it exists it is authoritative: `--no-public` on a standard config, `--public-fork` on a no-public config, and an `--upstream` or `--public-fork` naming another repo are refused (exit 1, `PreconditionError`). A flag naming the recorded repo in another URL form is accepted.
-- Legacy mirror without a config: guesses the public fork by stripping `-private` (`gh repo view`), then the upstream from the fork's parent. Each failed guess prompts for a URL; an empty answer is rejected by `validate`, and the fork answer must be a GitHub URL or `owner/repo`. `--no-public` skips the fork; `--public-fork <url>` (URL or `owner/repo`) skips the fork guess and its prompt, and the parent lookup then runs on that fork; `--upstream` skips the parent lookup. `--public-fork` with `--no-public` and an invalid `--public-fork` exit 2 before cloning.
+- Refuses a missing repo ("Missing mirror repository") or an invalid one ("Invalid mirror repository") with exit 2, before gh auth. An existing `./<name>` directory ("Directory '<name>' already exists.", `PreconditionError`) exits 1.
+- `gh repo clone <owner/name> <name>`, then reads `venfork-config` from the mirror. When it exists it is authoritative: `--own-upstream` on a standard config, `--public-fork` on a no-public config, and an `--upstream` or `--public-fork` naming another repo are refused (exit 1, `PreconditionError`). A flag naming the recorded repo in another URL form is accepted.
+- Legacy mirror without a config: guesses the public fork by stripping `-private` (`gh repo view`), then the upstream from the fork's parent. Each failed guess prompts for a URL; an empty answer is rejected by `validate`, and the fork answer must be a GitHub URL or `owner/repo`. `--own-upstream` skips the fork; `--public-fork <url>` (URL or `owner/repo`) skips the fork guess and its prompt, and the parent lookup then runs on that fork; `--upstream` skips the parent lookup. `--public-fork` with `--own-upstream` and an invalid `--public-fork` exit 2 before cloning.
 - Adds `public` (standard mode) and `upstream` with push URL `DISABLE`. URLs follow `gh config get git_protocol`. Runs `gh repo set-default`.
 - A cancelled URL prompt exits 130 (`CommandExitError(130)`), and so does a prompt that hits stdin EOF.
 - Never prompts unless stdin and stderr are both a TTY (prompts render on stderr), and never with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`: a URL prompt exits 2 (`MissingInputError`) naming `--public-fork <url>` for the public fork URL and `--upstream <url>` for the upstream URL. `--yes` and `-y` are accepted and change nothing: clone has no confirm. Any failure or cancel after the clone removes the cloned directory, so the rerun with the named flag works.
@@ -25,7 +25,7 @@ tests:
 
 ## How a user reaches it
 
-`venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--no-input] [--json]`. `<vendor-repo>` is the private mirror as a GitHub URL or `owner/repo`; `--upstream` and `--public-fork` take the same forms, and a malformed one exits 2 before gh auth.
+`venfork clone <mirror> [--own-upstream] [--upstream <url>] [--public-fork <url>] [--no-input] [--json]`. `<mirror>` is the private mirror as a GitHub URL or `owner/repo`; `--upstream` and `--public-fork` take the same forms, and a malformed one exits 2 before gh auth.
 
 ## How to drive it
 
@@ -33,8 +33,8 @@ The success path needs real GitHub; no e2e tier covers clone today. On the fixtu
 
 ```bash
 cd "$VF_ROOT"
-venfork clone </dev/null 2>&1; echo $?                                  # 2, "Missing vendor repository"
-venfork clone bad </dev/null 2>&1 | grep -o "Invalid vendor repository"
+venfork clone </dev/null 2>&1; echo $?                                  # 2, "Missing mirror repository"
+venfork clone bad </dev/null 2>&1 | grep -o "Invalid mirror repository"
 mkdir b-private; venfork clone a/b-private </dev/null 2>&1 | grep -o "Directory.*"; rmdir b-private
 venfork clone a/b-private </dev/null 2>&1 | grep "gh stub"               # exit 1 at gh repo clone
 ```

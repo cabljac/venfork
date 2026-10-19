@@ -10,7 +10,9 @@ A CLI that creates and manages **private mirrors of public GitHub repos** for ve
 - **Public fork** (`public`, `owner/project`) — staging area for upstream contributions.
 - **Upstream** (`upstream`, `original/project`) — read-only source; push is disabled (`git remote set-url --push upstream DISABLE`).
 
-`--no-public` mode collapses this to `origin` + `upstream` only (use when you own upstream). The active layout is recorded as `mode: 'standard' | 'no-public'` in config.
+`--own-upstream` mode collapses this to `origin` + `upstream` only (use when you own upstream). The active layout is recorded as `mode: 'standard' | 'no-public'` in config.
+
+User-facing names and on-disk names differ on purpose. The CLI says `venfork keep` and `--own-upstream`; the config keeps the field `preserve`, the value `mode: 'no-public'` and the doctor check id `preserve`, so every existing mirror reads unchanged and there is no migration. Code that talks to the user uses the new names; code that reads or writes config uses the old ones. The old spellings `venfork preserve` and `--no-public` exit 2 and name the new ones (`RENAMED` in `src/index.ts`, `renamedFlag` in `src/shared/args.ts`).
 
 ## Commands (development)
 

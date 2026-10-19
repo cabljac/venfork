@@ -595,7 +595,7 @@ e2eDescribe('venfork e2e — scheduled sync flow', () => {
           names.noPublicMirror,
           '--org',
           GITHUB_ORG,
-          '--no-public',
+          '--own-upstream',
           '--yes',
         ],
         { cwd: tmpRoot, env: { VENFORK_ORG: GITHUB_ORG } }

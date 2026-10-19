@@ -10,7 +10,7 @@ import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 mock.module('@clack/prompts', quietPrompts);
 
 import {
-  preserveCommand,
+  keepCommand,
   runDoctorChecks,
   scheduleCommand,
   stageCommand,
@@ -74,9 +74,9 @@ describe('preserve cannot capture venfork state', () => {
   test('preserving the sync workflow is refused, so schedule set still rewrites it', async () => {
     await scheduleCommand('set', '0 * * * *');
 
-    const refused = preserveCommand('add', [WF]);
+    const refused = keepCommand('add', [WF]);
     await expect(refused).rejects.toBeInstanceOf(UsageError);
-    await expect(refused).rejects.toThrow(`Invalid preserve path '${WF}'`);
+    await expect(refused).rejects.toThrow(`Invalid keep path '${WF}'`);
     await scheduleCommand('set', '30 2 * * *');
 
     expect(await fx.fileAt(fx.origin, 'main', WF)).toContain(
@@ -134,7 +134,7 @@ describe('managed commit content check', () => {
     await fx.commitOnOrigin({ 'tools/m.txt': 'm\n', 'tools/n.txt': 'n\n' });
     await sync();
 
-    await preserveCommand('remove', ['tools/n.txt']);
+    await keepCommand('remove', ['tools/n.txt']);
     await fx.commitOnUpstream({ 'src/up.txt': 'u\n' });
     await sync();
 
@@ -197,7 +197,7 @@ describe('managed commit left behind by a preserve removal', () => {
   test('preserve remove of the dropped file re-stamps origin', async () => {
     await staleManagedCommit();
 
-    await preserveCommand('remove', ['tools/n.txt']);
+    await keepCommand('remove', ['tools/n.txt']);
 
     expect(await fx.fileAt(fx.origin, 'main', 'tools/n.txt')).toBeNull();
     expect(await fx.fileAt(fx.origin, 'main', 'tools/m.txt')).toBe('m\n');
@@ -249,7 +249,7 @@ describe('managed commit left behind by a preserve removal', () => {
     await fx.commitOnOrigin({ 'src/user.txt': 'user\n' });
     const before = await fx.sha(fx.origin, 'main');
 
-    await preserveCommand('remove', ['tools/n.txt']);
+    await keepCommand('remove', ['tools/n.txt']);
 
     expect(prompts.log.warn).toHaveBeenCalledWith(
       expect.stringContaining(

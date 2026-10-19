@@ -2,6 +2,7 @@ import { UsageError } from './errors.js';
 import {
   consumeValue,
   parsePromptFlags,
+  renamedFlag,
   scanArgs,
   unexpectedArgument,
 } from './shared/args.js';
@@ -23,7 +24,7 @@ export type ParsedSetupArgs = {
 };
 
 const USAGE =
-  'venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public] [--yes] [--no-input] [--json]';
+  'venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--own-upstream] [--yes] [--no-input] [--json]';
 
 /**
  * Parse `venfork setup ...` argv after the `setup` token.
@@ -46,7 +47,8 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
       publicForkRepoName = value;
       return consumed;
     }
-    if (a === '--no-public') {
+    if (a === '--no-public') throw renamedFlag(a, '--own-upstream');
+    if (a === '--own-upstream') {
       noPublic = true;
       return 0;
     }
@@ -78,7 +80,7 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
 /**
  * Throws {@link UsageError} when the setup inputs are not valid in form: a
  * malformed `<upstream>` or `--fork-name`, or `--fork-name` with
- * `--no-public`.
+ * `--own-upstream`.
  */
 export function checkSetupInputs(inputs: {
   upstreamUrl?: string;
@@ -88,7 +90,7 @@ export function checkSetupInputs(inputs: {
   const forkName = inputs.publicForkRepoName?.trim();
   if (inputs.noPublic && forkName) {
     throw new UsageError(
-      '--no-public cannot be combined with --fork-name: --no-public skips creating a public fork entirely.'
+      '--own-upstream cannot be combined with --fork-name: --own-upstream skips creating a public fork entirely.'
     );
   }
   if (

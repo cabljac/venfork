@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { checkCloneInputs, parseCloneCliArgs } from '../../src/clone-args.js';
 
+describe('the renamed --no-public flag', () => {
+  test('is a usage error that names --own-upstream', () => {
+    expect(() => parseCloneCliArgs(['a/b-private', '--no-public'])).toThrow(
+      '--no-public is now --own-upstream.'
+    );
+  });
+});
+
 describe('parseCloneCliArgs', () => {
   test('parses bare positional vendor URL', () => {
     expect(parseCloneCliArgs(['git@github.com:acme/proj-private.git'])).toEqual(
@@ -14,8 +22,8 @@ describe('parseCloneCliArgs', () => {
     );
   });
 
-  test('--no-public sets the flag', () => {
-    expect(parseCloneCliArgs(['acme/proj-private', '--no-public'])).toEqual({
+  test('--own-upstream sets the flag', () => {
+    expect(parseCloneCliArgs(['acme/proj-private', '--own-upstream'])).toEqual({
       vendorRepoUrl: 'acme/proj-private',
       noPublic: true,
       upstreamUrl: undefined,
@@ -28,7 +36,7 @@ describe('parseCloneCliArgs', () => {
     expect(
       parseCloneCliArgs([
         'acme/proj-private',
-        '--no-public',
+        '--own-upstream',
         '--upstream',
         'git@github.com:acme/proj.git',
       ])
@@ -71,7 +79,7 @@ describe('parseCloneCliArgs', () => {
   test('flag order does not matter', () => {
     expect(
       parseCloneCliArgs([
-        '--no-public',
+        '--own-upstream',
         '--upstream=git@github.com:acme/proj.git',
         'acme/proj-private',
       ])
@@ -99,7 +107,9 @@ describe('parseCloneCliArgs strictness', () => {
   });
 
   test('accepts a flag before the positional and -- as separator', () => {
-    expect(parseCloneCliArgs(['--no-public', 'a/b']).vendorRepoUrl).toBe('a/b');
+    expect(parseCloneCliArgs(['--own-upstream', 'a/b']).vendorRepoUrl).toBe(
+      'a/b'
+    );
     expect(parseCloneCliArgs(['--', 'a/b']).vendorRepoUrl).toBe('a/b');
   });
 

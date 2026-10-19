@@ -22,7 +22,7 @@ With `--json`, match a refusal on `error.code`, not on the message.
 ```bash
 venfork schedule set "0 * * * *" </dev/null >/dev/null 2>&1
 vf_origin_commit docs/INTERNAL.md "$(printf 'internal plan line one is long enough\nsecond internal line also long enough\nthird internal line also long enough')"
-venfork preserve add docs/INTERNAL.md </dev/null >/dev/null 2>&1; venfork sync </dev/null >/dev/null 2>&1
+venfork keep add docs/INTERNAL.md </dev/null >/dev/null 2>&1; venfork sync </dev/null >/dev/null 2>&1
 git -C "$VF_PUBLIC" ls-tree -r --name-only main | grep -c -e venfork-sync -e INTERNAL     # 0: public is upstream
 git fetch -q origin
 git checkout -q -b c1 origin/main && cp docs/INTERNAL.md src/notes.md && git add . && git commit -qm "docs: notes"

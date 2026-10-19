@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { parseCloneCliArgs } from '../../src/clone-args.js';
 import { parseDoctorCliArgs } from '../../src/doctor-args.js';
 import { UsageError } from '../../src/errors.js';
-import { parsePreserveCliArgs } from '../../src/preserve-args.js';
+import { parseKeepCliArgs } from '../../src/keep-args.js';
 import { parsePullCliArgs } from '../../src/pull-args.js';
 import { parseScheduleCliArgs } from '../../src/schedule-args.js';
 import { parseSetupCliArgs } from '../../src/setup-args.js';
@@ -19,15 +19,15 @@ const cases: ReadonlyArray<
   [
     'setup',
     parseSetupCliArgs,
-    ['a/b', '--no-public', '--fork-name', 'x'],
+    ['a/b', '--own-upstream', '--fork-name', 'x'],
     'cannot be combined',
   ],
-  ['clone', parseCloneCliArgs, [], 'Missing vendor repository'],
+  ['clone', parseCloneCliArgs, [], 'Missing mirror repository'],
   [
     'clone',
     parseCloneCliArgs,
-    ['a/b', '--no-public', '--public-fork', 'c/d'],
-    '--public-fork cannot be combined with --no-public',
+    ['a/b', '--own-upstream', '--public-fork', 'c/d'],
+    '--public-fork cannot be combined with --own-upstream',
   ],
   ['sync', parseSyncCliArgs, ['--bogus'], "Unknown option '--bogus'"],
   ['sync', parseSyncCliArgs, ['a', 'b'], 'Usage: venfork sync'],
@@ -55,8 +55,8 @@ const cases: ReadonlyArray<
   ['doctor', parseDoctorCliArgs, ['--bogus'], "Unknown option '--bogus'"],
   ['workflows', parseWorkflowsCliArgs, ['nope'], 'Usage: venfork workflows'],
   ['workflows', parseWorkflowsCliArgs, ['allow'], 'Usage: venfork workflows'],
-  ['preserve', parsePreserveCliArgs, ['nope'], 'Usage: venfork preserve'],
-  ['preserve', parsePreserveCliArgs, ['add'], 'Usage: venfork preserve'],
+  ['keep', parseKeepCliArgs, ['nope'], 'Usage: venfork keep'],
+  ['keep', parseKeepCliArgs, ['add'], 'Usage: venfork keep'],
   [
     'schedule',
     parseScheduleCliArgs,
@@ -87,12 +87,7 @@ const cases: ReadonlyArray<
     ['nope'],
     '[workflow-file ...] [--no-input] [--json]',
   ],
-  [
-    'preserve',
-    parsePreserveCliArgs,
-    ['nope'],
-    '[path ...] [--no-input] [--json]',
-  ],
+  ['keep', parseKeepCliArgs, ['nope'], '[path ...] [--no-input] [--json]'],
   [
     'pull',
     parsePullCliArgs,
