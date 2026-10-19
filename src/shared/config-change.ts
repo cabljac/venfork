@@ -7,14 +7,9 @@ import {
   type VenforkConfigPatch,
   writeVenforkConfigAt,
 } from '../config.js';
-import {
-  ConfigError,
-  PreconditionError,
-  SyncDivergenceError,
-  VenforkError,
-} from '../errors.js';
+import { ConfigError, PreconditionError, VenforkError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
-import { checkDivergence } from './divergence.js';
+import { checkDivergence, divergenceError } from './divergence.js';
 import {
   buildOriginTip,
   pushBranchWithLease,
@@ -79,7 +74,7 @@ export async function applyConfigChange(
     cwd: repoDir,
   });
   if (originDivergence.count > 0) {
-    throw new SyncDivergenceError(
+    throw divergenceError(
       defaultBranch,
       { count: originDivergence.count, files: originDivergence.files },
       { count: 0, files: [] }

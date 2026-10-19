@@ -606,6 +606,10 @@ describe('clone on a legacy mirror without venfork-config', () => {
             'Please provide the public fork URL:'
           ),
           flag: '--public-fork <url>',
+          details: {
+            flag: '--public-fork <url>',
+            question: expect.any(String),
+          },
         },
       });
     } finally {
@@ -938,8 +942,50 @@ describe('one error, one line', () => {
 
       expect(result.exitCode).toBe(1);
       expect(outcomeLines(result.stderr)).toEqual([
-        "error: Branch 'nope' does not exist",
+        "error: Branch 'nope' does not exist. Run `git branch` to list local branches.",
       ]);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('a divergent sync prints one error line with the files and the next step', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await fx.commitOnOrigin({ 'docs/INTERNAL.md': 'internal\n' });
+
+      const result = await runCliWithoutTty(fx.work, ['sync']);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).not.toContain('Force-sync');
+      expect(outcomeLines(result.stderr)).toEqual([
+        'done: Checked for divergence',
+        "error: Sync aborted to prevent data loss: origin/main has 1 commit(s) not in upstream/main (docs/INTERNAL.md). If the files belong only on the mirror, run `venfork preserve add 'docs/INTERNAL.md'`. Otherwise move the commits to a branch and retry.",
+      ]);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('a missing branch names the next step after the error', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const result = await runCliWithoutTty(fx.work, [
+        'stage',
+        'nope',
+        '--yes',
+        '--json',
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(parseEnvelope(result.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: 'branch-not-found',
+          hint: 'Run `git branch` to list local branches.',
+          details: { branch: 'nope' },
+        },
+      });
     } finally {
       await fx.cleanup();
     }
@@ -1100,13 +1146,79 @@ describe('--json envelope on stdout, no TTY', () => {
       const result = await runCliWithoutTty(fx.work, ['sync', '--json']);
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('Divergent commits detected');
       expect(parseEnvelope(result.stdout)).toEqual({
         schemaVersion: 1,
         ok: false,
         error: {
           code: 'sync-divergence',
           message: expect.stringContaining('Sync aborted to prevent data loss'),
+          hint: expect.stringContaining("venfork preserve add 'src/hotfix.ts'"),
+          details: {
+            branch: 'main',
+            origin: { count: 1, files: ['src/hotfix.ts'] },
+            public: { count: 0, files: [] },
+            command: "venfork preserve add 'src/hotfix.ts'",
+          },
+        },
+      });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('sync-divergence command is safe to paste for a path with shell metacharacters', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const file = 'notes$(id>PWNED).md';
+      await fx.commitOnOrigin({ [file]: 'internal\n' });
+
+      const result = await runCliWithoutTty(fx.work, ['sync', '--json']);
+      const envelope = parseEnvelope(result.stdout) as {
+        error: { details: { command: string } };
+      };
+      const pasted = await $({
+        cwd: tmp,
+        reject: false,
+        env: { PATH: process.env.PATH },
+      })`sh -c ${`venfork() { printf '%s\\n' "$@"; }; ${envelope.error.details.command}`}`;
+
+      expect(pasted.stdout.split('\n')).toEqual(['preserve', 'add', file]);
+      await expect(stat(path.join(tmp, 'PWNED'))).rejects.toThrow();
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('sync --json with a preserved file that upstream turned into a directory is precondition with a remove hint', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await seedPreserve(fx, ['INTERNAL.md']);
+      await fx.commitOnOrigin({ 'INTERNAL.md': 'mirror only\n' });
+      expect((await runCliWithoutTty(fx.work, ['sync'])).exitCode).toBe(0);
+      await fx.commitOnUpstream({ 'INTERNAL.md/x': 'upstream dir\n' });
+
+      const text = await runCliWithoutTty(fx.work, ['sync']);
+      const result = await runCliWithoutTty(fx.work, ['sync', '--json']);
+
+      expect(text.exitCode).toBe(1);
+      expect(outcomeLines(text.stderr)).toHaveLength(1);
+      expect(text.stderr.trim().split('\n').at(-1)).toStartWith('error: ');
+      expect(result.exitCode).toBe(1);
+      expect(parseEnvelope(result.stdout)).toEqual({
+        schemaVersion: 1,
+        ok: false,
+        error: {
+          code: 'precondition',
+          message: expect.stringContaining(
+            "upstream now has a directory at 'INTERNAL.md'"
+          ),
+          hint: expect.stringContaining(
+            "venfork preserve remove 'INTERNAL.md'"
+          ),
+          details: {
+            path: 'INTERNAL.md',
+            command: "venfork preserve remove 'INTERNAL.md'",
+          },
         },
       });
     } finally {
@@ -1134,6 +1246,7 @@ describe('--json envelope on stdout, no TTY', () => {
           code: 'missing-input',
           message: expect.stringContaining('Push to public fork?'),
           flag: '--yes',
+          details: { flag: '--yes', question: 'Push to public fork?' },
         },
       });
       expect(await hasBranch(publicFork, 'feature')).toBe(false);
@@ -1332,6 +1445,7 @@ describe('--json envelope on stdout, no TTY', () => {
           error: {
             code: 'config',
             message: 'venfork-config branch not found or invalid',
+            details: { reason: expect.any(String) },
           },
         });
       }
@@ -1357,6 +1471,7 @@ describe('--json envelope on stdout, no TTY', () => {
         code: 'missing-input',
         message: expect.stringContaining('Continue with personal account?'),
         flag: '--yes',
+        details: { flag: '--yes', question: expect.any(String) },
       },
     });
   });
@@ -1688,7 +1803,14 @@ describe('--json envelope on stdout, no TTY', () => {
       expect(parseEnvelope(result.stdout)).toEqual({
         schemaVersion: 1,
         ok: false,
-        error: { code: 'stage-leak', message: expect.any(String) },
+        error: {
+          code: 'stage-leak',
+          message: expect.any(String),
+          details: expect.objectContaining({
+            branch: 'leaky',
+            paths: expect.arrayContaining([expect.any(String)]),
+          }),
+        },
       });
       expect(await fx.git(publicFork, 'for-each-ref')).toBe(before);
     } finally {
@@ -1723,7 +1845,11 @@ describe('--json envelope on stdout, no TTY', () => {
       expect(parseEnvelope(result.stdout)).toEqual({
         schemaVersion: 1,
         ok: false,
-        error: { code: 'mirror-reference', message: expect.any(String) },
+        error: {
+          code: 'mirror-reference',
+          message: expect.any(String),
+          details: { where: expect.any(String), matched: 'venfork' },
+        },
       });
       expect(await fx.git(publicFork, 'for-each-ref')).toBe(before);
     } finally {
@@ -1745,6 +1871,7 @@ describe('--json envelope on stdout, no TTY', () => {
         error: {
           code: 'remote-not-found',
           message: expect.stringContaining("'public'"),
+          details: { remote: 'public' },
         },
       });
     } finally {

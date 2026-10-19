@@ -15,7 +15,7 @@ import { getDefaultBranch } from '../git.js';
 import {
   checkDivergence,
   type DroppedManagedCommit,
-  formatDivergenceReport,
+  divergenceError,
 } from '../shared/divergence.js';
 import {
   hasManagedTrailer,
@@ -327,14 +327,11 @@ export async function syncCommand(
 
     // Step 4: Abort if divergent commits exist
     if (originDivergence.count > 0 || publicDivergence.count > 0) {
-      const divergence = new SyncDivergenceError(
+      const divergence = divergenceError(
         defaultBranch,
         { count: originDivergence.count, files: originDivergence.files },
         { count: publicDivergence.count, files: publicDivergence.files }
       );
-      const report = formatDivergenceReport(divergence);
-      p.log.warn('Divergent commits detected:');
-      p.note(report, '⚠️  Warning');
       if (options?.reportIssues) {
         await reportSyncBlocked({ cwd: repoDir, error: divergence });
       }

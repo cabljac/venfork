@@ -9,6 +9,7 @@ import {
   ConfigError,
   PinDowngradeError,
   UNMIGRATED_MIRROR_STEPS,
+  VenforkError,
 } from '../errors.js';
 import { checkGhAuth, getDefaultBranch, getRemotes } from '../git.js';
 import { gitNetTimeoutMs, SYNC_WORKFLOW_PATH } from '../shared/constants.js';
@@ -638,7 +639,10 @@ async function collectChecks(
               .map((line) => line.trim())
               .filter(Boolean)
               .join(' '),
-            fix: 'Fix the entry as the detail says, then run `venfork sync`. Sync aborts until then.',
+            fix:
+              err instanceof VenforkError && err.hint
+                ? `${err.hint} Sync aborts until then.`
+                : 'Fix the entry as the detail says, then run `venfork sync`. Sync aborts until then.',
           });
         }
       }

@@ -116,7 +116,7 @@ describe('SyncDivergenceError', () => {
     const publicFork = { count: 1, files: ['c.ts'] };
     const error = new SyncDivergenceError('main', origin, publicFork);
     expect(error.message).toBe(
-      'Sync aborted to prevent data loss: origin/main has 2, public/main has 1 commit(s) not in upstream/main'
+      'Sync aborted to prevent data loss: origin/main has 2, public/main has 1 commit(s) not in upstream/main (a.ts, b.ts, c.ts).'
     );
     expect(error.name).toBe('SyncDivergenceError');
     expect(error.origin).toEqual(origin);
@@ -131,7 +131,7 @@ describe('SyncDivergenceError', () => {
       { count: 0, files: [] }
     );
     expect(error.message).toBe(
-      'Sync aborted to prevent data loss: origin/main has 1 commit(s) not in upstream/main'
+      'Sync aborted to prevent data loss: origin/main has 1 commit(s) not in upstream/main (a.ts).'
     );
   });
 });

@@ -24,6 +24,7 @@ import {
 import { parseDoctorCliArgs } from './doctor-args.js';
 import {
   CommandExitError,
+  errorText,
   exitCodeFor,
   UsageError,
   VenforkError,
@@ -309,9 +310,7 @@ main(argv)
   .catch(async (error) => {
     if (json) await writeEnvelope(errorEnvelope(error));
     if (!(error instanceof CommandExitError)) {
-      stderrUi.log.error(
-        error instanceof Error ? error.message : String(error)
-      );
+      stderrUi.log.error(errorText(error));
     }
     process.exit(exitCodeFor(error));
   });

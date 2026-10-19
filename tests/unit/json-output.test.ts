@@ -29,6 +29,7 @@ import { parseSetupCliArgs } from '../../src/setup-args.js';
 import {
   errorEnvelope,
   type JsonEnvelope,
+  type JsonError,
   jsonRequested,
   successEnvelope,
   writeEnvelope,
@@ -36,6 +37,12 @@ import {
 import { parseStageCliArgs } from '../../src/stage-args.js';
 import { parseSyncCliArgs } from '../../src/sync-args.js';
 import { parseWorkflowsCliArgs } from '../../src/workflows-args.js';
+
+/** The `error` of a failure envelope; fails the test on a success one. */
+function errorOf(envelope: JsonEnvelope): JsonError {
+  if (envelope.ok) throw new Error('expected a failure envelope');
+  return envelope.error;
+}
 
 describe('error codes', () => {
   const none = { count: 0, files: [] };
@@ -71,7 +78,7 @@ describe('error codes', () => {
       'pin-downgrade',
     ],
     ['UnmigratedMirrorError', new UnmigratedMirrorError(), 'unmigrated-mirror'],
-    ['CommandExitError(1)', new CommandExitError(1), 'command-failed'],
+    ['CommandExitError(1)', new CommandExitError(1), 'runtime'],
     ['CommandExitError(130)', new CommandExitError(130), 'cancelled'],
     [
       'MissingInputError',
@@ -115,11 +122,16 @@ describe('envelopes', () => {
     expect(errorEnvelope(error)).toEqual({
       schemaVersion: 1,
       ok: false,
-      error: { code: 'missing-input', message: error.message, flag: '--yes' },
+      error: {
+        code: 'missing-input',
+        message: error.message,
+        flag: '--yes',
+        details: { flag: '--yes', question: 'Push to public fork?' },
+      },
     });
   });
 
-  test('a command exit describes its cause', () => {
+  test('a command exit describes its cause, with its hint and details', () => {
     const cause = new BranchNotFoundError('feat');
     expect(errorEnvelope(new CommandExitError(1, cause))).toEqual({
       schemaVersion: 1,
@@ -127,7 +139,55 @@ describe('envelopes', () => {
       error: {
         code: 'branch-not-found',
         message: "Branch 'feat' does not exist",
+        hint: 'Run `git branch` to list local branches.',
+        details: { branch: 'feat' },
       },
+    });
+  });
+
+  test('a command exit without a cause never reports command-failed', () => {
+    expect(errorOf(errorEnvelope(new CommandExitError(1)))).toMatchObject({
+      code: 'runtime',
+    });
+    expect(new CommandExitError(2).code).toBe('usage');
+    expect(new CommandExitError(0).code).toBe('cancelled');
+  });
+
+  test('sync-divergence details name the files and the preserve command', () => {
+    const error = new SyncDivergenceError(
+      'main',
+      { count: 1, files: ['docs/INTERNAL.md'] },
+      { count: 0, files: [] },
+      'venfork preserve add docs/INTERNAL.md'
+    );
+    expect(errorOf(errorEnvelope(error))).toEqual({
+      code: 'sync-divergence',
+      message: error.message,
+      hint: 'If the files belong only on the mirror, run `venfork preserve add docs/INTERNAL.md`. Otherwise move the commits to a branch and retry.',
+      details: {
+        branch: 'main',
+        origin: { count: 1, files: ['docs/INTERNAL.md'] },
+        public: { count: 0, files: [] },
+        command: 'venfork preserve add docs/INTERNAL.md',
+      },
+    });
+  });
+
+  test('stage-leak details name the paths and the commit', () => {
+    const error = new StageLeakError('feat', ['.venfork/x'], 'abc123');
+    expect(errorOf(errorEnvelope(error)).details).toEqual({
+      branch: 'feat',
+      paths: ['.venfork/x'],
+      leak: 'path',
+      commit: 'abc123',
+    });
+  });
+
+  test('missing-input keeps its flag and names the question in details', () => {
+    const error = new MissingInputError('--yes', 'Push?');
+    expect(errorOf(errorEnvelope(error))).toMatchObject({
+      flag: '--yes',
+      details: { flag: '--yes', question: 'Push?' },
     });
   });
 
