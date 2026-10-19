@@ -44,7 +44,7 @@ describe('requiresGhAuth', () => {
     ['sync', [], false],
     ['schedule', ['set', '0 * * * *'], false],
     ['workflows', ['status'], false],
-    ['preserve', ['list'], false],
+    ['keep', ['list'], false],
     ['doctor', [], false],
     ['help', [], false],
   ] as const)('%s %p -> %p', (command, args, expected) => {
@@ -60,7 +60,7 @@ describe('requiresRepository', () => {
       'pull',
       'schedule',
       'workflows',
-      'preserve',
+      'keep',
     ]) {
       expect(requiresRepository(command)).toBe(true);
     }
@@ -81,7 +81,7 @@ describe('assertInRepository', () => {
       'pull',
       'schedule',
       'workflows',
-      'preserve',
+      'keep',
     ]) {
       await expect(assertInRepository(command, outside)).rejects.toBeInstanceOf(
         NotInRepositoryError

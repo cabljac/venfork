@@ -2,7 +2,7 @@ import type { MirrorFixture } from './mirror-fixture.js';
 
 /**
  * Adds `entries` to the preserve allowlist in the fixture's config without
- * `venfork preserve add`, which only accepts files already on origin's
+ * `venfork keep add`, which only accepts files already on origin's
  * default branch. Tests use it to set up a list before the files exist.
  */
 export async function seedPreserve(

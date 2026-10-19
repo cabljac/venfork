@@ -105,7 +105,7 @@ export interface VenforkConfig {
    *   - not the managed sync workflow (or a path below it) and nothing under
    *     `.venfork/`: venfork owns those
    *
-   * Every printed `venfork preserve add|remove` command single-quotes its
+   * Every printed `venfork keep add|remove` command single-quotes its
    * paths (`shellQuote`); that quoting, not this list, makes it paste-safe.
    * Entries that don't match move to `invalidPreserve` during normalization.
    *
@@ -470,7 +470,7 @@ export function isVenforkOwnedPath(entry: string): boolean {
  * characters (`*`, `?`, `[`, `]`), a leading `:` (pathspec magic), or
  * `..` / `.` / empty segments, and venfork-owned paths
  * ({@link isVenforkOwnedPath}). Whitespace anywhere in the value is rejected
- * too. The printed `venfork preserve add|remove` commands are paste-safe
+ * too. The printed `venfork keep add|remove` commands are paste-safe
  * because `shellQuote` single-quotes each path, not because of these rules.
  *
  * Leading `-` is forbidden so a preserved filename can't be parsed as a git
@@ -480,9 +480,9 @@ export function isVenforkOwnedPath(entry: string): boolean {
  *
  * IMPORTANT: if you change the rejection rules below, also update:
  *   - the JSDoc on `VenforkConfig.preserve` (above)
- *   - the user-facing error message in `preserveCommand` (src/commands/preserve.ts)
+ *   - the user-facing error message in `keepCommand` (src/commands/keep.ts)
  * All three must stay in sync — users see the JSDoc when editing config by
- * hand, and the error message when running `venfork preserve add`.
+ * hand, and the error message when running `venfork keep add`.
  */
 export function normalizePreservePath(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -729,13 +729,13 @@ export function invalidPreserveError(entries: readonly string[]): ConfigError {
 }
 
 /**
- * The `venfork preserve remove` command for `entries`, each single-quoted
+ * The `venfork keep remove` command for `entries`, each single-quoted
  * so a shell passes it through unchanged (`*.md` is not expanded).
  *
  * @param entries Preserve entries.
  */
 export function preserveRemoveHint(...entries: string[]): string {
-  return `venfork preserve remove ${entries.map(shellQuote).join(' ')}`;
+  return `venfork keep remove ${entries.map(shellQuote).join(' ')}`;
 }
 
 function parseConfig(

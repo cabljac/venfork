@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { parseCloneCliArgs } from '../../src/clone-args.js';
 import { parseDoctorCliArgs } from '../../src/doctor-args.js';
-import { parsePreserveCliArgs } from '../../src/preserve-args.js';
+import { parseKeepCliArgs } from '../../src/keep-args.js';
 import { parsePullCliArgs } from '../../src/pull-args.js';
 import { parseScheduleCliArgs } from '../../src/schedule-args.js';
 import { parseSetupCliArgs } from '../../src/setup-args.js';
@@ -57,7 +57,7 @@ describe('--no-input on every command', () => {
     ['sync', () => parseSyncCliArgs(['--no-input'])],
     ['schedule status', () => parseScheduleCliArgs(['status', '--no-input'])],
     ['workflows status', () => parseWorkflowsCliArgs(['--no-input'])],
-    ['preserve list', () => parsePreserveCliArgs(['list', '--no-input'])],
+    ['preserve list', () => parseKeepCliArgs(['list', '--no-input'])],
     ['stage', () => parseStageCliArgs(['feat', '--no-input'])],
     ['pull pr', () => parsePullCliArgs(['pr', '12', '--no-input'])],
     ['pull issue', () => parsePullCliArgs(['issue', '12', '--no-input'])],
@@ -77,7 +77,7 @@ describe('--yes on every command', () => {
     ['sync', (flag) => parseSyncCliArgs([flag])],
     ['schedule status', (flag) => parseScheduleCliArgs(['status', flag])],
     ['workflows status', (flag) => parseWorkflowsCliArgs([flag])],
-    ['preserve list', (flag) => parsePreserveCliArgs(['list', flag])],
+    ['preserve list', (flag) => parseKeepCliArgs(['list', flag])],
     ['stage', (flag) => parseStageCliArgs(['feat', flag])],
     ['pull pr', (flag) => parsePullCliArgs(['pr', '12', flag])],
     ['pull issue', (flag) => parsePullCliArgs(['issue', '12', flag])],

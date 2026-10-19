@@ -30,7 +30,7 @@ Keep the schedule off, so the preserved file is the only managed content.
 
 1. `vf_origin_commit docs/INTERNAL.md "mirror version"`.
 2. `venfork sync </dev/null` - exit 1, `Sync aborted to prevent data loss: origin/main has 1 commit(s)`. Origin is unchanged.
-3. `venfork preserve add docs/INTERNAL.md </dev/null` - exit 0. `main` has not moved yet.
+3. `venfork keep add docs/INTERNAL.md </dev/null` - exit 0. `main` has not moved yet.
 4. `venfork sync </dev/null` - exit 0. `git -C "$VF_ORIGIN" show --stat --format=%s main` is the managed commit with only `docs/INTERNAL.md`. `git -C "$VF_PUBLIC" ls-tree -r --name-only main | grep -c INTERNAL` is 0.
 5. `vf_upstream_commit docs/INTERNAL.md "upstream version"`.
 6. `venfork sync </dev/null` - exit 0. `vf_tip "$VF_ORIGIN"` equals `vf_tip "$VF_UPSTREAM"` (+0). `git -C "$VF_ORIGIN" show main:docs/INTERNAL.md` is `upstream version`.

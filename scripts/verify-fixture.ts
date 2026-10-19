@@ -15,7 +15,7 @@ import {
  * drive reaches GitHub. Nothing is cleaned up: delete `root` when done.
  */
 const USAGE =
-  'usage: bun scripts/verify-fixture.ts [--no-public] [--commits <n>] [--shell]';
+  'usage: bun scripts/verify-fixture.ts [--own-upstream] [--commits <n>] [--shell]';
 
 let mode: FixtureMode = 'standard';
 let upstreamCommits = 2;
@@ -23,7 +23,7 @@ let shell = false;
 const args = process.argv.slice(2);
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
-  if (arg === '--no-public') {
+  if (arg === '--own-upstream') {
     mode = 'no-public';
   } else if (arg === '--shell') {
     shell = true;

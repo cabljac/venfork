@@ -2,6 +2,11 @@ import { UsageError } from '../errors.js';
 import { JSON_FLAG } from './json-output.js';
 import type { PromptContext } from './prompt.js';
 
+/** The usage error for a flag that was renamed: it names the new spelling. */
+export function renamedFlag(old: string, now: string): UsageError {
+  return new UsageError(`${old} is now ${now}.`);
+}
+
 /**
  * Read the value of `--flag value` or `--flag=value` at `args[i]`.
  * `consumed` is the number of extra argv entries the value used.

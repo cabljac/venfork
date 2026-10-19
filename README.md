@@ -107,7 +107,7 @@ venfork pull pr 1234
 
 ## Commands
 
-### `venfork setup <upstream> [name] [--org <organization>] [--fork-name <repo>] [--no-public] [--yes] [--no-input] [--json]`
+### `venfork setup <upstream> [name] [--org <organization>] [--fork-name <repo>] [--own-upstream] [--yes] [--no-input] [--json]`
 
 Creates the complete vendor workflow setup (with `--json`, setup never prompts and prints one JSON envelope on stdout; see [JSON output](#json-output)):
 
@@ -115,15 +115,15 @@ Creates the complete vendor workflow setup (with `--json`, setup never prompts a
 
 **`--fork-name`** sets the **public fork’s repository name** under your chosen owner/org (passed through to `gh repo fork --fork-name`). Use this when **upstream already lives under the same org** you pass to `--org`: GitHub cannot create a second repo with the same name, so the fork must use a different name (e.g. `my-lib-public` while upstream is `my-lib`).
 
-**`--no-public`** skips the public-fork hop entirely. Only `origin` (private mirror) and `upstream` are configured; `venfork stage` later pushes branches **directly to upstream** and opens an intra-upstream PR (unless `--no-pr`). Use this when you **own the upstream** repo (no client to hide work from): it removes a redundant fork-and-stage round-trip. Mutually exclusive with `--fork-name`.
+**`--own-upstream`** skips the public-fork hop entirely. Only `origin` (private mirror) and `upstream` are configured; `venfork stage` later pushes branches **directly to upstream** and opens an intra-upstream PR (unless `--no-pr`). Use this when you **own the upstream** repo (no client to hide work from): it removes a redundant fork-and-stage round-trip. Mutually exclusive with `--fork-name`.
 
 **What it creates:**
 - **Private mirror** (`yourname/project-private` or `org/project-private`) - For internal work
-- **Public fork** (`yourname/project` or `org/project`, or the name from **`--fork-name`**) - For staging to upstream *(skipped with `--no-public`)*
+- **Public fork** (`yourname/project` or `org/project`, or the name from **`--fork-name`**) - For staging to upstream *(skipped with `--own-upstream`)*
 - **Config branch** (`venfork-config`) - Stores remote URLs (and `mode: 'no-public'` when applicable) for easy team cloning
 - **Local clone** with remotes configured:
   - `origin` → private mirror (default push/pull)
-  - `public` → public fork (for staging) *(omitted with `--no-public`)*
+  - `public` → public fork (for staging) *(omitted with `--own-upstream`)*
   - `upstream` → original repo (read-only, push disabled)
 
 **Arguments:**
@@ -131,7 +131,7 @@ Creates the complete vendor workflow setup (with `--json`, setup never prompts a
 - `name` - (Optional) Name for private mirror repo (default: `{repo}-private`)
 - `--org <organization>` - (Optional) Create repos under organization instead of personal account
 - `--fork-name <repo>` - (Optional) Public fork repo name under that org/user (default: same basename as upstream)
-- `--no-public` - (Optional) Skip the public-fork hop; stage pushes directly to upstream
+- `--own-upstream` - (Optional) Skip the public-fork hop; stage pushes directly to upstream
 - `--yes`, `-y` - (Optional) Answer the personal-account confirm with yes. `--org <your username>` (compared with your gh login ignoring case) also counts as consent: the repos go under your personal account with no confirm. `VENFORK_ORG` set to your username does not: it is ambient, so the confirm still runs (and needs `--yes` without a terminal).
 - `--no-input` - (Optional) Never prompt. A missing `name` defaults to `{repo}-private` (the choice is logged on stderr). A missing `upstream`, or a personal account without `--yes`, exits 2. See [Non-interactive use](#non-interactive-use).
 
@@ -162,7 +162,7 @@ venfork setup firebase/extensions firebase-extensions-private --org invertase --
 
 # Upstream is already in your org and there is no public-vs-private audience to maintain
 # — skip the fork hop entirely. `stage` will push directly to my-org/foo and open an intra-repo PR.
-venfork setup my-org/foo my-foo-private --org my-org --no-public
+venfork setup my-org/foo my-foo-private --org my-org --own-upstream
 # Creates: my-org/my-foo-private (private), upstream = my-org/foo. No public fork.
 ```
 
@@ -176,11 +176,11 @@ venfork setup my-org/foo my-foo-private --org my-org --no-public
 
 Pure failures (for example name taken by a **different** repo) still abort setup. If recovery sync stops due to divergent default branches, fix or move those commits, then run **`venfork sync`** again from inside the private mirror.
 
-### `venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--yes] [--no-input] [--json]`
+### `venfork clone <mirror> [--own-upstream] [--upstream <url>] [--public-fork <url>] [--yes] [--no-input] [--json]`
 
 Clone an existing vendor setup and automatically configure all remotes. With `--json`, clone never prompts and prints one JSON envelope on stdout (see [JSON output](#json-output)).
 
-**`<vendor-repo>`** is the private mirror: full GitHub URL or shorthand `owner/repo`.
+**`<mirror>`** is the private mirror: full GitHub URL or shorthand `owner/repo`.
 
 **What it does:**
 - Clones the private mirror repository
@@ -192,9 +192,9 @@ Clone an existing vendor setup and automatically configure all remotes. With `--
 - Disables push to upstream (read-only)
 
 **Options** (only meaningful for **legacy mirrors** without a `venfork-config` branch. When config is present it is authoritative: a flag that names the recorded value is accepted, and a flag that contradicts it is an error):
-- `--no-public` - Declare a no-public layout (origin + upstream only). Use when the original setup was created with `venfork setup --no-public` but the config branch is missing.
-- `--upstream <url>` - Provide the upstream explicitly, as a GitHub URL or `owner/repo` (anything else exits 2). Useful with `--no-public` (no public fork to derive it from) or to skip the auto-detect prompt.
-- `--public-fork <url>` - Provide the public fork (GitHub URL or `owner/repo`) explicitly. Skips the public-fork detection and prompt; upstream is still read from the fork's parent unless `--upstream` is given. Cannot be combined with `--no-public`.
+- `--own-upstream` - The mirror has no public fork (origin + upstream only). Use when the original setup was created with `venfork setup --own-upstream` but the config branch is missing.
+- `--upstream <url>` - Provide the upstream explicitly, as a GitHub URL or `owner/repo` (anything else exits 2). Useful with `--own-upstream` (no public fork to derive it from) or to skip the auto-detect prompt.
+- `--public-fork <url>` - Provide the public fork (GitHub URL or `owner/repo`) explicitly. Skips the public-fork detection and prompt; upstream is still read from the fork's parent unless `--upstream` is given. Cannot be combined with `--own-upstream`.
 
 `--no-input` never prompts: a URL that clone would ask for exits 2 and names the flag that supplies it. `clone` accepts `--yes` like every command, but has nothing to confirm, so it changes nothing. A clone that fails or is cancelled after the repository was cloned removes the cloned directory, so you can rerun it with the named flag.
 
@@ -204,7 +204,7 @@ Clone an existing vendor setup and automatically configure all remotes. With `--
 - You want automatic remote configuration
 
 **Arguments:**
-- `vendor-repo` - GitHub URL or `owner/repo` of the private vendor repository
+- `mirror` - GitHub URL or `owner/repo` of the private mirror
 
 **Examples:**
 ```bash
@@ -224,13 +224,13 @@ venfork clone git@github.com:acme-corp/awesome-project-private.git
 - If public fork cannot be auto-detected, you'll be prompted for the URL
 - If upstream cannot be auto-detected (no parent), you'll be prompted for the URL
 - An empty answer is rejected and the prompt asks again; cancelling a prompt (Ctrl-C) exits 130
-- Without a terminal (see [Non-interactive use](#non-interactive-use)) these prompts exit 2 instead and name the flag: `--public-fork <url>` for the public fork, `--upstream <url>` for upstream. Use `--no-public --upstream <url>` when the mirror has no public fork
+- Without a terminal (see [Non-interactive use](#non-interactive-use)) these prompts exit 2 instead and name the flag: `--public-fork <url>` for the public fork, `--upstream <url>` for upstream. Use `--own-upstream --upstream <url>` when the mirror has no public fork
 
 ### `venfork sync [--report-issues] [--yes] [--no-input] [--json]`
 
 With `--json`, sync prints one JSON envelope on stdout (see [JSON output](#json-output)).
 
-Update default branches from upstream. With scheduled sync or a preserve list enabled, the private mirror uses a managed `+0/+1` model:
+Update default branches from upstream. With scheduled sync or a preserve list enabled, the private mirror's default branch is upstream plus at most one venfork commit:
 - `public/<default>` matches `upstream/<default>`
 - `origin/<default>` is `upstream/<default>` plus at most one deterministic managed commit (the sync workflow and preserved files). If that commit would add nothing, `origin/<default>` equals `upstream/<default>`.
 - The managed commit's SHA depends only on the upstream tip and its content, so a sync with nothing new to bring in pushes nothing and teammates never see a rewritten default branch.
@@ -265,7 +265,7 @@ venfork sync           # Sync default branches with upstream
 - If divergent commits are detected, sync will abort to prevent data loss
 - The managed commit is built from git trees on a temporary index, never from your working copy, so sparse-checkout, hooks, clean filters and `core.quotePath` do not change it
 - Workflow allow/block entries match file basenames exactly (no glob patterns)
-- A preserved file that upstream adds is replaced by upstream's version. If upstream later deletes that path again, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork preserve remove <path>` to let it go
+- A preserved file that upstream adds is replaced by upstream's version. If upstream later deletes that path again, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork keep remove <path>` to let it go
 
 ### `venfork stage <branch> [--no-pr] [--draft] [--dry-run] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]`
 
@@ -312,7 +312,7 @@ venfork stage feature-auth --yes
 ```
 
 **What it does (with `--no-pr`, and before the PR):**
-1. Refuses branches that are not upstream work: upstream's default branch, anything that is not a local branch (tags, remote-tracking refs), `venfork-config`, and a branch with no history in common with upstream. Like sync, it also refuses while the preserve list holds entries venfork no longer accepts, and names the `venfork preserve remove` command for each.
+1. Refuses branches that are not upstream work: upstream's default branch, anything that is not a local branch (tags, remote-tracking refs), `venfork-config`, and a branch with no history in common with upstream. Like sync, it also refuses while the preserve list holds entries venfork no longer accepts, and names the `venfork keep remove` command for each.
 2. Fetches upstream and origin, then rebuilds the branch as a linear history on `upstream/<default>`: every non-merge commit is cherry-picked in order and venfork-managed commits are dropped. Merge commits never ship (a merge with a manual conflict resolution is refused, since dropping it would lose work). The rebuilt commits get new SHAs even when the branch was already based on upstream.
 3. Checks every rebuilt commit before anything is pushed and refuses the branch when a commit:
    - adds or changes `.github/workflows/venfork-sync.yml`, anything under `.venfork/`, or a preserved path (unless the result is exactly upstream's file at that path). Deleting a preserved file is allowed.
@@ -322,7 +322,7 @@ venfork stage feature-auth --yes
    - was authored or committed by the venfork bot.
    - has an author, committer or message that contains origin's URL, origin's `owner/name`, origin's GitHub Pages address (`<owner>.github.io/<name>`), origin's repo name as a whole word (when it has at least six characters and differs from upstream's; `<name>-public`, `my-<name>` and `<name>.ts` pass, but a plain `<name>` or `<name>#12` does not) or the word `venfork`. Text is percent-decoded before matching, so `acme%2Fwidget-private` is found. For an origin on another host, such as GitHub Enterprise, `owner/name` is read from any `host[:/]owner/name` URL. The same terms apply to the branch name and, unless `--no-pr`, to the PR title and body (this includes `<!-- venfork:internal -->` markers).
 
-   Path matching ignores case. A preserve entry that is a directory on origin's default branch, on your local default branch or anywhere in the mirror history the check reads (possible in an old config) is refused as an invalid entry, with the `venfork preserve remove '<entry>'` command to run. The branch name goes through the same term check before anything is fetched.
+   Path matching ignores case. A preserve entry that is a directory on origin's default branch, on your local default branch or anywhere in the mirror history the check reads (possible in an old config) is refused as an invalid entry, with the `venfork keep remove '<entry>'` command to run. The branch name goes through the same term check before anything is fetched.
 4. Shows the target, the branch, every commit subject and every file that any published commit adds or changes, then asks for confirmation. A file that a later commit deletes is listed as "removed later in the branch, still in history", because the public history still holds it. When commit messages, or (unless `--no-pr`) the upstream PR title or body, contain `#N`, it warns that those numbers will resolve against upstream.
 5. Pushes the rebuilt head with `--force-with-lease` and `--no-follow-tags`, so no local tag goes with it.
 6. Provides a compare URL so you can open the PR yourself.
@@ -434,10 +434,10 @@ Check that a mirror is healthy, then list the links recorded in `venfork-config`
 |---|---|
 | `repo` | You are in a git repo and `venfork-config` is readable |
 | `remotes` | `origin`/`upstream`(/`public`) exist, match the config, and upstream push is `DISABLE` |
-| `mode` | The remotes match the recorded `standard` / `no-public` mode |
+| `mode` | The remotes match the recorded layout: `standard` (with a public fork) or `own-upstream` (`--own-upstream`, stored as `mode: 'no-public'`) |
 | `invariant` | `origin/<default>` is an upstream commit plus at most one managed commit. Several managed or preserve-only commits with no real divergence ask you to run `venfork sync` to fold them |
 | `divergence` | No user commits on `origin`/`public` that would make sync abort |
-| `preserve` | Every preserve entry is a valid single-file path and exists on `origin/<default>` |
+| `preserve` | Every keep entry is a valid single-file path and exists on `origin/<default>`. The text report labels this row `keep`; the JSON id stays `preserve` |
 | `workflow` | The sync workflow on `origin/<default>` matches what this venfork version would write |
 | `transport` | git can reach origin: `git ls-remote --exit-code <origin push URL> HEAD` runs the way venfork's other git calls run (your ssh command with BatchMode for SSH, the gh credential helper for HTTPS), capped at 30 seconds. SSH failure fix: `gh config set git_protocol https` and re-clone, or load an SSH key (or accept GitHub's host key when ssh does not know it). HTTPS failure fix: `gh auth login`. With a schedule set, an HTTPS origin also needs a gh token with the `workflow` scope, because the managed commit changes a workflow file; the fix is `gh auth refresh -s workflow`. Skipped when origin is not on GitHub |
 | `token` | When a schedule is enabled, in both modes: `VENFORK_PUSH_TOKEN` is set on the mirror, or with `schedule set --app` both `VENFORK_APP_CLIENT_ID` and `VENFORK_APP_PRIVATE_KEY` are set, and the public fork has the mirror's owner. In app mode a leftover `VENFORK_PUSH_TOKEN` is a note, not a failure: the check passes and its fix is the `gh secret delete` command. Doctor can only see that the secrets exist: the token itself needs the `workflow` scope (classic) or Workflows: write (fine-grained), and doctor cannot check the App key or installation |
@@ -466,7 +466,7 @@ The cron is five fields. Month and weekday names (`JAN`, `MON-FRI`) are accepted
 
 **When a scheduled sync fails**
 
-The workflow runs `venfork sync --report-issues` with the job's `GITHUB_TOKEN` (the workflow asks for `issues: write`). If sync is blocked by divergent commits, it opens an issue on the mirror labelled `venfork-sync-blocked`, or refreshes the body of the open one, with the changed files and the exact `venfork preserve add ...` or rebase steps. A final `if: failure()` step covers every other failure (install errors, a missing token, timeouts) by opening the same labelled issue or commenting on it with the run URL. The next successful sync comments "Resolved by <run>" and closes the issue. If you close the issue by hand while the divergence is still there, the next blocked run opens a new one. Outside GitHub Actions, `--report-issues` only files the issue when gh confirms the mirror is a private repository.
+The workflow runs `venfork sync --report-issues` with the job's `GITHUB_TOKEN` (the workflow asks for `issues: write`). If sync is blocked by divergent commits, it opens an issue on the mirror labelled `venfork-sync-blocked`, or refreshes the body of the open one, with the changed files and the exact `venfork keep add ...` or rebase steps. A final `if: failure()` step covers every other failure (install errors, a missing token, timeouts) by opening the same labelled issue or commenting on it with the run URL. The next successful sync comments "Resolved by <run>" and closes the issue. If you close the issue by hand while the divergence is still there, the next blocked run opens a new one. Outside GitHub Actions, `--report-issues` only files the issue when gh confirms the mirror is a private repository.
 
 The workflow runs one sync at a time (concurrency group `venfork-sync-<workflow name>`, queued, not cancelled) and stops a run after 30 minutes. It installs venfork before checking out the mirror, with `npm install -g --ignore-scripts`, so no install script runs with the push token in the git config. Before that it sets up Node.js 22 with `actions/setup-node` (pinned by commit), so the run does not depend on the Node the runner image ships.
 
@@ -570,38 +570,38 @@ venfork workflows clear
 5. Precedence: if `enabledWorkflows` is non-empty, it is used and `disabledWorkflows` is ignored
 6. Changes apply to the mirror default branch on next `venfork sync` (a non-empty allow or block list is enough to put the managed commit on the mirror, with or without a schedule or a preserve list)
 
-### `venfork preserve <list|add|remove|clear> [path ...] [--yes] [--no-input] [--json]`
+### `venfork keep <list|add|remove|clear> [path ...] [--yes] [--no-input] [--json]`
 
 Keep mirror-only files (for example a caller workflow or an internal doc) on the mirror default branch across `venfork sync`. Sync normally makes `origin/<default>` equal to upstream; preserved files ride in the single venfork-managed commit instead. With `--json`, every action prints one JSON envelope on stdout with the list after the action (see [JSON output](#json-output)); a path named `--json` goes after `--`.
 
 **Examples:**
 ```bash
-venfork preserve add .github/workflows/internal-ci.yml docs/INTERNAL.md
-venfork preserve list
-venfork preserve remove docs/INTERNAL.md
-venfork preserve clear
+venfork keep add .github/workflows/internal-ci.yml docs/INTERNAL.md
+venfork keep list
+venfork keep remove docs/INTERNAL.md
+venfork keep clear
 ```
 
 **Rules:**
-- Each entry is a single file: a regular file, an executable or a symlink. `preserve add` checks `origin/<default>` and refuses directories, missing paths and glob patterns (`*`, `?`, `[`); list each file instead. Commit the file to `origin/<default>` first.
+- Each entry is a single file: a regular file, an executable or a symlink. `keep add` checks `origin/<default>` and refuses directories, missing paths and glob patterns (`*`, `?`, `[`); list each file instead. Commit the file to `origin/<default>` first.
 - Paths are clean repo-relative paths: no leading `/` or `-`, no `..` or `.` segments, no backslashes or whitespace.
 - Commit the file to `origin/<default>` before you sync. On every sync, venfork copies each preserved file from the previous origin tip into the new managed commit. If a preserved file is missing, sync aborts until you commit it or remove the entry.
-- Upstream wins. When upstream adds a file at a preserved path, sync uses upstream's version. If upstream later deletes that path, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork preserve remove <path>` to let it go. A preserved file also cannot be restored when upstream adds a file at one of its parent directories; sync aborts and names the path.
+- Upstream wins. When upstream adds a file at a preserved path, sync uses upstream's version. If upstream later deletes that path, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork keep remove <path>` to let it go. A preserved file also cannot be restored when upstream adds a file at one of its parent directories; sync aborts and names the path.
 - Commits that only touch preserved files do not count as divergence on origin, so sync folds them into the managed commit.
-- `venfork preserve remove` and `clear` re-stamp `origin/<default>` in the same step when the managed commit still carries a dropped file.
+- `venfork keep remove` and `clear` re-stamp `origin/<default>` in the same step when the managed commit still carries a dropped file.
 - The sync workflow and anything under `.venfork/` cannot be preserved: venfork owns them. A commit with the managed trailer that also changes any other file counts as your work, so sync stops on it as divergence.
 - If the `venfork-config` branch is missing while `origin/<default>` still carries a managed commit, sync refuses. Restore the branch. `venfork setup` never overwrites an existing config branch.
 
-**Directory entries:** an old config can still hold a directory entry. `venfork stage` and `venfork sync` treat an entry that is a directory on origin's default branch as invalid and refuse to run until you run `venfork preserve remove '<directory>'` and add each file. Every `venfork preserve add` and `venfork preserve remove` command venfork prints single-quotes its paths, so a shell passes them through unchanged (`*.md` is not expanded, `$(...)` does not run).
+**Directory entries:** an old config can still hold a directory entry. `venfork stage` and `venfork sync` treat an entry that is a directory on origin's default branch as invalid and refuse to run until you run `venfork keep remove '<directory>'` and add each file. Every `venfork keep add` and `venfork keep remove` command venfork prints single-quotes its paths, so a shell passes them through unchanged (`*.md` is not expanded, `$(...)` does not run).
 
-**Invalid entries:** an entry written by an older venfork, or by hand, that is not a valid single-file path (for example `docs/*.md`) makes sync abort and shows up in `venfork preserve list` and `venfork doctor`. Remove it with `venfork preserve remove <entry>`, using the entry exactly as listed. `remove` works on invalid entries too.
+**Invalid entries:** an entry written by an older venfork, or by hand, that is not a valid single-file path (for example `docs/*.md`) makes sync abort and shows up in `venfork keep list` and `venfork doctor`. Remove it with `venfork keep remove <entry>`, using the entry exactly as listed. `remove` works on invalid entries too.
 
 ## Output Streams
 
 venfork keeps stdout for results and sends everything a human reads to stderr:
 
 - **stdout** carries only results: `venfork --version`, help you ask for (`venfork help`, `venfork <command> --help`) and the `--json` envelope.
-- **stderr** carries progress, spinners, prompts, warnings, errors, usage printed for a bad command line (including bare `venfork` with no command), the human-readable reports of `doctor`, `schedule status`, `workflows status` and `preserve list`, and the output of git and gh subprocesses.
+- **stderr** carries progress, spinners, prompts, warnings, errors, usage printed for a bad command line (including bare `venfork` with no command), the human-readable reports of `doctor`, `schedule status`, `workflows status` and `keep list`, and the output of git and gh subprocesses.
 
 So `venfork doctor --json > health.json` writes clean JSON while progress still shows in the terminal, and `venfork sync 2>sync.log` keeps stdout empty.
 
@@ -609,7 +609,7 @@ When stderr is a terminal, venfork draws styled output with colors and spinners.
 
 ## JSON output
 
-Every command accepts `--json`: `setup`, `clone`, `sync`, `schedule`, `stage` (branch and `stage issue`), `pull pr`, `pull issue`, `doctor`, `workflows` and `preserve`, with every action of `schedule`, `workflows` and `preserve`. With it, stdout gets exactly one JSON object on one line, followed by a newline, also when the command fails. Progress, warnings and errors still go to stderr as usual. The exit code still follows the [exit codes](#non-interactive-use) table.
+Every command accepts `--json`: `setup`, `clone`, `sync`, `schedule`, `stage` (branch and `stage issue`), `pull pr`, `pull issue`, `doctor`, `workflows` and `keep`, with every action of `schedule`, `workflows` and `keep`. With it, stdout gets exactly one JSON object on one line, followed by a newline, also when the command fails. Progress, warnings and errors still go to stderr as usual. The exit code still follows the [exit codes](#non-interactive-use) table.
 
 `--json` implies `--no-input`: venfork never prompts, even at a terminal. A confirm without `--yes` gives a `missing-input` error and exit 2, and so does a value that only a prompt could give (for example `setup` without `<upstream>`, or `clone` of a legacy mirror without `--public-fork`).
 
@@ -619,7 +619,7 @@ Every command accepts `--json`: `setup`, `clone`, `sync`, `schedule`, `stage` (b
 { "schemaVersion": 1, "ok": false, "error": { "code": "branch-not-found", "message": "...", "hint": "Run `git branch` to list local branches.", "details": { "branch": "feat" } } }
 ```
 
-An error can carry `hint`, the next step (often a command to run), and `details`, facts a script can act on. Without `--json`, the hint prints after the message on the same line. `details` per code: `branch-not-found` `{ branch }`; `sync-divergence` `{ branch, origin: { count, files }, public: { count, files }, command? }`, where `command` is the `venfork preserve add <files>` that keeps origin's files, each path single-quoted, present only when 1 to 10 of the files can be preserved (`origin.files` always lists every file); `precondition` for a preserved file sync cannot restore `{ path, command }`, where `command` is the `venfork preserve remove` for it; `stage-leak` `{ branch, paths, leak: "path" | "content", commit? }`; `mirror-reference` `{ where, matched }`; `redaction` `{ snippet }`; `remote-not-found` `{ remote }`; `config` `{ reason }`; `pin-downgrade` `{ pinned, running }`; `missing-input` `{ flag, question }`.
+An error can carry `hint`, the next step (often a command to run), and `details`, facts a script can act on. Without `--json`, the hint prints after the message on the same line. `details` per code: `branch-not-found` `{ branch }`; `sync-divergence` `{ branch, origin: { count, files }, public: { count, files }, command? }`, where `command` is the `venfork keep add <files>` that keeps origin's files, each path single-quoted, present only when 1 to 10 of the files can be preserved (`origin.files` always lists every file); `precondition` for a preserved file sync cannot restore `{ path, command }`, where `command` is the `venfork keep remove` for it; `stage-leak` `{ branch, paths, leak: "path" | "content", commit? }`; `mirror-reference` `{ where, matched }`; `redaction` `{ snippet }`; `remote-not-found` `{ remote }`; `config` `{ reason }`; `pin-downgrade` `{ pinned, running }`; `missing-input` `{ flag, question }`.
 
 `schemaVersion` changes only when a field is removed or changes meaning. New fields can be added in the same version.
 
@@ -637,7 +637,7 @@ Any command line that contains `--json` before any `--` gets the envelope, whate
 | `github` | A gh call to GitHub failed, for example creating a fork or repo, reading an issue or opening a PR; the message is gh's error |
 | `precondition` | The state on GitHub, on disk or in `venfork-config` does not allow the action, for example an existing directory, a repo that is not the expected fork, a flag that contradicts the recorded layout, a path that is not in the preserve list, or staging upstream's default branch |
 | `remote-not-found` | A required remote (`origin`, `public`, `upstream`) is missing |
-| `not-in-repository` | A command that runs in a mirror (`sync`, `stage`, `pull`, `schedule`, `workflows`, `preserve`) was run outside a git repository |
+| `not-in-repository` | A command that runs in a mirror (`sync`, `stage`, `pull`, `schedule`, `workflows`, `keep`) was run outside a git repository |
 | `branch-not-found` | The branch does not exist |
 | `sync-divergence` | Sync stopped: origin or public has commits upstream does not have |
 | `config` | The `venfork-config` branch is missing, cannot be read, is invalid, or moved during a write |
@@ -661,7 +661,7 @@ Any command line that contains `--json` before any `--` gets the envelope, whate
 - `clone`: `{ "mode": "standard" | "no-public", "directory", "remotes": { "origin", "public"?, "upstream" } }`. `remotes` holds each remote's fetch URL; `public` is absent in no-public mode.
 - `schedule` (every action): `{ "enabled", "cron"?, "auth": "token" | "app" }`, the schedule after the action. `cron` is absent when none is stored; `disable` keeps the stored cron.
 - `workflows` (every action): `{ "mode": "allow" | "block" | "none", "enabledWorkflows", "disabledWorkflows" }`, the policy after the action. `mode` is `allow` when the allowlist is set (it wins over the block list), `block` when only the block list is set.
-- `preserve` (every action): `{ "paths", "invalidPaths" }`, the list after the action. `invalidPaths` are entries sync refuses to run with until they are removed.
+- `keep` (every action): `{ "paths", "invalidPaths" }`, the list after the action. `invalidPaths` are entries sync refuses to run with until they are removed.
 
 ```bash
 venfork sync --json | jq -r '.result.status'
@@ -684,7 +684,7 @@ When venfork cannot prompt:
 - A prompt without a default exits 2. The error on stderr names the argument or flag that supplies the value, for example `the <upstream> argument` or `--upstream <url>`.
 - A confirm exits 2 and names `--yes`. Nothing is pushed or created.
 
-`--yes` (`-y`) answers every confirm of that command with yes, with or without a terminal: the `setup` personal-account confirm, the `stage` push confirm, and the `stage issue` and `pull issue` confirms. It is the only way to give consent without a prompt. Every command accepts `--yes`, `-y` and `--no-input`, so a wrapper can always pass one fixed flag set; on a command with nothing to confirm or ask (`sync`, `doctor`, `pull pr`, `schedule`, `workflows`, `preserve`, and `clone` for `--yes`) they change nothing.
+`--yes` (`-y`) answers every confirm of that command with yes, with or without a terminal: the `setup` personal-account confirm, the `stage` push confirm, and the `stage issue` and `pull issue` confirms. It is the only way to give consent without a prompt. Every command accepts `--yes`, `-y` and `--no-input`, so a wrapper can always pass one fixed flag set; on a command with nothing to confirm or ask (`sync`, `doctor`, `pull pr`, `schedule`, `workflows`, `keep`, and `clone` for `--yes`) they change nothing.
 
 ```bash
 # In CI: never prompt, and confirm the push explicitly

@@ -2,38 +2,37 @@ import { describe, expect, test } from 'bun:test';
 import { errorText } from '../../src/errors.js';
 import {
   divergenceError,
-  PRESERVE_COMMAND_MAX_FILES,
-  preserveCommandFor,
+  formatDivergenceReport,
+  KEEP_COMMAND_MAX_FILES,
+  keepCommandFor,
 } from '../../src/shared/divergence.js';
 
-describe('preserveCommandFor', () => {
-  test('preserveCommandFor shell-quotes each path', () => {
+describe('keepCommandFor', () => {
+  test('keepCommandFor shell-quotes each path', () => {
     expect(
-      preserveCommandFor([
+      keepCommandFor([
         'docs/INTERNAL.md',
         'notes$(id>PWNED).md',
         "it's.md",
         'a;b`c`.md',
       ])
     ).toBe(
-      "venfork preserve add 'docs/INTERNAL.md' 'notes$(id>PWNED).md' 'it'\\''s.md' 'a;b`c`.md'"
+      "venfork keep add 'docs/INTERNAL.md' 'notes$(id>PWNED).md' 'it'\\''s.md' 'a;b`c`.md'"
     );
   });
 
-  test('preserveCommandFor leaves out paths the preserve list refuses', () => {
-    expect(preserveCommandFor(['ok.md', 'has space.md', '*.md'])).toBe(
-      "venfork preserve add 'ok.md'"
+  test('keepCommandFor leaves out paths the preserve list refuses', () => {
+    expect(keepCommandFor(['ok.md', 'has space.md', '*.md'])).toBe(
+      "venfork keep add 'ok.md'"
     );
-    expect(preserveCommandFor(['*.md'])).toBeUndefined();
+    expect(keepCommandFor(['*.md'])).toBeUndefined();
   });
 
-  test('preserveCommandFor gives no command above PRESERVE_COMMAND_MAX_FILES files', () => {
+  test('keepCommandFor gives no command above KEEP_COMMAND_MAX_FILES files', () => {
     const files = (count: number) =>
       Array.from({ length: count }, (_, i) => `gen/file-${i}.txt`);
-    expect(preserveCommandFor(files(PRESERVE_COMMAND_MAX_FILES))).toBeDefined();
-    expect(
-      preserveCommandFor(files(PRESERVE_COMMAND_MAX_FILES + 1))
-    ).toBeUndefined();
+    expect(keepCommandFor(files(KEEP_COMMAND_MAX_FILES))).toBeDefined();
+    expect(keepCommandFor(files(KEEP_COMMAND_MAX_FILES + 1))).toBeUndefined();
   });
 });
 
@@ -60,5 +59,21 @@ describe('divergenceError', () => {
       expect(error.hint).toMatch(/move the commits to a branch and retry/i);
       expect(error.hint).not.toContain('sync again');
     }
+  });
+});
+
+describe('formatDivergenceReport', () => {
+  test('names the paths it left out of the keep hint', () => {
+    const report = formatDivergenceReport(
+      divergenceError(
+        'main',
+        { count: 1, files: ['ok.md', 'has space.md'] },
+        { count: 0, files: [] }
+      )
+    );
+    expect(report).toContain("venfork keep add 'ok.md'");
+    expect(report).toContain(
+      '(left out of the hint because the keep list cannot hold them: has space.md)'
+    );
   });
 });

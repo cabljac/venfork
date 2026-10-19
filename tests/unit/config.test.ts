@@ -592,9 +592,9 @@ describe('updateVenforkConfig', () => {
 
 describe('preserve remove hints', () => {
   test.each([
-    ['*.md', "venfork preserve remove '*.md'"],
-    ['docs/', "venfork preserve remove 'docs/'"],
-    ["it's here.md", "venfork preserve remove 'it'\\''s here.md'"],
+    ['*.md', "venfork keep remove '*.md'"],
+    ['docs/', "venfork keep remove 'docs/'"],
+    ["it's here.md", "venfork keep remove 'it'\\''s here.md'"],
   ])('quotes %p for the shell', (entry, hint) => {
     expect(preserveRemoveHint(entry)).toBe(hint);
   });
@@ -607,7 +607,7 @@ describe('preserve remove hints', () => {
         invalidPreserve: ['*.md', 'docs/'],
       })
     ).toThrow(
-      "  - *.md: venfork preserve remove '*.md'\n  - docs/: venfork preserve remove 'docs/'"
+      "  - *.md: venfork keep remove '*.md'\n  - docs/: venfork keep remove 'docs/'"
     );
   });
 });

@@ -22,7 +22,7 @@ import {
   UsageError,
   VenforkError,
 } from '../../src/errors.js';
-import { parsePreserveCliArgs } from '../../src/preserve-args.js';
+import { parseKeepCliArgs } from '../../src/keep-args.js';
 import { parsePullCliArgs } from '../../src/pull-args.js';
 import { parseScheduleCliArgs } from '../../src/schedule-args.js';
 import { parseSetupCliArgs } from '../../src/setup-args.js';
@@ -158,17 +158,17 @@ describe('envelopes', () => {
       'main',
       { count: 1, files: ['docs/INTERNAL.md'] },
       { count: 0, files: [] },
-      'venfork preserve add docs/INTERNAL.md'
+      'venfork keep add docs/INTERNAL.md'
     );
     expect(errorOf(errorEnvelope(error))).toEqual({
       code: 'sync-divergence',
       message: error.message,
-      hint: 'If the files belong only on the mirror, run `venfork preserve add docs/INTERNAL.md`. Otherwise move the commits to a branch and retry.',
+      hint: 'If the files belong only on the mirror, run `venfork keep add docs/INTERNAL.md`. Otherwise move the commits to a branch and retry.',
       details: {
         branch: 'main',
         origin: { count: 1, files: ['docs/INTERNAL.md'] },
         public: { count: 0, files: [] },
-        command: 'venfork preserve add docs/INTERNAL.md',
+        command: 'venfork keep add docs/INTERNAL.md',
       },
     });
   });
@@ -275,7 +275,7 @@ describe('jsonRequested', () => {
 
   test('stops at --', () => {
     expect(jsonRequested('stage', ['--', '--json'])).toBe(false);
-    expect(jsonRequested('preserve', ['add', '--', '--json'])).toBe(false);
+    expect(jsonRequested('keep', ['add', '--', '--json'])).toBe(false);
   });
 
   const parsedJson: Record<string, (args: string[]) => boolean> = {
@@ -287,7 +287,7 @@ describe('jsonRequested', () => {
     clone: (args) => parseCloneCliArgs(args).json,
     schedule: (args) => parseScheduleCliArgs(args).json,
     workflows: (args) => parseWorkflowsCliArgs(args).json,
-    preserve: (args) => parsePreserveCliArgs(args).json,
+    keep: (args) => parseKeepCliArgs(args).json,
   };
   test.each([
     ['sync', []],
@@ -313,10 +313,10 @@ describe('jsonRequested', () => {
     ['workflows', ['status', '--json']],
     ['workflows', ['allow', 'ci.yml', '--json']],
     ['workflows', []],
-    ['preserve', ['--json']],
-    ['preserve', ['add', 'a.txt', '--json']],
-    ['preserve', ['add', '--', '--json']],
-    ['preserve', ['list']],
+    ['keep', ['--json']],
+    ['keep', ['add', 'a.txt', '--json']],
+    ['keep', ['add', '--', '--json']],
+    ['keep', ['list']],
   ] as const)('%s %p: the pre-scan agrees with the parser', (command, args) => {
     expect(jsonRequested(command, [...args])).toBe(
       parsedJson[command]([...args])

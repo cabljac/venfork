@@ -4,7 +4,7 @@ import { stdoutUi, type Ui } from '../shared/ui.js';
 const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   [
     'setup',
-    `venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--no-public] [--yes] [--no-input] [--json]
+    `venfork setup <upstream> [name] [--org <org>] [--fork-name <repo>] [--own-upstream] [--yes] [--no-input] [--json]
   Create private mirror + public fork for vendor workflow
   <upstream>: GitHub HTTPS/SSH URL, or shorthand owner/repo (e.g. facebook/react)
 
@@ -13,7 +13,7 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
                        Your own username keeps the personal account with no confirm
   • --fork-name <name> Public fork repo name under owner (gh repo fork --fork-name).
                        Use when upstream is already owner/repo so the fork needs a different name.
-  • --no-public        Skip the public fork hop entirely. Only origin + upstream are
+  • --own-upstream     Skip the public fork hop entirely. Only origin + upstream are
                        configured; \`venfork stage\` later pushes branches directly to upstream.
                        Use when you own the upstream repo (no need to round-trip through a fork).
                        Mutually exclusive with --fork-name.
@@ -24,26 +24,26 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
 
   Creates:
   • Private mirror (yourname/project-private) - internal work
-  • Public fork (yourname/project) - staging for upstream (omitted with --no-public)
-  • Configures remotes: origin, public, upstream (public omitted with --no-public)`,
+  • Public fork (yourname/project) - staging for upstream (omitted with --own-upstream)
+  • Configures remotes: origin, public, upstream (public omitted with --own-upstream)`,
   ],
   [
     'clone',
-    `venfork clone <vendor-repo> [--no-public] [--upstream <url>] [--public-fork <url>] [--yes] [--no-input] [--json]
+    `venfork clone <mirror> [--own-upstream] [--upstream <url>] [--public-fork <url>] [--yes] [--no-input] [--json]
   Clone an existing vendor setup and configure remotes automatically
-  <vendor-repo>: URL or owner/repo for the private mirror
+  <mirror>: URL or owner/repo for the private mirror
 
-  Reads layout (mode + URLs) from the venfork-config branch when present.
-  Falls back to auto-detection when the branch is absent (legacy mirrors):
+  Reads the layout (public fork or not) and URLs from the mirror's venfork settings.
+  For a mirror with no venfork settings (for example one not created by \`venfork setup\`), it detects them:
   • Public fork (strips -private suffix)
   • Upstream repository (from public fork's parent)
   • Configures three remotes (origin, public, upstream)
 
-  Options (only meaningful when venfork-config is absent):
-  • --no-public        Declare a no-public layout (origin + upstream only)
+  Options (only when the mirror has no venfork settings):
+  • --own-upstream     The mirror has no public fork (origin + upstream only)
   • --upstream <url>   Provide the upstream URL explicitly (skips auto-detect/prompt)
   • --public-fork <url> Provide the public fork URL or owner/repo (skips auto-detect/prompt);
-                       not with --no-public
+                       not with --own-upstream
   • --no-input         Never prompt; a URL that would be asked for exits 2
   • --json             Print one JSON envelope on stdout; implies --no-input`,
   ],
@@ -55,30 +55,30 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   [
     'doctor',
     `venfork doctor [--yes] [--no-input] [--json]
-  Check mirror health: remotes, the managed-commit invariant, divergence,
-  preserved files, the sync workflow, the git transport (gh over HTTPS, or an SSH
+  Check mirror health: remotes, venfork's sync commit, divergence,
+  kept files, the sync workflow, the git transport (gh over HTTPS, or an SSH
   key GitHub accepts), the push secrets (VENFORK_PUSH_TOKEN, or the
   GitHub App secrets with schedule set --app) and the last scheduled run
-  Also lists the shipped and pulled branch, PR and issue links from venfork-config
+  Also lists the shipped and pulled branch, PR and issue links venfork recorded
   Exits 1 when any check fails; --json prints the envelope with result
     { checks, links } (ok: true even when a check fails)`,
   ],
   [
     'sync',
     `venfork sync [--report-issues] [--yes] [--no-input] [--json]
-  Update the default branches of origin (and public, unless the mirror is in no-public mode) to match upstream
+  Update the default branches of origin (and public, unless the mirror has no public fork) to match upstream
   --report-issues (used by the scheduled workflow) opens a venfork-sync-blocked
     issue on the mirror when sync is blocked and closes it after a successful sync
-  Keeps the private default branch at upstream plus one venfork-managed commit
-    when that commit carries the sync workflow or preserved files
-  Applies workflow filtering from enabledWorkflows/disabledWorkflows policy
+  Keeps the private default branch at upstream plus one sync commit from venfork
+    when the mirror has a schedule or kept files
+  Applies the workflow allow and block lists (see venfork workflows)
   Syncs main/master branch without affecting your current work
   --json prints one JSON envelope on stdout (see README "JSON output")`,
   ],
   [
     'schedule',
     `venfork schedule <status|set <cron> [--app|--token]|disable> [--yes] [--no-input] [--json]
-  Manage scheduled sync config stored in venfork-config
+  Manage scheduled sync for the mirror
   Set writes/removes ${SYNC_WORKFLOW_PATH} on the private mirror default branch
   --app mints a one-hour push token from a GitHub App on each run
     (secrets VENFORK_APP_CLIENT_ID and VENFORK_APP_PRIVATE_KEY)
@@ -94,8 +94,8 @@ venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--jso
   Push a branch (or an issue) from the mirror outward, to the public fork or upstream
   Branch names \`issue\` and \`branch\` need the explicit form: venfork stage branch issue
   Branch: push to public fork for PR to upstream
-  Rebuilds the branch as linear history on upstream (merges and venfork-managed
-    commits dropped, new SHAs) and refuses commits that carry mirror-only files or
+  Rebuilds the branch as linear history on upstream (merges and venfork's sync
+    commit dropped, new SHAs) and refuses commits that carry mirror-only files or
     mention the mirror or venfork in their author, committer or message
   Then opens the upstream PR using the internal-review PR's body
     (with <!-- venfork:internal -->...<!-- /venfork:internal --> blocks redacted)
@@ -112,7 +112,7 @@ venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--jso
   • --no-input             Never prompt; without --yes the confirm exits 2
   • --json                 Print one JSON envelope on stdout; implies --no-input
   Issue: read the internal mirror issue, strip venfork:internal blocks, open the
-    upstream counterpart, record linkage in venfork-config
+    upstream counterpart, record the link
   This is when your work becomes visible to the client`,
   ],
   [
@@ -130,19 +130,19 @@ venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json
   [
     'workflows',
     `venfork workflows <status|allow|block|unallow|unblock|clear> [workflow-file ...] [--yes] [--no-input] [--json]
-  Configure workflow allowlist/blocklist policy in venfork-config
+  Choose which upstream workflows run on the mirror (allowlist or blocklist)
   allow/block add files to their list; unallow/unblock remove them;
   clear empties both lists
   --json prints the policy after the action as one JSON envelope on stdout`,
   ],
   [
-    'preserve',
-    `venfork preserve <list|add|remove|clear> [path ...] [--yes] [--no-input] [--json]
+    'keep',
+    `venfork keep <list|add|remove|clear> [path ...] [--yes] [--no-input] [--json]
   Carry mirror-only files (e.g. caller workflows) forward across \`venfork sync\`
   Each entry is a single repo-relative file (no globs, no directories), read from
   the previous origin tip on every sync
   Upstream wins on collision; missing source aborts sync until the file is committed
-  \`venfork preserve remove <path>\` also removes an invalid entry
+  \`venfork keep remove <path>\` also removes an invalid entry
   --json prints the list after the action as one JSON envelope on stdout`,
   ],
 ];
@@ -161,7 +161,7 @@ const SUBCOMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
     'pull issue',
     `venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]
   Read an upstream issue and open an internal triage issue on the mirror
-  Records linkage in venfork-config. No comment sync; the linkage is one-shot.
+  Records the link. No comment sync; the link is one-shot.
   --yes opens it without the confirm; --no-input without --yes exits 2
   --json prints one JSON envelope on stdout and implies --no-input`,
   ],
@@ -169,11 +169,27 @@ const SUBCOMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
     'stage issue',
     `venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]
   Read an internal mirror issue, strip venfork:internal blocks,
-  open the upstream counterpart, record linkage in venfork-config
+  open the upstream counterpart, record the link
   --yes opens it without the confirm; --no-input without --yes exits 2
   --json prints one JSON envelope on stdout and implies --no-input`,
   ],
 ];
+
+/**
+ * Every help entry as the `command` and `rest` that select it in
+ * `commandHelp`, commands first, then subcommands.
+ */
+export function helpTopics(): ReadonlyArray<
+  readonly [string, readonly string[]]
+> {
+  return [
+    ...COMMAND_HELP.map(([name]) => [name, []] as const),
+    ...SUBCOMMAND_HELP.map(([name]) => {
+      const [command, ...rest] = name.split(' ');
+      return [command ?? name, rest] as const;
+    }),
+  ];
+}
 
 /**
  * Usage text for one command (`venfork <command> --help`), or null when

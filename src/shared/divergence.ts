@@ -168,19 +168,19 @@ export async function checkDivergence(args: {
   return { count, files: Array.from(files).sort(), weakManaged };
 }
 
-/** The most files {@link preserveCommandFor} puts in one command. */
-export const PRESERVE_COMMAND_MAX_FILES = 10;
+/** The most files {@link keepCommandFor} puts in one command. */
+export const KEEP_COMMAND_MAX_FILES = 10;
 
 /**
- * `venfork preserve add <files>` for the files the preserve list accepts,
+ * `venfork keep add <files>` for the files the preserve list accepts,
  * each shell-quoted. Undefined when it accepts none of them, or more than
- * {@link PRESERVE_COMMAND_MAX_FILES}: a partial command would keep only
+ * {@link KEEP_COMMAND_MAX_FILES}: a partial command would keep only
  * some files.
  */
-export function preserveCommandFor(files: string[]): string | undefined {
+export function keepCommandFor(files: string[]): string | undefined {
   const valid = files.filter((file) => normalizePreservePath(file) !== null);
-  return valid.length > 0 && valid.length <= PRESERVE_COMMAND_MAX_FILES
-    ? `venfork preserve add ${valid.map(shellQuote).join(' ')}`
+  return valid.length > 0 && valid.length <= KEEP_COMMAND_MAX_FILES
+    ? `venfork keep add ${valid.map(shellQuote).join(' ')}`
     : undefined;
 }
 
@@ -197,7 +197,7 @@ export function divergenceError(
     defaultBranch,
     origin,
     publicFork,
-    preserveCommandFor(origin.files)
+    keepCommandFor(origin.files)
   );
 }
 
@@ -227,9 +227,9 @@ export function formatDivergenceReport(
   }
 
   // When origin diverges, surface the changed files and a concrete
-  // `venfork preserve add ...` hint. Most likely cause is a mirror-only
+  // `venfork keep add ...` hint. Most likely cause is a mirror-only
   // file the user committed directly (or one whose preserve entry was
-  // just removed) — both cases resolve with `preserve add`. Public
+  // just removed); both cases resolve with `keep add`. Public
   // divergence does NOT get this hint: preserve doesn't apply to public,
   // so suggesting it would mislead.
   const sections: string[] = [warnings.join('\n')];
@@ -255,11 +255,11 @@ export function formatDivergenceReport(
     }
     if (validForPreserve.length > 0) {
       sections.push(
-        `If these are mirror-only files you want to keep across sync, add them to preserve:\n  venfork preserve add ${validForPreserve.slice(0, maxFiles).map(shellQuote).join(' ')}${more(validForPreserve.length)}`
+        `If these are mirror-only files you want to keep across sync, keep them:\n  venfork keep add ${validForPreserve.slice(0, maxFiles).map(shellQuote).join(' ')}${more(validForPreserve.length)}`
       );
       if (invalidForPreserve.length > 0) {
         sections.push(
-          `(skipped from the hint — paths can't be expressed in the preserve allowlist: ${invalidForPreserve.join(', ')})`
+          `(left out of the hint because the keep list cannot hold them: ${invalidForPreserve.join(', ')})`
         );
       }
     }

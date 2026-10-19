@@ -18,7 +18,7 @@ T=$(mktemp -d); bun scripts/verify-fixture.ts --shell > "$T/vf.env"
 
 - Without `--shell` the script prints JSON: `root`, `work`, `upstream`, `origin`, `publicFork`, `upstreamDev`, `originDev`, `cli`, `ghStubDir`, `env`, `unset`.
   Apply the whole `env` (it includes `PATH` with the `gh` stub first) and remove every name in `unset`. With only part of `env`, the real `gh` can run.
-- `--no-public` builds the two-remote layout. `--commits <n>` seeds more upstream commits.
+- `--own-upstream` builds the two-remote layout. `--commits <n>` seeds more upstream commits.
 - The sourced file sets `HOME`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`, `VF_*` paths, and a `gh` stub on `PATH`.
   The stub passes `gh auth status` and fails all else. No drive can reach GitHub.
 - Helpers: `venfork`, `vf_tip <repo> [ref]`, `vf_pushes <repo> [ref]` (reflog count = accepted pushes),

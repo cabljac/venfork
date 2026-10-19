@@ -10,7 +10,7 @@ import {
 } from '../config.js';
 import { PreconditionError } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
-import { normalizePreserveArgs } from '../preserve-args.js';
+import { normalizeKeepArgs } from '../keep-args.js';
 import { applyConfigChange } from '../shared/config-change.js';
 import { changedFilesInCommit } from '../shared/divergence.js';
 import { hasManagedTrailer } from '../shared/managed-commit.js';
@@ -89,7 +89,7 @@ async function writeRemoval(
   );
   if (unknown.length > 0) {
     throw new PreconditionError(
-      `Not in the preserve list: ${unknown.map((entry) => `'${entry}'`).join(', ')}. Run \`venfork preserve list\` to see the entries.`
+      `Not in the keep list: ${unknown.map((entry) => `'${entry}'`).join(', ')}. Run \`venfork keep list\` to see the entries.`
     );
   }
   if (carrying?.where === 'tip') {
@@ -105,15 +105,15 @@ async function writeRemoval(
   return updated;
 }
 
-/** The preserve list after `venfork preserve`, reported as the `--json` result. */
-export interface PreserveResult {
+/** The preserve list after `venfork keep`, reported as the `--json` result. */
+export interface KeepResult {
   /** The valid preserve entries. */
   paths: string[];
   /** Entries sync refuses to run with until they are removed. */
   invalidPaths: string[];
 }
 
-function preserveResult(config: VenforkConfig): PreserveResult {
+function preserveResult(config: VenforkConfig): KeepResult {
   return {
     paths: config.preserve ?? [],
     invalidPaths: config.invalidPreserve ?? [],
@@ -121,18 +121,18 @@ function preserveResult(config: VenforkConfig): PreserveResult {
 }
 
 /**
- * Preserve command: manage the `preserve` allowlist of mirror-only file paths
+ * Keep command: manage the `preserve` allowlist of mirror-only file paths
  * carried forward by `venfork sync`. Allowlist-only / opt-in: there's no
  * "deny preserve" concept (entries can still be added, removed, or cleared;
  * only the deny-direction has no semantics). Remove and clear re-stamp
  * origin's default branch when its managed commit carries a dropped file.
  * @returns The list after the action, for `--json`.
  */
-export async function preserveCommand(
+export async function keepCommand(
   action: 'list' | 'add' | 'remove' | 'clear',
   paths: string[]
-): Promise<PreserveResult> {
-  p.intro('🧷 Venfork Preserve');
+): Promise<KeepResult> {
+  p.intro('🧷 Venfork Keep');
   const repoDir = process.cwd();
 
   try {
@@ -144,14 +144,11 @@ export async function preserveCommand(
       const entries = config.preserve ?? [];
       if (entries.length === 0) {
         p.note(
-          'No files preserved. Sync will drop any mirror-only files on every run.',
-          'Preserve Status'
+          'No files kept. Sync will drop any mirror-only files on every run.',
+          'Keep list'
         );
       } else {
-        p.note(
-          entries.map((entry) => `- ${entry}`).join('\n'),
-          'Preserved files'
-        );
+        p.note(entries.map((entry) => `- ${entry}`).join('\n'), 'Kept files');
       }
       const invalid = config.invalidPreserve ?? [];
       if (invalid.length > 0) {
@@ -162,7 +159,7 @@ export async function preserveCommand(
           'Invalid entries (sync refuses to run until they are removed)'
         );
       }
-      p.outro('✨ Preserve list shown');
+      p.outro('✨ Keep list shown');
       return preserveResult(config);
     }
 
@@ -178,7 +175,7 @@ export async function preserveCommand(
         listed,
         listed
       );
-      p.outro('✨ Preserve list cleared.');
+      p.outro('✨ Keep list cleared.');
       return preserveResult(cleared);
     }
 
@@ -199,23 +196,23 @@ export async function preserveCommand(
       );
       p.note(
         toRemove.map((entry) => `- ${entry}`).join('\n'),
-        'Removed from preserve list'
+        'Removed from keep list'
       );
-      p.outro('✨ Preserve list updated.');
+      p.outro('✨ Keep list updated.');
       return preserveResult(updated);
     }
 
-    const validated = normalizePreserveArgs(paths);
+    const validated = normalizeKeepArgs(paths);
     await assertPreserveEntriesAreFiles(validated, repoDir);
     const updated = await updateVenforkConfig(repoDir, {
       preserveAdd: validated,
     });
     p.note(
       validated.map((entry) => `- ${entry}`).join('\n'),
-      'Added to preserve list'
+      'Added to keep list'
     );
     p.outro(
-      '✨ Preserve list updated. Run `venfork sync` to apply on the private mirror default branch.'
+      '✨ Keep list updated. Run `venfork sync` to apply on the private mirror default branch.'
     );
     return preserveResult(updated);
   } catch (error) {

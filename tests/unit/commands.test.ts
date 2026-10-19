@@ -872,7 +872,7 @@ describe('setupCommand - idempotent recovery', () => {
 
     expect(clack.log.error).toHaveBeenCalledWith(
       expect.stringContaining(
-        'existing venfork-config disagrees with this setup: mode is no-public (expected standard); upstreamUrl is git@github.com:other/project.git (expected git@github.com:test/repo.git); publicForkUrl is (none) (expected git@github.com:testuser/repo.git)'
+        "mirror's existing venfork settings disagree with this setup: layout is own-upstream (expected standard); upstreamUrl is git@github.com:other/project.git (expected git@github.com:test/repo.git); publicForkUrl is (none) (expected git@github.com:testuser/repo.git)"
       ),
       ON_STDERR
     );
@@ -1406,10 +1406,10 @@ describe('syncCommand', () => {
   test('removing a preserve entry re-asserts strictness on the orphaned mirror commit', async () => {
     // Sequence simulated: previously, `preserve: ['agent.yml']` was set and a
     // user commit landed on origin (passing divergence under the allowlist).
-    // The user has now run `venfork preserve remove agent.yml`. The commit is
+    // The user has now run `venfork keep remove agent.yml`. The commit is
     // still on origin/main but preserve no longer covers it — divergence
     // check should flag it and abort. The error must surface the file by
-    // name with a concrete `venfork preserve add` hint, so the user
+    // name with a concrete `venfork keep add` hint, so the user
     // remembers what they removed.
     mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
       exitCode: 0,
@@ -1455,10 +1455,10 @@ describe('syncCommand', () => {
       )
     ).toBe(false);
     // The error message must surface the orphaned file with a concrete
-    // `venfork preserve add` hint — the case-by-name guidance the user
+    // `venfork keep add` hint: the case-by-name guidance the user
     // needs to recognize "oh, that's the entry I just removed."
     expect(rejected.message).toContain('(agent.yml)');
-    expect(rejected.hint).toContain("`venfork preserve add 'agent.yml'`");
+    expect(rejected.hint).toContain("`venfork keep add 'agent.yml'`");
     expect(noteCalls.map((n) => n.message).join('\n')).not.toContain(
       'Force-sync'
     );
@@ -4274,7 +4274,7 @@ describe('cloneCommand - error paths', () => {
   test('a missing vendor repo is a usage error', async () => {
     const error = cloneCommand();
     await expect(error).rejects.toBeInstanceOf(UsageError);
-    await expect(error).rejects.toThrow('Missing vendor repository. Usage:');
+    await expect(error).rejects.toThrow('Missing mirror repository. Usage:');
   });
 
   test('stops before cloning when the target directory already exists', async () => {
@@ -4402,13 +4402,13 @@ describe('cloneCommand --public-fork and legacy prompts', () => {
     expect(execaCalls.some((cmd) => cmd.includes('gh repo clone'))).toBe(false);
   });
 
-  test('--public-fork with --no-public is refused before cloning', async () => {
+  test('--public-fork with --own-upstream is refused before cloning', async () => {
     await expect(
       cloneCommand('acme/project-private', {
         noPublic: true,
         publicForkUrl: 'acme/project',
       })
-    ).rejects.toThrow('--public-fork cannot be combined with --no-public');
+    ).rejects.toThrow('--public-fork cannot be combined with --own-upstream');
 
     expect(execaCalls.some((cmd) => cmd.includes('gh repo clone'))).toBe(false);
   });
@@ -4442,7 +4442,7 @@ describe('cloneCommand --public-fork and legacy prompts', () => {
     ).rejects.toThrow(new CommandExitError(1));
 
     expect(clack.log.error).toHaveBeenCalledWith(
-      "Refusing to override venfork-config: --public-fork='other-org/project' but config records publicForkUrl='git@github.com:acme/project.git'.",
+      "Refusing to override the mirror's venfork settings: --public-fork='other-org/project' but config records publicForkUrl='git@github.com:acme/project.git'.",
       ON_STDERR
     );
     expect(remoteAdds()).toEqual([]);
@@ -4459,7 +4459,7 @@ describe('cloneCommand --public-fork and legacy prompts', () => {
     ).rejects.toThrow(new CommandExitError(1));
 
     expect(clack.log.error).toHaveBeenCalledWith(
-      'Refusing to clone with --public-fork: the venfork-config branch records mode=no-public.',
+      "Refusing to clone with --public-fork: the mirror's venfork settings record --own-upstream (no public fork).",
       ON_STDERR
     );
     expect(remoteAdds()).toEqual([]);
@@ -4541,7 +4541,7 @@ describe('cloneCommand --public-fork and legacy prompts', () => {
   test.each([
     ['public fork', failForkDetection, {}],
     ['upstream (parent lookup)', failParentLookup, {}],
-    ['upstream (--no-public)', () => {}, { noPublic: true }],
+    ['upstream (--own-upstream)', () => {}, { noPublic: true }],
   ])(
     'a cancelled %s prompt exits 130 and adds no remotes',
     async (_name, arrange, options) => {
@@ -5665,7 +5665,7 @@ describe('issueCommand', () => {
 });
 
 /**
- * `--no-public` mode collapses the 3-remote layout (origin/public/upstream)
+ * `--own-upstream` mode collapses the 3-remote layout (origin/public/upstream)
  * to 2 remotes (origin/upstream) for users whose upstream lives in their own
  * org. These tests cover the behaviour fan-out across setup/sync/stage.
  */
@@ -5679,7 +5679,7 @@ describe('no-public mode', () => {
       ...extra,
     });
 
-  describe('setupCommand --no-public', () => {
+  describe('setupCommand --own-upstream', () => {
     test('skips gh repo fork', async () => {
       try {
         await setupCommand(
@@ -5768,13 +5768,13 @@ describe('no-public mode', () => {
           'forked-name',
           { noPublic: true }
         )
-      ).rejects.toThrow(/no-public.*cannot be combined.*fork-name/i);
+      ).rejects.toThrow(/own-upstream.*cannot be combined.*fork-name/i);
     });
 
     test('removes a stale `public` remote when re-running in no-public mode', async () => {
       // Simulate a repo that previously had a `public` remote configured —
       // `git remote get-url public` succeeds with a URL. Re-running setup
-      // with --no-public should explicitly remove it so the local layout
+      // with --own-upstream should explicitly remove it so the local layout
       // matches the recorded config.
       mockResponses.set('git remote get-url public', {
         exitCode: 0,
@@ -5920,8 +5920,8 @@ describe('no-public mode', () => {
     });
   });
 
-  describe('cloneCommand --no-public for legacy mirrors', () => {
-    test('skips public-fork detection when --no-public is set and no config exists', async () => {
+  describe('cloneCommand --own-upstream for legacy mirrors', () => {
+    test('skips public-fork detection when --own-upstream is set and no config exists', async () => {
       // No mock for `git show FETCH_HEAD:.venfork/config.json` and the
       // default `gh repo clone` mock returns empty stdout — fetchVenforkConfig
       // returns null. The flag becomes the source of truth.
@@ -5951,7 +5951,7 @@ describe('no-public mode', () => {
       ).toBe(false);
     });
 
-    test('does not add a public remote in legacy --no-public mode', async () => {
+    test('does not add a public remote in legacy --own-upstream mode', async () => {
       try {
         await cloneCommand('git@github.com:acme/legacy-private.git', {
           noPublic: true,

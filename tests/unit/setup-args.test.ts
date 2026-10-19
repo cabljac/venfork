@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { parseSetupCliArgs } from '../../src/setup-args.js';
 
+describe('the renamed --no-public flag', () => {
+  test('is a usage error that names --own-upstream', () => {
+    expect(() => parseSetupCliArgs(['a/b', '--no-public'])).toThrow(
+      '--no-public is now --own-upstream.'
+    );
+  });
+});
+
 describe('parseSetupCliArgs', () => {
   afterEach(() => {
     delete process.env.VENFORK_ORG;
@@ -128,8 +136,8 @@ describe('parseSetupCliArgs', () => {
     ).toThrow('--fork-name requires a value');
   });
 
-  test('--no-public sets noPublic flag', () => {
-    expect(parseSetupCliArgs(['a/b', 'b-private', '--no-public'])).toEqual({
+  test('--own-upstream sets noPublic flag', () => {
+    expect(parseSetupCliArgs(['a/b', 'b-private', '--own-upstream'])).toEqual({
       upstreamUrl: 'a/b',
       privateMirrorName: 'b-private',
       organization: undefined,
@@ -140,24 +148,24 @@ describe('parseSetupCliArgs', () => {
     });
   });
 
-  test('--no-public + --fork-name throws (incompatible)', () => {
+  test('--own-upstream + --fork-name throws (incompatible)', () => {
     expect(() =>
       parseSetupCliArgs([
         'a/b',
         'b-private',
-        '--no-public',
+        '--own-upstream',
         '--fork-name',
         'foo',
       ])
-    ).toThrow(/no-public.*cannot be combined.*fork-name/i);
+    ).toThrow(/own-upstream.*cannot be combined.*fork-name/i);
   });
 
-  test('--no-public coexists with the positional private mirror name', () => {
+  test('--own-upstream coexists with the positional private mirror name', () => {
     // Positional arg #2 is `privateMirrorName`, not a fork name — only
     // --fork-name (or --fork-name=) sets `publicForkRepoName`. So
-    // --no-public + a private mirror name must NOT throw.
+    // --own-upstream + a private mirror name must NOT throw.
     expect(
-      parseSetupCliArgs(['a/b', 'b-private', '--no-public']).noPublic
+      parseSetupCliArgs(['a/b', 'b-private', '--own-upstream']).noPublic
     ).toBe(true);
   });
 });

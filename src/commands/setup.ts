@@ -82,7 +82,7 @@ async function assertExistingConfigAgrees(
   const existing = await readVenforkConfigFromRepo(repoDir);
   if (!existing) {
     throw new ConfigError(
-      'venfork-config disappeared from origin while setup was running; re-run setup.',
+      "The mirror's venfork settings disappeared from origin while setup was running; re-run setup.",
       { reason: 'fetch' }
     );
   }
@@ -90,10 +90,14 @@ async function assertExistingConfigAgrees(
     (a ? (parseRepoPath(a) ?? a) : null) ===
     (b ? (parseRepoPath(b) ?? b) : null);
   const recordedMode = existing.mode === 'no-public' ? 'no-public' : 'standard';
+  const layout = (mode: 'standard' | 'no-public') =>
+    mode === 'no-public' ? 'own-upstream' : 'standard';
   const recordedPublic = existing.publicForkUrl ?? null;
   const mismatches: string[] = [];
   if (recordedMode !== wanted.mode) {
-    mismatches.push(`mode is ${recordedMode} (expected ${wanted.mode})`);
+    mismatches.push(
+      `layout is ${layout(recordedMode)} (expected ${layout(wanted.mode)})`
+    );
   }
   if (!sameRepo(existing.upstreamUrl, wanted.upstreamUrl)) {
     mismatches.push(
@@ -107,7 +111,7 @@ async function assertExistingConfigAgrees(
   }
   if (mismatches.length > 0) {
     throw new ConfigError(
-      `The existing venfork-config disagrees with this setup: ${mismatches.join('; ')}. Use the recorded values, or create a fresh mirror.`,
+      `The mirror's existing venfork settings disagree with this setup: ${mismatches.join('; ')}. Use the recorded values, or create a fresh mirror.`,
       { reason: 'exists' }
     );
   }
@@ -328,7 +332,7 @@ export async function setupCommand(
       ? undefined
       : `git@github.com:${owner}/${publicForkName}.git`;
 
-    // Step 1: Create public fork (or accept an existing fork under this owner) — skipped in --no-public mode
+    // Step 1: Create public fork (or accept an existing fork under this owner); skipped in --own-upstream mode
     let forkPreexisted = false;
     if (!noPublic) {
       s.start('Creating public fork of upstream repository');
@@ -351,7 +355,7 @@ export async function setupCommand(
       if (forkResult.exitCode !== 0) {
         if (publicForkFullName === upstreamRepoPath && !useForkNameFlag) {
           throw new PreconditionError(
-            `The upstream repo is already under ${owner}. Use --fork-name to give the public fork a different name, or pass --no-public to skip the public fork hop entirely.`
+            `The upstream repo is already under ${owner}. Use --fork-name to give the public fork a different name, or pass --own-upstream to skip the public fork hop entirely.`
           );
         }
         const exists = await ghRepoExists(publicForkFullName);

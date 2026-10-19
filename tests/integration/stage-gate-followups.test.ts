@@ -5,11 +5,7 @@ import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
-import {
-  preserveCommand,
-  stageCommand,
-  syncCommand,
-} from '../../src/commands.js';
+import { keepCommand, stageCommand, syncCommand } from '../../src/commands.js';
 import { CommandExitError } from '../../src/errors.js';
 import { collectMirrorBlobs } from '../../src/shared/stage-gate.js';
 import {
@@ -122,25 +118,25 @@ describe('preserve add verifies each entry is a file on origin', () => {
   test('refuses a directory entry', async () => {
     await fx.commitOnOrigin({ [DIR_FILE]: 'client plan\n' });
 
-    await expect(preserveCommand('add', [DIR])).rejects.toThrow(
+    await expect(keepCommand('add', [DIR])).rejects.toThrow(
       new CommandExitError(1)
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
-      expect.stringContaining(`Cannot preserve '${DIR}': it is a directory`),
+      expect.stringContaining(`Cannot keep '${DIR}': it is a directory`),
       ON_STDERR
     );
     expect((await fx.readRawConfig()).preserve).toBeUndefined();
   });
 
   test('refuses a path that is not on the default branch', async () => {
-    await expect(preserveCommand('add', [DOC])).rejects.toThrow(
+    await expect(keepCommand('add', [DOC])).rejects.toThrow(
       new CommandExitError(1)
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining(
-        `Cannot preserve '${DOC}': it does not exist on origin/main`
+        `Cannot keep '${DOC}': it does not exist on origin/main`
       ),
       ON_STDERR
     );
@@ -160,13 +156,13 @@ describe('preserve add verifies each entry is a file on origin', () => {
     await fx.git(fx.work, 'commit', '--quiet', '-m', 'chore: submodule');
     await fx.git(fx.work, 'push', '--quiet', 'origin', 'HEAD:main');
 
-    await expect(preserveCommand('add', ['vendor/lib'])).rejects.toThrow(
+    await expect(keepCommand('add', ['vendor/lib'])).rejects.toThrow(
       new CommandExitError(1)
     );
 
     expect(prompts.log.error).toHaveBeenCalledWith(
       expect.stringContaining(
-        "Cannot preserve 'vendor/lib': it is not a file on origin/main"
+        "Cannot keep 'vendor/lib': it is not a file on origin/main"
       ),
       ON_STDERR
     );
@@ -179,14 +175,14 @@ describe('preserve add verifies each entry is a file on origin', () => {
       'tools/run.sh': { content: '#!/bin/sh\n', executable: true },
     });
 
-    await preserveCommand('add', [DOC, 'tools/run.sh']);
+    await keepCommand('add', [DOC, 'tools/run.sh']);
 
     expect((await fx.readRawConfig()).preserve).toEqual([DOC, 'tools/run.sh']);
   });
 });
 
 describe('a directory entry from an old config is invalid', () => {
-  const HINT = `venfork preserve remove '${DIR}'`;
+  const HINT = `venfork keep remove '${DIR}'`;
 
   test('a changed file under the directory is refused with the remove hint', async () => {
     await fx.commitOnOrigin({ [DIR_FILE]: 'client plan\n' });
@@ -235,7 +231,7 @@ describe('a directory entry from an old config is invalid', () => {
     await commitFile('src/a.txt', 'a\n', 'feat: a');
 
     const started = Date.now();
-    await expectRefused("venfork preserve remove 'keep'");
+    await expectRefused("venfork keep remove 'keep'");
     expect(Date.now() - started).toBeLessThan(2000);
   });
 
@@ -252,7 +248,7 @@ describe('a directory entry from an old config is invalid', () => {
         'upstream/main',
         fx.work
       )
-    ).rejects.toThrow("venfork preserve remove 'keep'");
+    ).rejects.toThrow("venfork keep remove 'keep'");
     expect(Date.now() - started).toBeLessThan(2000);
   });
 });
@@ -260,7 +256,7 @@ describe('a directory entry from an old config is invalid', () => {
 describe('the gate matches paths case-insensitively', () => {
   test('a preserved file under another case is refused', async () => {
     await fx.commitOnOrigin({ [DOC]: 'notes\n' });
-    await preserveCommand('add', [DOC]);
+    await keepCommand('add', [DOC]);
     await featureFrom('upstream/main');
     await commitFile('docs/A.md', 'edited\n', 'docs: case');
 
@@ -359,7 +355,7 @@ describe('collectMirrorBlobs reads history', () => {
       'origin/venfork-config:.venfork/config.json'
     );
     await fx.commitOnOrigin({ [DOC]: 'notes\n' });
-    await preserveCommand('add', [DOC]);
+    await keepCommand('add', [DOC]);
     await fx.git(fx.work, 'fetch', '--quiet', 'origin');
 
     const { blobs } = await collectMirrorBlobs(
@@ -374,7 +370,7 @@ describe('collectMirrorBlobs reads history', () => {
 
   test('an older version of a preserved file copied to a new path is refused', async () => {
     await fx.commitOnOrigin({ [DOC]: 'v1 secret\n' });
-    await preserveCommand('add', [DOC]);
+    await keepCommand('add', [DOC]);
     await fx.commitOnOrigin({ [DOC]: 'v2 secret\n' });
     await featureFrom('upstream/main');
     await commitFile('docs/b.md', 'v1 secret\n', 'docs: b');

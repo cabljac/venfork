@@ -161,8 +161,8 @@ export class SyncDivergenceError extends VenforkError {
     public readonly defaultBranch: string,
     public readonly origin: RemoteDivergence,
     public readonly publicFork: RemoteDivergence,
-    /** `venfork preserve add <files>` for the origin files it can keep. */
-    preserveCommand?: string
+    /** `venfork keep add <files>` for the origin files it can keep. */
+    keepCommand?: string
   ) {
     const parts: string[] = [];
     if (origin.count > 0) {
@@ -175,14 +175,14 @@ export class SyncDivergenceError extends VenforkError {
       `Sync aborted to prevent data loss: ${parts.join(', ')} commit(s) not in upstream/${defaultBranch}${listFiles([...origin.files, ...publicFork.files])}.`,
       'sync-divergence',
       {
-        hint: preserveCommand
-          ? `If the files belong only on the mirror, run \`${preserveCommand}\`. Otherwise move the commits to a branch and retry.`
+        hint: keepCommand
+          ? `If the files belong only on the mirror, run \`${keepCommand}\`. Otherwise move the commits to a branch and retry.`
           : 'Move the commits to a branch and retry. `venfork doctor` shows the divergence.',
         details: {
           branch: defaultBranch,
           origin,
           public: publicFork,
-          ...(preserveCommand ? { command: preserveCommand } : {}),
+          ...(keepCommand ? { command: keepCommand } : {}),
         },
       }
     );
