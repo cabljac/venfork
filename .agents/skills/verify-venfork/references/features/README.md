@@ -10,6 +10,7 @@ One file per `src/commands/<name>.ts`. Open only the file for the command you ch
 | `schedule.md` | `venfork schedule` | no |
 | `stage.md` | `venfork stage [branch] <name>` | yes, unless `--no-pr` |
 | `pull-request.md` | `venfork pull pr` | yes |
+| `approval.md` | `venfork stage approval` | no |
 | `issue.md` | `venfork stage issue`, `venfork pull issue` | yes |
 | `doctor.md` | `venfork doctor` | no (`transport` skips for a non-GitHub origin; `token`, `last-run`, `cron-age` need a schedule, gh and a GitHub origin) |
 | `workflows.md` | `venfork workflows` | no |

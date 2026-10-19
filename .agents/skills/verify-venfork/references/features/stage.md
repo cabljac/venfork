@@ -30,7 +30,7 @@ tests:
 
 ## How a user reaches it
 
-`venfork stage <branch>`, `venfork stage branch <name>` (for a branch named `issue` or `branch`), plus `--no-pr`, `--draft`, `--dry-run`, `--title <t>`, `--base <b>`, `--internal-pr <n>`, `--no-update-existing`, `--yes`/`-y`, `--no-input`, `--json`. `stage issue` is in `issue.md`.
+`venfork stage <branch>`, `venfork stage branch <name>` (for a branch named `issue`, `approval` or `branch`), plus `--no-pr`, `--draft`, `--dry-run`, `--title <t>`, `--base <b>`, `--internal-pr <n>`, `--no-update-existing`, `--yes`/`-y`, `--no-input`, `--json`. `stage issue` is in `issue.md`; `stage approval` is in `approval.md`.
 
 ## How to drive it
 

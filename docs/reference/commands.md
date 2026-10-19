@@ -165,7 +165,7 @@ venfork sync           # Sync default branches with upstream
 
 ### `venfork stage <branch> [--no-pr] [--draft] [--dry-run] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]`
 
-Push a branch to the public fork, making it visible and ready for PR to upstream. `venfork stage branch <name>` is the explicit form of the same command; use it for a branch named `issue` or `branch`. It also opens the upstream PR for you using your internal review PR's body, unless you pass `--no-pr`. With `--json`, stage never prompts and prints one JSON envelope on stdout (see [JSON output](json.md#json-output)).
+Push a branch to the public fork, making it visible and ready for PR to upstream. `venfork stage branch <name>` is the explicit form of the same command; use it for a branch named `issue`, `approval` or `branch`. It also opens the upstream PR for you using your internal review PR's body, unless you pass `--no-pr`. With `--json`, stage never prompts and prints one JSON envelope on stdout (see [JSON output](json.md#json-output)).
 
 **⚠️ Important:** This is when your work becomes visible to the client!
 
@@ -252,6 +252,23 @@ The implementation follows the spec at https://example.com/oauth.
 
 A comment that mentions venfork but is not a well-formed marker (for example a typo such as `venfork:intenral`), an unmatched close marker, or any `venfork` left in the text after stripping stops the stage before anything is pushed. An unmatched open marker drops everything after it. If you forget to add markers around other internal context, it is sent upstream, so review the preview prompt before confirming.
 
+### `venfork stage approval [on|reviewed|two-person|off] [--yes] [--no-input] [--json]`
+
+Show or set how much review a branch needs before `venfork stage` publishes it. The level is stored as `approval` in the mirror's venfork settings, so every clone of the mirror reads the same level. With no argument it prints the current level. `venfork stage branch approval` stages a branch named `approval`.
+
+- `off` - No review needed. This is the default.
+- `reviewed` - The branch's PR on the private mirror needs an approving review on its current head from a person (not a bot) with write access to the mirror who is not the PR author, and every check on that head must pass.
+- `two-person` - As `reviewed`, and the approver must also be someone other than the GitHub user who runs `venfork stage`.
+- `on` - The same as `two-person`.
+
+Setting `off` prints a warning. The gate is a guardrail against publishing by accident or by an agent, not enforcement: anyone with push access to the public fork or upstream can publish without venfork. With `--json`, `result` is `{ "level" }` after the action.
+
+```bash
+venfork stage approval            # print the level
+venfork stage approval on         # two-person
+venfork stage approval reviewed   # a solo vendor reviewing an agent's PR
+```
+
 ### `venfork pull pr <pr-number-or-url> [--branch-name <override>] [--no-push] [--yes] [--no-input] [--json]`
 
 Pull a third-party upstream PR into the private mirror so your team can review it internally before it lands. The PR's commits land on a new branch (`upstream-pr/<n>` by default) that's pushed to your mirror. With `--json`, it prints one JSON envelope on stdout (see [JSON output](json.md#json-output)).
@@ -299,7 +316,7 @@ Move *issue* context between the private mirror and upstream. The command names 
 - `venfork stage issue <internal-#>` - read an internal triage issue from the mirror, redact `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks (same convention as `stage <branch>`), and open the upstream counterpart via `gh issue create`.
 - `venfork pull issue <upstream-#>` - read an upstream issue **and its comments**, create a parallel internal issue on the mirror titled `[upstream #N] <original title>` so the team can triage it without leaving the private space. The upstream comment thread is snapshotted into the mirror issue body under an "Upstream comments" section.
 
-A branch named `issue` or `branch` cannot use the bare `venfork stage <name>` form. Run `venfork stage branch issue` instead.
+A branch named `issue`, `approval` or `branch` cannot use the bare `venfork stage <name>` form. Run `venfork stage branch issue` instead.
 
 **Flags:**
 - `--title <text>` - Override the destination issue's title.
