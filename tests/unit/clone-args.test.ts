@@ -118,13 +118,9 @@ describe('parseCloneCliArgs prompt flags', () => {
     });
   });
 
-  test('rejects --yes and -y: clone has no confirm', () => {
-    expect(() => parseCloneCliArgs(['a/b', '--yes'])).toThrow(
-      "Unknown option '--yes'. Usage: venfork clone"
-    );
-    expect(() => parseCloneCliArgs(['a/b', '-y'])).toThrow(
-      "Unknown option '-y'"
-    );
+  test('accepts --yes and -y as a no-op', () => {
+    expect(parseCloneCliArgs(['a/b', '--yes']).prompt.yes).toBe(true);
+    expect(parseCloneCliArgs(['a/b', '-y']).prompt.yes).toBe(true);
   });
 });
 

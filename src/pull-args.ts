@@ -1,14 +1,12 @@
 import { UsageError } from './errors.js';
 import {
   consumeValue,
-  NO_INPUT_FLAG,
   parseGitHubRef,
   parsePromptFlags,
   scanArgs,
   unexpectedArgument,
   unknownOption,
 } from './shared/args.js';
-import { JSON_FLAG } from './shared/json-output.js';
 import type { PromptContext } from './shared/prompt.js';
 
 /** Parsed `venfork pull pr ...` arguments. */
@@ -56,8 +54,7 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
   let noPush: string | undefined;
   let branchNameFlag: string | undefined;
   let titleFlag: string | undefined;
-  let promptFlag: string | undefined;
-  const promptFlags = parsePromptFlags({ allowYes: true, allowJson: true });
+  const promptFlags = parsePromptFlags({ allowJson: true });
 
   const targetUsage = args.includes('pr')
     ? PULL_PR_USAGE
@@ -65,10 +62,7 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
       ? PULL_ISSUE_USAGE
       : PULL_USAGE;
   const [sub, ...rest] = scanArgs(args, targetUsage, (a, i) => {
-    if (promptFlags.onOption(a) !== undefined) {
-      if (a !== NO_INPUT_FLAG && a !== JSON_FLAG) promptFlag ??= a;
-      return 0;
-    }
+    if (promptFlags.onOption(a) !== undefined) return 0;
     if (a === '--no-push') {
       noPush = a;
       return 0;
@@ -89,8 +83,7 @@ export function parsePullCliArgs(args: string[]): ParsedPullArgs {
   });
 
   if (sub === 'pr') {
-    const stray = titleFlag ?? promptFlag;
-    if (stray) throw unknownOption(stray, PULL_PR_USAGE);
+    if (titleFlag) throw unknownOption(titleFlag, PULL_PR_USAGE);
     if (rest.length > 1) throw unexpectedArgument(rest[1], PULL_PR_USAGE);
     if (rest.length === 0) {
       throw new UsageError(`Missing PR number or URL. Usage: ${PULL_PR_USAGE}`);

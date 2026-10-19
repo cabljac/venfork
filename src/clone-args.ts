@@ -13,7 +13,7 @@ export type ParsedCloneArgs = {
   noPublic: boolean;
   upstreamUrl?: string;
   publicForkUrl?: string;
-  /** `--no-input`; clone has no confirm, so `yes` is always false. */
+  /** `--yes` / `--no-input`; clone has no confirm, so `yes` changes nothing. */
   prompt: PromptContext;
   /** Print the `--json` envelope on stdout. */
   json: boolean;
@@ -35,7 +35,7 @@ export function parseCloneCliArgs(args: string[]): ParsedCloneArgs {
   let noPublic = false;
   let upstreamUrl: string | undefined;
   let publicForkUrl: string | undefined;
-  const promptFlags = parsePromptFlags({ allowYes: false, allowJson: true });
+  const promptFlags = parsePromptFlags({ allowJson: true });
 
   const positional = scanArgs(args, CLONE_USAGE, (a, i) => {
     if (promptFlags.onOption(a) !== undefined) return 0;

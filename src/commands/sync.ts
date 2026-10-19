@@ -33,6 +33,7 @@ import {
   resolveSyncBlocked,
 } from '../shared/sync-report.js';
 import * as p from '../shared/ui.js';
+import { shellQuote } from '../utils.js';
 
 /**
  * Returns the upstream PR number for `branch` if it's a pulled-in PR. First
@@ -124,12 +125,9 @@ async function syncPulledPr(
     });
     if (pushed) result.status = 'pushed';
   } catch (err) {
-    s.stop('Push failed');
-    p.log.warn(
-      `Could not push ${branch} to origin: ${err instanceof Error ? err.message : String(err)}`
-    );
-    p.log.warn(
-      'Local branch is updated; the mirror copy was not. Skipping pulledPrs config update — the recorded head/lastSyncedAt would not match the mirror.'
+    s.clear();
+    p.log.error(
+      `Could not push ${branch} to origin; the local branch is updated. Fix the push, then run \`venfork sync ${shellQuote(branch)}\` again. Reason: ${err instanceof Error ? err.message : String(err)}`
     );
     return { ...result, status: 'push-failed' };
   }
@@ -224,7 +222,9 @@ export async function syncCommand(
         );
         if (!quiet) {
           p.outro(
-            `✨ ${targetBranch} synced with upstream PR #${pulledPr.prNumber}`
+            result.status === 'push-failed'
+              ? `Sync incomplete: ${targetBranch} is updated locally, not on origin.`
+              : `✨ ${targetBranch} synced with upstream PR #${pulledPr.prNumber}`
           );
         }
         return result;

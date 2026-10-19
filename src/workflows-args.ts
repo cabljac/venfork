@@ -1,5 +1,5 @@
 import { UsageError } from './errors.js';
-import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
+import { isPromptFlag, scanArgs, unexpectedArgument } from './shared/args.js';
 import { JSON_FLAG } from './shared/json-output.js';
 
 /** A `venfork workflows` action. */
@@ -39,7 +39,7 @@ export function parseWorkflowsCliArgs(
     workflowsArgs,
     USAGE,
     (arg) => {
-      if (arg === NO_INPUT_FLAG) return 0;
+      if (isPromptFlag(arg)) return 0;
       if (arg !== JSON_FLAG) return undefined;
       json = true;
       return 0;

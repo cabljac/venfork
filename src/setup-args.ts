@@ -32,7 +32,7 @@ export function parseSetupCliArgs(setupArgs: string[]): ParsedSetupArgs {
   let organization: string | undefined;
   let publicForkRepoName: string | undefined;
   let noPublic = false;
-  const promptFlags = parsePromptFlags({ allowYes: true, allowJson: true });
+  const promptFlags = parsePromptFlags({ allowJson: true });
 
   const positional = scanArgs(setupArgs, USAGE, (a, i) => {
     if (promptFlags.onOption(a) !== undefined) return 0;

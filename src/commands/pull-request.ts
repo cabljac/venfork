@@ -11,7 +11,7 @@ import { PULL_PR_USAGE } from '../pull-args.js';
 import { parseGitHubRef } from '../shared/args.js';
 import { netExec, netFailureReason } from '../shared/net.js';
 import * as p from '../shared/ui.js';
-import { parseRepoPath } from '../utils.js';
+import { parseRepoPath, shellQuote } from '../utils.js';
 
 export interface PullRequestOptions {
   /** Local + mirror branch name to write the PR's commits to. */
@@ -168,12 +168,9 @@ export async function pullRequestCommand(
         bufferOutput: true,
       })`git push origin ${localBranch} --no-follow-tags`;
       if (pushResult.exitCode !== 0) {
-        s.stop('Push failed');
-        p.log.warn(
-          `Could not push ${localBranch} to origin: ${netFailureReason(pushResult)}`
-        );
-        p.log.warn(
-          'The local branch is still available for review, but no pulledPrs entry was recorded — `venfork sync` will not know how to refresh it until the next successful push.'
+        s.clear();
+        p.log.error(
+          `Could not push ${localBranch} to origin; the branch is local only. Fix the push, then run \`venfork pull pr ${prNumber} --branch-name ${shellQuote(localBranch)}\` again. Reason: ${netFailureReason(pushResult)}`
         );
       } else {
         s.stop(`Pushed ${localBranch} to origin`);
@@ -183,7 +180,7 @@ export async function pullRequestCommand(
 
     if (!pushedToMirror) {
       // Two paths reach here:
-      // 1. Push failed: warned above, branch is local-only.
+      // 1. Push failed: reported above, branch is local-only.
       // 2. --no-push: user asked us not to push; treat the branch as
       //    local-only too. In both cases the mirror does not have the
       //    branch, so we skip the pulledPrs record. Otherwise a later
@@ -194,7 +191,11 @@ export async function pullRequestCommand(
       const reason = push
         ? 'mirror push failed'
         : '--no-push set, branch is local-only';
-      p.outro(`✨ Pull request fetched locally (${reason})`);
+      p.outro(
+        push
+          ? 'Pull incomplete: the branch is local only.'
+          : `✨ Pull request fetched locally (${reason})`
+      );
       return result();
     }
 

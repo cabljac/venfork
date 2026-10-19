@@ -51,7 +51,7 @@ import {
 } from '../shared/upstream-publish.js';
 import { withDetachedWorktree } from '../shared/worktree.js';
 import { STAGE_USAGE } from '../stage-args.js';
-import { parseRepoPath } from '../utils.js';
+import { parseRepoPath, shellQuote } from '../utils.js';
 
 const CONFIG_BRANCH = 'venfork-config';
 
@@ -568,6 +568,29 @@ export interface StageOptions {
   prompt?: PromptContext;
 }
 
+/**
+ * The `venfork stage branch ...` command that repeats a stage with the same
+ * PR flags, shell-quoted so it is safe to paste.
+ */
+export function stageRerunCommand(
+  branch: string,
+  options: StageOptions
+): string {
+  const parts = ['venfork stage branch', shellQuote(branch)];
+  if (options.createPr || options.draft) parts.push('--pr');
+  if (options.draft) parts.push('--draft');
+  if (options.base !== undefined)
+    parts.push('--base', shellQuote(options.base));
+  if (options.title !== undefined) {
+    parts.push('--title', shellQuote(options.title));
+  }
+  if (options.internalPrNumber !== undefined) {
+    parts.push('--internal-pr', String(options.internalPrNumber));
+  }
+  if (options.noUpdateExisting) parts.push('--no-update-existing');
+  return parts.join(' ');
+}
+
 /** `--json` result of `venfork stage <branch>`. */
 export interface StageResult {
   branch: string;
@@ -580,7 +603,8 @@ export interface StageResult {
   /**
    * Only with `--pr`: `created`, `updated` (an open PR's body was
    * refreshed), `unchanged` (an open PR was left as is) or `failed`
-   * (the push succeeded, the PR could not be opened).
+   * (the push succeeded, the PR could not be opened or its body could
+   * not be updated).
    */
   prAction?: 'created' | 'updated' | 'unchanged' | 'failed';
   /** The upstream PR, when `--pr` opened or found one. */
@@ -825,11 +849,10 @@ export async function stageCommand(
             : `Upstream PR opened: ${upstreamPrUrl}`
         );
       } catch (err) {
-        s.stop('Upstream PR creation failed');
+        s.clear();
         const msg = err instanceof Error ? err.message : String(err);
-        p.log.warn(msg);
-        p.log.warn(
-          'Staging succeeded; you can retry the PR manually with `gh pr create`.'
+        p.log.error(
+          `The branch was pushed, but the upstream PR was not opened: ${msg}`
         );
       }
 
@@ -848,9 +871,13 @@ export async function stageCommand(
           prAction = 'updated';
           s.stop('Updated upstream PR body');
         } else {
-          s.stop('Could not update upstream PR body');
-          p.log.warn(
-            editResult.stderr.trim() || `gh pr edit exit ${editResult.exitCode}`
+          prAction = 'failed';
+          s.clear();
+          p.log.error(
+            `The branch was pushed, but the upstream PR body was not updated: ${
+              editResult.stderr.trim() ||
+              `gh pr edit exit ${editResult.exitCode}`
+            }`
           );
         }
       }
@@ -889,15 +916,22 @@ export async function stageCommand(
       }
       p.note(lines.join('\n'), 'Next Steps');
     } else {
+      const tip = createPr
+        ? ''
+        : '\n\n(Tip: re-run with --pr to open it automatically.)';
       p.note(
         plan.noPublic
-          ? `Your branch is now on upstream!\n\nCreate a pull request:\n  ${prUrl}\n\n(Tip: re-run with --pr to open it automatically.)`
-          : `Your branch is now on the public fork!\n\nCreate a pull request to upstream:\n  ${prUrl}\n\n(Tip: re-run with --pr to open it automatically.)`,
+          ? `Your branch is now on upstream!\n\nCreate a pull request:\n  ${prUrl}${tip}`
+          : `Your branch is now on the public fork!\n\nCreate a pull request to upstream:\n  ${prUrl}${tip}`,
         'Next Steps'
       );
     }
 
-    p.outro('✨ Stage complete!');
+    p.outro(
+      prAction === 'failed'
+        ? `Stage incomplete: finish the PR by hand, or run \`${stageRerunCommand(plan.branch, options)}\` again.`
+        : '✨ Stage complete!'
+    );
     return {
       branch: plan.branch,
       head: stagedHead,

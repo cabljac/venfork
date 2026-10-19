@@ -1,4 +1,4 @@
-import { NO_INPUT_FLAG, scanArgs, unexpectedArgument } from './shared/args.js';
+import { isPromptFlag, scanArgs, unexpectedArgument } from './shared/args.js';
 import { JSON_FLAG } from './shared/json-output.js';
 
 /** Parsed `venfork sync` arguments. */
@@ -22,7 +22,7 @@ export function parseSyncCliArgs(args: string[]): ParsedSyncArgs {
   let reportIssues = false;
   let json = false;
   const positional = scanArgs(args, SYNC_USAGE, (arg) => {
-    if (arg === NO_INPUT_FLAG) return 0;
+    if (isPromptFlag(arg)) return 0;
     if (arg === JSON_FLAG) {
       json = true;
       return 0;

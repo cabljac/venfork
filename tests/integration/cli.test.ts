@@ -8,6 +8,7 @@ import {
   rename,
   rm,
   stat,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
@@ -645,7 +646,7 @@ describe('clone on a legacy mirror without venfork-config', () => {
 describe('per-command help', () => {
   for (const [command, usage] of [
     ['sync', 'venfork sync [branch] [--report-issues]'],
-    ['doctor', 'venfork doctor [--no-input] [--json]'],
+    ['doctor', 'venfork doctor [--yes] [--no-input] [--json]'],
     ['stage', 'venfork stage <branch>'],
   ]) {
     for (const flag of ['-h', '--help']) {
@@ -661,7 +662,7 @@ describe('per-command help', () => {
   }
 
   for (const [args, usage] of [
-    [['help', 'doctor'], 'venfork doctor [--no-input] [--json]'],
+    [['help', 'doctor'], 'venfork doctor [--yes] [--no-input] [--json]'],
     [['--help', 'sync'], 'venfork sync [branch] [--report-issues]'],
     [['-h', 'stage'], 'venfork stage <branch>'],
     [['help', 'pull', 'pr'], 'venfork pull pr <pr-number-or-url>'],
@@ -680,7 +681,25 @@ describe('per-command help', () => {
       const result = await runCli(...args);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('venfork setup <upstream>');
-      expect(result.stdout).toContain('venfork doctor [--no-input] [--json]');
+      expect(result.stdout).toContain(
+        'venfork doctor [--yes] [--no-input] [--json]'
+      );
+    }
+  });
+
+  test('help ignores --yes, -y and --no-input like every other command', async () => {
+    for (const flag of ['--yes', '-y', '--no-input']) {
+      for (const help of ['help', '--help', '-h']) {
+        const full = await runCli(help, flag);
+        expect(full.exitCode).toBe(0);
+        expect(full.stdout).toContain('venfork setup <upstream>');
+      }
+      const one = await runCli('help', flag, 'doctor');
+      expect(one.exitCode).toBe(0);
+      expect(one.stdout).toContain(
+        'venfork doctor [--yes] [--no-input] [--json]'
+      );
+      expect(one.stdout).not.toContain('venfork setup <upstream>');
     }
   });
 
@@ -690,6 +709,15 @@ describe('per-command help', () => {
     expect(result.stdout).toContain('terminal on stdin and stderr');
     expect(result.stdout).not.toContain('TTY on stdin');
     expect(result.stdout).toMatch(/^\s*143 {2}/m);
+  });
+
+  test('full help says every command accepts the prompt flags and exit 1 covers a partial success', async () => {
+    const result = await runCli('help');
+
+    expect(result.stdout).toContain(
+      'Every command accepts --yes, -y and --no-input'
+    );
+    expect(result.stdout).toMatch(/^\s*1 {4}.*partial success/m);
   });
 
   test('help version, -v and --version print the --version entry', async () => {
@@ -930,6 +958,26 @@ function outcomeLines(stderr: string): string[] {
   return lines.slice(steps.lastIndexOf(true) + 1);
 }
 
+describe('one fixed flag set on every command', () => {
+  test('--yes is a no-op on a command that never confirms', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      const result = await runCliWithoutTty(fx.work, [
+        'preserve',
+        'list',
+        '--yes',
+        '--no-input',
+        '--json',
+      ]);
+
+      expect(result.exitCode).toBe(0);
+      expect(parseEnvelope(result.stdout)).toMatchObject({ ok: true });
+    } finally {
+      await fx.cleanup();
+    }
+  });
+});
+
 describe('one error, one line', () => {
   test('a failed stage prints only its error line', async () => {
     const fx = await createMirrorFixture();
@@ -1043,6 +1091,126 @@ describe('one error, one line', () => {
         expect(lines).toHaveLength(1);
         expect(lines[0]).toStartWith('error: ');
       }
+    } finally {
+      await fx.cleanup();
+    }
+  });
+});
+
+/** Makes origin refuse every push; the returned function lifts the refusal. */
+async function rejectOriginPushes(
+  fx: MirrorFixture
+): Promise<() => Promise<void>> {
+  const hook = path.join(fx.origin, 'hooks', 'pre-receive');
+  await writeFile(hook, '#!/bin/sh\necho "push refused by test" >&2\nexit 1\n');
+  await chmod(hook, 0o755);
+  return () => rm(hook, { force: true });
+}
+
+/** Publishes a commit off upstream's tip as `refs/pull/<n>/head`, as GitHub does for a PR. */
+async function openUpstreamPr(fx: MirrorFixture, n: number): Promise<void> {
+  const head = await fx.commitOnUpstream({ [`pr-${n}.txt`]: 'pr\n' });
+  await fx.git(fx.upstream, 'update-ref', `refs/pull/${n}/head`, head);
+  await fx.git(fx.upstream, 'update-ref', 'refs/heads/main', `${head}~1`);
+}
+
+describe('partial success exits 1', () => {
+  test('sync <pulled-pr> exits 1 with the success envelope when origin rejects the push', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await openUpstreamPr(fx, 7);
+      await rejectOriginPushes(fx);
+
+      const json = await runCliWithoutTty(fx.work, [
+        'sync',
+        'upstream-pr/7',
+        '--json',
+      ]);
+      expect(json.exitCode).toBe(1);
+      expect(parseEnvelope(json.stdout)).toMatchObject({
+        ok: true,
+        result: { kind: 'pulled-pr', status: 'push-failed', prNumber: 7 },
+      });
+
+      const text = await runCliWithoutTty(fx.work, ['sync', 'upstream-pr/7']);
+      expect(text.exitCode).toBe(1);
+      expect(text.stderr).not.toContain('Push failed');
+      const lines = outcomeLines(text.stderr);
+      const errors = lines.filter((line) => line.startsWith('error: '));
+      expect(errors).toHaveLength(1);
+      expect(lines[0]).toStartWith(
+        "error: Could not push upstream-pr/7 to origin; the local branch is updated. Fix the push, then run `venfork sync 'upstream-pr/7'` again. Reason: "
+      );
+      expect(lines[0]).toContain('push refused by test');
+      expect(text.stderr).toContain('Sync incomplete');
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  test('pull pr exits 1 when origin rejects the push, and its hint recovers', async () => {
+    const fx = await createMirrorFixture();
+    try {
+      await openUpstreamPr(fx, 7);
+      // `up/repo` parses as a GitHub path and git resolves it from the work tree.
+      await mkdir(path.join(fx.work, 'up'));
+      await symlink(fx.upstream, path.join(fx.work, 'up', 'repo'));
+      await writeFile(path.join(fx.work, '.git', 'info', 'exclude'), 'up/\n');
+      await fx.git(fx.work, 'remote', 'set-url', 'upstream', 'up/repo');
+      const ghBin = path.join(fx.root, 'gh-bin');
+      await mkdir(ghBin);
+      const meta = JSON.stringify({
+        number: 7,
+        title: 'PR seven',
+        body: '',
+        url: 'https://github.com/up/repo/pull/7',
+        state: 'OPEN',
+        baseRefName: 'main',
+        headRefName: 'seven',
+      });
+      await writeFile(
+        path.join(ghBin, 'gh'),
+        `#!/bin/sh\n[ "$1 $2" = "auth status" ] && exit 0\n[ "$1 $2" = "pr view" ] && { echo '${meta}'; exit 0; }\nexit 1\n`
+      );
+      await chmod(path.join(ghBin, 'gh'), 0o755);
+      const env = {
+        PATH: `${ghBin}${path.delimiter}${process.env.PATH ?? ''}`,
+      };
+      const allowPushes = await rejectOriginPushes(fx);
+
+      const failed = await runCliWithoutTty(fx.work, ['pull', 'pr', '7'], env);
+      expect(failed.exitCode).toBe(1);
+      expect(failed.stderr).not.toContain('Push failed');
+      const lines = outcomeLines(failed.stderr);
+      const errors = lines.filter((line) => line.startsWith('error: '));
+      expect(errors).toHaveLength(1);
+      expect(lines[0]).toStartWith(
+        'error: Could not push upstream-pr/7 to origin; the branch is local only. Fix the push, then run `'
+      );
+      expect(lines[0]).toContain('push refused by test');
+      expect(failed.stderr).toContain('Pull incomplete');
+      const hint = lines[0].match(/run `([^`]+)` again\./)?.[1];
+      expect(hint).toBe("venfork pull pr 7 --branch-name 'upstream-pr/7'");
+
+      await allowPushes();
+      const retried = await runCliWithoutTty(
+        fx.work,
+        [
+          ...(hint?.split(' ').slice(1) ?? []).map((a) =>
+            a.replaceAll("'", '')
+          ),
+          '--json',
+        ],
+        env
+      );
+      expect(retried.exitCode).toBe(0);
+      expect(parseEnvelope(retried.stdout)).toMatchObject({
+        ok: true,
+        result: { branch: 'upstream-pr/7', pushed: true },
+      });
+      expect(await fx.sha(fx.origin, 'refs/heads/upstream-pr/7')).toBe(
+        await fx.sha(fx.upstream, 'refs/pull/7/head')
+      );
     } finally {
       await fx.cleanup();
     }
