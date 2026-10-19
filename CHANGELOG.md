@@ -1,5 +1,21 @@
 # venfork
 
+## [0.15.0](https://github.com/cabljac/venfork/compare/v0.14.0...v0.15.0) (2026-10-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **setup:** on a mirror created by this version, `venfork stage` needs an approved mirror PR (two-person) before it publishes. A script that runs `venfork setup` and then `venfork stage` must pass `setup --approval off` (or `reviewed`) to keep the old behaviour. Existing mirrors are unchanged.
+
+### Features
+
+* **setup:** new mirrors require two-person approval ([#141](https://github.com/cabljac/venfork/issues/141)) ([54058d4](https://github.com/cabljac/venfork/commit/54058d48174b542a7a3c388dd36e5edc5a230334))
+* **stage:** add the stage approval setting ([#136](https://github.com/cabljac/venfork/issues/136)) ([3651e9f](https://github.com/cabljac/venfork/commit/3651e9f30e054d0ace0225913f989fac45f4a853))
+* **stage:** ask a person to confirm a lowered approval level ([#138](https://github.com/cabljac/venfork/issues/138)) ([cb41f24](https://github.com/cabljac/venfork/commit/cb41f244f190199957ed1ddf06f4bd876db4d84c))
+* **stage:** bypass the approval gate with --force ([#139](https://github.com/cabljac/venfork/issues/139)) ([150fb27](https://github.com/cabljac/venfork/commit/150fb27fca29394b37c9ace791c020a2878fde8a))
+* **stage:** list AI attribution lines before publishing ([#140](https://github.com/cabljac/venfork/issues/140)) ([5e76768](https://github.com/cabljac/venfork/commit/5e76768b17da8bbcbb1e1aa25c3db35650752eb7))
+* **stage:** require an approved mirror PR when approval is on ([#137](https://github.com/cabljac/venfork/issues/137)) ([4459f58](https://github.com/cabljac/venfork/commit/4459f58d8eef18acf0acda60a12d5fa82352725b))
+
 ## [0.14.0](https://github.com/cabljac/venfork/compare/v0.13.1...v0.14.0) (2026-10-19)
 
 
