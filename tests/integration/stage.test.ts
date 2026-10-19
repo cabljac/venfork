@@ -13,6 +13,7 @@ import {
   createMirrorFixture,
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
+import { githubMirror, MIRROR_REPO } from '../harness/gh-mirror.js';
 import { seedPreserve } from '../harness/preserve.js';
 
 const CALLER = '.github/workflows/caller.yml';
@@ -368,5 +369,159 @@ describe('stage reads the local branch once', () => {
     expect(shipped?.feature?.sourceHead).toBe(planned);
     expect(shipped?.feature?.head).toBe(await fx.sha(publicFork, 'feature'));
     expect(await fx.fileAt(publicFork, 'feature', 'src/later.txt')).toBeNull();
+  });
+});
+
+describe('stage lists AI attribution in commit messages', () => {
+  const MESSAGE =
+    'feat: feature work\n\nCo-authored-by: Claude <noreply@anthropic.com>';
+
+  async function aiCommit(): Promise<void> {
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+    await fx.git(
+      fx.work,
+      'checkout',
+      '--quiet',
+      '-b',
+      'feature',
+      'origin/main'
+    );
+    await Bun.write(`${fx.work}/src/feature.txt`, 'feature\n');
+    await fx.git(fx.work, 'add', 'src/feature.txt');
+    await fx.git(fx.work, 'commit', '--quiet', '-m', MESSAGE);
+  }
+
+  test('--dry-run reports the trailer in the result and the preview', async () => {
+    await aiCommit();
+
+    const result = await stageCommand('feature', { dryRun: true });
+
+    expect(result).toMatchObject({
+      aiAttribution: [
+        {
+          subject: 'feat: feature work',
+          line: 'Co-authored-by: Claude <noreply@anthropic.com>',
+        },
+      ],
+    });
+    expect(prompts.note).toHaveBeenCalledWith(
+      expect.stringContaining('AI attribution (1), published as is:'),
+      'Staging Details',
+      ON_STDERR
+    );
+  });
+
+  test('--dry-run reports an AI tool as the commit author', async () => {
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+    await fx.git(
+      fx.work,
+      'checkout',
+      '--quiet',
+      '-b',
+      'feature',
+      'origin/main'
+    );
+    await Bun.write(`${fx.work}/src/feature.txt`, 'feature\n');
+    await fx.git(fx.work, 'add', 'src/feature.txt');
+    const copilot = 'Copilot <198982749+Copilot@users.noreply.github.com>';
+    await fx.git(
+      fx.work,
+      'commit',
+      '--quiet',
+      '--author',
+      copilot,
+      '-m',
+      'feat: feature work'
+    );
+
+    const result = await stageCommand('feature', { dryRun: true });
+
+    expect(result).toMatchObject({
+      aiAttribution: [
+        {
+          where: 'commit-author',
+          subject: 'feat: feature work',
+          line: copilot,
+        },
+      ],
+    });
+  });
+
+  test('--dry-run reports AI lines in the PR title and body it would publish', async () => {
+    await cutFeatureBranch('origin/main');
+    await mkdir(path.join(fx.work, 'acme'));
+    for (const [name, target] of [
+      ['upstream', fx.upstream],
+      ['public', fx.publicFork ?? ''],
+    ] as const) {
+      await symlink(target, path.join(fx.work, 'acme', name));
+      await fx.git(fx.work, 'remote', 'set-url', name, `acme/${name}`);
+    }
+    await appendFile(path.join(fx.work, '.git', 'info', 'exclude'), 'acme/\n');
+    const gh = await githubMirror(fx);
+    await gh.setRoutes([
+      {
+        match: `pr list --repo ${MIRROR_REPO} --head feature --state open`,
+        stdout: JSON.stringify([
+          {
+            number: 7,
+            url: `https://github.com/${MIRROR_REPO}/pull/7`,
+            title: 'internal title',
+            body: 'Adds the feature.\n\nCo-authored-by: Claude <noreply@anthropic.com>',
+          },
+        ]),
+      },
+    ]);
+
+    const result = await stageCommand('feature', {
+      dryRun: true,
+      createPr: true,
+      title: 'feat: feature work (Generated with Claude Code)',
+    });
+
+    expect(result).toMatchObject({
+      aiAttribution: [
+        {
+          where: 'pr-title',
+          line: 'feat: feature work (Generated with Claude Code)',
+        },
+        {
+          where: 'pr-body',
+          line: 'Co-authored-by: Claude <noreply@anthropic.com>',
+        },
+      ],
+    });
+    expect(prompts.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Co-authored-by: Claude <noreply@anthropic.com> (PR body)'
+      ),
+      'Staging Details',
+      ON_STDERR
+    );
+  });
+
+  test('a real stage warns and publishes the message unchanged', async () => {
+    await aiCommit();
+
+    const result = await stageCommand('feature', {
+      prompt: { yes: true, noInput: true },
+    });
+
+    expect(result).toMatchObject({
+      aiAttribution: [
+        {
+          where: 'commit-message',
+          line: 'Co-authored-by: Claude <noreply@anthropic.com>',
+        },
+      ],
+    });
+
+    expect(prompts.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('credit an AI tool'),
+      ON_STDERR
+    );
+    expect(
+      await fx.git(fx.publicFork ?? '', 'log', '-1', '--format=%B', 'feature')
+    ).toBe(MESSAGE);
   });
 });
