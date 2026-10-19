@@ -9,7 +9,7 @@ A unit `node:fs/promises` mock must spread the real module (`...realFsPromises`)
 `tests/expected-counts.json` is compared exactly and skipped tests are subtracted. Bump it by the number of tests you added and say why in the PR.
 
 ## Unit tests string-mock execa
-Remote tip lookups (`git rev-parse --verify refs/remotes/<r>/...`) are answered by the dispatcher in `tests/unit/commands.test.ts` as `<remote>0tip`, for example `upstream0tip`.
+Remote tip lookups (`git rev-parse --verify refs/remotes/<r>/...`) are answered by the dispatcher in `tests/unit/commands.test.ts` as `<remote>0tip`, for example `upstream0tip`. A local branch lookup (`git rev-parse --verify --quiet refs/heads/<b>`) is answered as `<b>0head`, and stage ranges use it: `upstream0tip..feature-branch0head`.
 
 ## Snapshots
 Run `bun test -u` only after reading the diff. The workflow YAML snapshots (`tests/unit/__snapshots__/workflow.test.ts.snap`: token mode, where `scheduleAuth` is absent, and App mode, `scheduleAuth: 'app'`) change only with an approved workflow change, because a changed YAML rewrites every scheduled mirror's managed commit on its next sync.

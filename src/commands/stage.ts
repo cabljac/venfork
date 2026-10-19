@@ -133,19 +133,20 @@ interface RebuiltHead {
 /**
  * Rebuilds `branch` as a linear head on `base` (the commit id of
  * `refs/remotes/upstream/<defaultBranch>`) in a hooks-disabled worktree:
- * every non-merge, non-managed commit in `base..refs/heads/<branch>` is
+ * every non-merge, non-managed commit in `base..<sourceRef>` is
  * cherry-picked in topological order. Merge commits never ship; one with a manual conflict
  * resolution outside `.github/workflows/` is refused, since dropping it
  * would lose work.
  */
 async function rebuildLinearHead(
   branch: string,
+  sourceRef: string,
   base: string,
   defaultBranch: string,
   preserve: string[],
   repoDir: string
 ): Promise<RebuiltHead> {
-  const ref = `refs/heads/${branch}`;
+  const ref = sourceRef;
   await assertNoEvilMerges(ref, branch, base, defaultBranch, repoDir);
 
   return withDetachedWorktree(
@@ -257,6 +258,10 @@ export interface StagingPlan {
   noPublic: boolean;
   /** Upstream and public fork URLs from the config and the remotes. */
   recordedUrls: string[];
+  /** Commit id stage rebuilds: `refs/heads/<branch>` read once at plan time, or the pinned commit. */
+  sourceRef: string;
+  /** Commit id recorded as `shippedBranches[branch].sourceHead`; equals `sourceRef`. */
+  sourceHead: string;
 }
 
 function stageConfirmMessage(noPublic: boolean, createPr: boolean): string {
@@ -290,7 +295,8 @@ function notGitHubForPr(remote: string): PreconditionError {
 async function planStaging(
   requested: string,
   cwd: string,
-  consent: { createPr: boolean; dryRun?: boolean; prompt?: PromptContext }
+  consent: { createPr: boolean; dryRun?: boolean; prompt?: PromptContext },
+  source?: { sha: string }
 ): Promise<StagingPlan> {
   const branch = requested.replace(/^refs\/heads\//, '');
   if (branch.replace(/^origin\//, '') === CONFIG_BRANCH) {
@@ -299,22 +305,9 @@ async function planStaging(
     );
   }
   assertNoMirrorReference(branch, 'the branch name', await mirrorDenyList(cwd));
-  const branchCheck = await $({
-    cwd,
-    reject: false,
-  })`git rev-parse --verify --quiet refs/heads/${branch}`;
-  if (branchCheck.exitCode !== 0) {
-    const anyRef = await $({
-      cwd,
-      reject: false,
-    })`git rev-parse --verify --quiet ${branch}`;
-    if (anyRef.exitCode === 0) {
-      throw new PreconditionError(
-        `Refusing to stage '${branch}': it is not a local branch. Tags and remote-tracking refs cannot be staged; check out a branch and stage that.`
-      );
-    }
-    throw new BranchNotFoundError(branch);
-  }
+  const { sourceRef, sourceHead } = source
+    ? await pinnedSource(branch, source.sha, cwd)
+    : await localBranchSource(branch, cwd);
 
   const config = await readVenforkConfigFromRepo(cwd);
   assertNoInvalidPreserve(config);
@@ -366,7 +359,7 @@ async function planStaging(
   }
   await netFetch('upstream', cwd);
   await netFetch('origin', cwd);
-  const upstreamDefaultBranch = await getDefaultBranch('upstream');
+  const upstreamDefaultBranch = await getDefaultBranch('upstream', cwd);
   const upstreamTip = await resolveCommit(
     `refs/remotes/upstream/${upstreamDefaultBranch}`,
     cwd
@@ -392,7 +385,7 @@ async function planStaging(
   const mergeBase = await $({
     cwd,
     reject: false,
-  })`git merge-base ${upstreamTip} ${`refs/heads/${branch}`}`;
+  })`git merge-base ${upstreamTip} ${sourceRef}`;
   if (mergeBase.exitCode === 1) {
     throw new PreconditionError(
       `Refusing to stage '${branch}': it has no history in common with upstream/${upstreamDefaultBranch}.`
@@ -427,7 +420,74 @@ async function planStaging(
         ].filter((url): url is string => Boolean(url))
       ),
     ],
+    sourceRef,
+    sourceHead,
   };
+}
+
+/**
+ * The commit id of the local branch `refs/heads/<branch>`, read once so a
+ * branch moved during the fetches cannot change what ships. Refuses tags,
+ * remote refs and a missing branch.
+ */
+async function localBranchSource(
+  branch: string,
+  cwd: string
+): Promise<{ sourceRef: string; sourceHead: string }> {
+  const branchCheck = await $({
+    cwd,
+    reject: false,
+  })`git rev-parse --verify --quiet refs/heads/${branch}`;
+  if (branchCheck.exitCode !== 0) {
+    const anyRef = await $({
+      cwd,
+      reject: false,
+    })`git rev-parse --verify --quiet ${branch}`;
+    if (anyRef.exitCode === 0) {
+      throw new PreconditionError(
+        `Refusing to stage '${branch}': it is not a local branch. Tags and remote-tracking refs cannot be staged; check out a branch and stage that.`
+      );
+    }
+    throw new BranchNotFoundError(branch);
+  }
+  const sha = branchCheck.stdout.trim();
+  return { sourceRef: sha, sourceHead: sha };
+}
+
+/**
+ * The commit `sha`, staged under the name `branch` without reading any
+ * local branch. Refuses an abbreviated id, a name git does not accept as a
+ * branch, and a commit missing from the clone.
+ */
+async function pinnedSource(
+  branch: string,
+  sha: string,
+  cwd: string
+): Promise<{ sourceRef: string; sourceHead: string }> {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha)) {
+    throw new PreconditionError(
+      `Refusing to stage '${branch}': '${sha}' is not a full commit id.`
+    );
+  }
+  const refFormat = await $({
+    cwd,
+    reject: false,
+  })`git check-ref-format ${`refs/heads/${branch}`}`;
+  if (refFormat.exitCode !== 0) {
+    throw new PreconditionError(
+      `Refusing to stage '${branch}': it is not a valid branch name.`
+    );
+  }
+  const present = await $({
+    cwd,
+    reject: false,
+  })`git cat-file -e ${`${sha}^{commit}`}`;
+  if (present.exitCode !== 0) {
+    throw new PreconditionError(
+      `Refusing to stage '${branch}': commit ${sha} is not in this clone. Fetch it and retry.`
+    );
+  }
+  return { sourceRef: sha, sourceHead: sha };
 }
 
 /** A gated linear head ready to push, with what it publishes. */
@@ -456,6 +516,7 @@ async function prepareStage(
   const base = plan.upstreamTip;
   const rebuilt = await rebuildLinearHead(
     plan.branch,
+    plan.sourceRef,
     base,
     plan.upstreamDefaultBranch,
     plan.preserve,
@@ -589,6 +650,11 @@ export interface StageOptions {
   dryRun?: boolean;
   /** `--yes` / `--no-input` for the push confirm. */
   prompt?: PromptContext;
+  /**
+   * Stage the commit `sha` under the name `branch` instead of
+   * `refs/heads/<branch>`, so no local branch is read or needed.
+   */
+  source?: { sha: string };
 }
 
 /**
@@ -742,11 +808,12 @@ export async function stageCommand(
   const repoDir = process.cwd();
   try {
     s.start('Verifying branch and fetching upstream and origin');
-    const plan = await planStaging(branch, repoDir, {
-      createPr,
-      dryRun: options.dryRun,
-      prompt: options.prompt,
-    });
+    const plan = await planStaging(
+      branch,
+      repoDir,
+      { createPr, dryRun: options.dryRun, prompt: options.prompt },
+      options.source
+    );
     s.stop('Branch verified');
 
     s.start('Rebuilding the branch on upstream and checking every commit');
@@ -998,6 +1065,7 @@ export async function stageCommand(
               upstreamPrUrl,
               head: stagedHead,
               shippedAt: new Date().toISOString(),
+              sourceHead: plan.sourceHead,
               ...(internalPr ? { internalPrUrl: internalPr.url } : {}),
             },
           },

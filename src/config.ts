@@ -21,6 +21,8 @@ export interface ShippedBranch {
   shippedAt: string;
   /** Internal-mirror PR URL, omitted if the branch had no internal PR. */
   internalPrUrl?: string;
+  /** Mirror commit that was staged; differs from `head`, which stage rebuilds. */
+  sourceHead?: string;
 }
 
 /**
@@ -365,6 +367,9 @@ function normalizeShippedBranch(value: unknown): ShippedBranch | null {
   };
   if (typeof v.internalPrUrl === 'string' && v.internalPrUrl.trim()) {
     out.internalPrUrl = v.internalPrUrl;
+  }
+  if (typeof v.sourceHead === 'string' && v.sourceHead.trim()) {
+    out.sourceHead = v.sourceHead;
   }
   return out;
 }

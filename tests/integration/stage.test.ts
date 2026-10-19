@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { chmod } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, symlink } from 'node:fs/promises';
+import path from 'node:path';
 import * as prompts from '@clack/prompts';
 import { $ } from 'execa';
 import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
@@ -247,5 +248,125 @@ describe('stage in no-public mode', () => {
     expect(await fx.git(fx.upstream, 'rev-parse', 'feature^{tree}')).toBe(
       await fx.git(fx.work, 'rev-parse', 'feature^{tree}')
     );
+  });
+});
+
+describe('stage a pinned commit', () => {
+  test('source.sha stages a commit that has no local branch', async () => {
+    const sha = await cutFeatureBranch('upstream/main');
+    await fx.git(fx.work, 'checkout', '--quiet', 'main');
+    await fx.git(fx.work, 'branch', '--quiet', '-D', 'feature');
+
+    await stageCommand('feature', { source: { sha } });
+
+    const publicFork = fx.publicFork ?? '';
+    expect(await fx.git(publicFork, 'rev-parse', 'feature^{tree}')).toBe(
+      await fx.git(fx.work, 'rev-parse', `${sha}^{tree}`)
+    );
+    expect(await fx.subjects(publicFork, 'feature', 'main..feature')).toEqual([
+      'feat: feature work',
+    ]);
+    expect(await refExists(fx.work, 'refs/heads/feature')).toBe(false);
+  });
+
+  test('source.sha stages the pinned commit, not the moved local branch', async () => {
+    const sha = await cutFeatureBranch('upstream/main');
+    await Bun.write(`${fx.work}/src/later.txt`, 'later\n');
+    await fx.git(fx.work, 'add', 'src/later.txt');
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: later work');
+
+    await stageCommand('feature', { source: { sha } });
+
+    const publicFork = fx.publicFork ?? '';
+    expect(await fx.fileAt(publicFork, 'feature', 'src/later.txt')).toBeNull();
+    expect(await fx.git(publicFork, 'rev-parse', 'feature^{tree}')).toBe(
+      await fx.git(fx.work, 'rev-parse', `${sha}^{tree}`)
+    );
+  });
+
+  test('source.sha refuses a commit that is not in the clone', async () => {
+    await expect(
+      stageCommand('feature', { source: { sha: 'f'.repeat(40) } })
+    ).rejects.toThrow(new CommandExitError(1));
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(`commit ${'f'.repeat(40)} is not in this clone`),
+      ON_STDERR
+    );
+    expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(false);
+  });
+});
+
+describe('stage reads the local branch once', () => {
+  /** Commits twice on `feature`, rewinds it one commit, and arms a hook that moves it forward again during the upstream fetch. */
+  async function armMoveDuringFetch(): Promise<{
+    planned: string;
+    marker: string;
+  }> {
+    const planned = await cutFeatureBranch('upstream/main');
+    await Bun.write(`${fx.work}/src/later.txt`, 'later\n');
+    await fx.git(fx.work, 'add', 'src/later.txt');
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: later work');
+    const later = await fx.sha(fx.work, 'feature');
+    await fx.git(fx.work, 'checkout', '--quiet', '--detach');
+    await fx.git(fx.work, 'branch', '-f', 'feature', planned);
+    await fx.commitOnUpstream({ 'up.txt': 'up\n' });
+    const marker = `${fx.root}/moved`;
+    const hook = `${fx.work}/.git/hooks/reference-transaction`;
+    await Bun.write(
+      hook,
+      `#!/bin/sh\n[ "$1" = committed ] || exit 0\n[ -e '${marker}' ] && exit 0\nif grep -q refs/remotes/upstream; then touch '${marker}'; git update-ref refs/heads/feature ${later}; fi\nexit 0\n`
+    );
+    await chmod(hook, 0o755);
+    return { planned, marker };
+  }
+
+  test('a branch moved during the upstream fetch ships the planned head, not the new tip', async () => {
+    const { marker } = await armMoveDuringFetch();
+
+    await stageCommand('feature');
+
+    expect(await Bun.file(marker).exists()).toBe(true);
+    const publicFork = fx.publicFork ?? '';
+    expect(await fx.fileAt(publicFork, 'feature', 'src/later.txt')).toBeNull();
+    expect(await fx.fileAt(publicFork, 'feature', 'src/feature.txt')).toBe(
+      'feature\n'
+    );
+  });
+
+  test('the PR step records the planned head as sourceHead when the branch moves during the fetch', async () => {
+    const { planned, marker } = await armMoveDuringFetch();
+    await mkdir(path.join(fx.work, 'acme'));
+    for (const [name, target] of [
+      ['upstream', fx.upstream],
+      ['public', fx.publicFork ?? ''],
+    ] as const) {
+      await symlink(target, path.join(fx.work, 'acme', name));
+      await fx.git(fx.work, 'remote', 'set-url', name, `acme/${name}`);
+    }
+    await appendFile(path.join(fx.work, '.git', 'info', 'exclude'), 'acme/\n');
+    const bin = path.join(fx.root, 'gh-bin');
+    await mkdir(bin);
+    await Bun.write(
+      path.join(bin, 'gh'),
+      '#!/bin/sh\n[ "$1 $2" = "pr create" ] && { echo https://github.com/acme/upstream/pull/1; exit 0; }\nexit 1\n'
+    );
+    await chmod(path.join(bin, 'gh'), 0o755);
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${originalPath ?? ''}`;
+    try {
+      await stageCommand('feature', { createPr: true });
+    } finally {
+      process.env.PATH = originalPath;
+    }
+
+    expect(await Bun.file(marker).exists()).toBe(true);
+    const shipped = (await fx.readRawConfig()).shippedBranches as
+      | Record<string, { sourceHead?: string; head?: string }>
+      | undefined;
+    const publicFork = fx.publicFork ?? '';
+    expect(shipped?.feature?.sourceHead).toBe(planned);
+    expect(shipped?.feature?.head).toBe(await fx.sha(publicFork, 'feature'));
+    expect(await fx.fileAt(publicFork, 'feature', 'src/later.txt')).toBeNull();
   });
 });

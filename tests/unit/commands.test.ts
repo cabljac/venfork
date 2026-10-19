@@ -141,6 +141,16 @@ function getMockExecaResponse(
       stderr: '',
     });
   }
+  const localHead = command.match(
+    /git rev-parse --verify --quiet refs\/heads\/(\S+)$/
+  );
+  if (localHead) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: `${localHead[1]}0head`,
+      stderr: '',
+    });
+  }
   if (command.includes('git rev-parse --verify upstream/')) {
     return Promise.resolve({ exitCode: 0, stdout: 'upstream0tip', stderr: '' });
   }
@@ -409,7 +419,7 @@ function mockManagedCommitOnBranch(
   sha = 'managed0'
 ): void {
   mockResponses.set(
-    `git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/${branch}`,
+    `git rev-list --reverse --topo-order --no-merges upstream0tip..${branch}0head`,
     { exitCode: 0, stdout: sha, stderr: '' }
   );
   mockResponses.set(`git log -1 --no-show-signature --format=%s ${sha}`, {
@@ -1646,7 +1656,7 @@ describe('stageCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch'
+          'git rev-list --reverse --topo-order --no-merges upstream0tip..feature-branch0head'
         )
       )
     ).toBe(true);
@@ -1669,7 +1679,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..feature-branch0head',
       { exitCode: 0, stdout: 'mgd111\nfeat222', stderr: '' }
     );
     mockResponses.set('git log -1 --no-show-signature --format=%s mgd111', {
@@ -1733,7 +1743,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..feature-branch0head',
       { exitCode: 0, stdout: 'feat222', stderr: '' }
     );
     mockResponses.set('git log -1 --no-show-signature --format=%s feat222', {
@@ -1775,7 +1785,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..feature-branch0head',
       () => Promise.reject(new Error('fatal: bad revision'))
     );
 
@@ -1805,7 +1815,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..feature-branch0head',
       {
         exitCode: 0,
         stdout: 'feat111\nwf222\nfeat333',
@@ -1904,7 +1914,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..feature-branch0head',
       {
         exitCode: 0,
         stdout: 'userci1',
@@ -1950,7 +1960,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --merges upstream0tip..refs/heads/feature-branch',
+      'git rev-list --merges upstream0tip..feature-branch0head',
       {
         exitCode: 0,
         stdout: 'evilmrg\n',
@@ -1988,7 +1998,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --merges upstream0tip..refs/heads/feature-branch',
+      'git rev-list --merges upstream0tip..feature-branch0head',
       {
         exitCode: 0,
         stdout: 'bad-merge-commit\n',
@@ -2029,7 +2039,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --merges upstream0tip..refs/heads/feature-branch',
+      'git rev-list --merges upstream0tip..feature-branch0head',
       {
         exitCode: 0,
         stdout: 'wfmrg42\n',
@@ -2042,7 +2052,7 @@ describe('stageCommand', () => {
       stderr: '',
     });
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..feature-branch0head',
       {
         exitCode: 0,
         stdout: 'feat111',
@@ -2097,7 +2107,7 @@ describe('stageCommand', () => {
     // `--no-merges` makes git omit the merge commit from the list. We assert
     // venfork passes that flag and only cherry-picks the non-merge commits.
     mockResponses.set(
-      'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch',
+      'git rev-list --reverse --topo-order --no-merges upstream0tip..feature-branch0head',
       {
         exitCode: 0,
         stdout: 'feat111\nfeat222',
@@ -2129,7 +2139,7 @@ describe('stageCommand', () => {
     expect(
       execaCalls.some((cmd) =>
         cmd.includes(
-          'git rev-list --reverse --topo-order --no-merges upstream0tip..refs/heads/feature-branch'
+          'git rev-list --reverse --topo-order --no-merges upstream0tip..feature-branch0head'
         )
       )
     ).toBe(true);
@@ -2234,6 +2244,61 @@ describe('stageCommand', () => {
     // (We can't easily inspect the piped --body-file - input here, but the
     // payload was rendered via translateInternalBody and shown to the user.)
     expect(execaCalls.some((cmd) => cmd.includes('--body-file -'))).toBe(true);
+  });
+
+  test('the PR step records the staged source commit as shippedBranches sourceHead', async () => {
+    confirmResponse = true;
+    mockResponses.set('git remote get-url origin', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-private.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url public', {
+      exitCode: 0,
+      stdout: 'git@github.com:owner/repo-fork.git',
+      stderr: '',
+    });
+    mockResponses.set('git remote get-url upstream', {
+      exitCode: 0,
+      stdout: 'git@github.com:up/repo.git',
+      stderr: '',
+    });
+    mockResponses.set(
+      'git rev-parse --verify --quiet refs/heads/feature-branch',
+      {
+        exitCode: 0,
+        stdout: 'cafef00d',
+        stderr: '',
+      }
+    );
+    mockResponses.set('git show FETCH_HEAD:.venfork/config.json', {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        version: '1',
+        publicForkUrl: 'git@github.com:owner/repo-fork.git',
+        upstreamUrl: 'git@github.com:up/repo.git',
+      }),
+      stderr: '',
+    });
+    mockResponses.set(
+      'gh pr list --repo owner/repo-private --head feature-branch',
+      { exitCode: 0, stdout: '[]', stderr: '' }
+    );
+    mockResponses.set('gh pr create --repo up/repo', {
+      exitCode: 0,
+      stdout: 'https://github.com/up/repo/pull/123\n',
+      stderr: '',
+    });
+
+    await stageCommand('feature-branch', { createPr: true });
+
+    const written = writeFileCalls
+      .filter((call) => call.path.endsWith('config.json'))
+      .map((call) => JSON.parse(call.content))
+      .at(-1);
+    expect(written?.shippedBranches?.['feature-branch']?.sourceHead).toBe(
+      'cafef00d'
+    );
   });
 
   test('dryRun previews the redacted PR body and calls no push, gh pr create or config write', async () => {
