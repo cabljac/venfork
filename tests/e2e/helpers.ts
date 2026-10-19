@@ -149,8 +149,8 @@ export async function openUpstreamPr(args: {
 
 /**
  * Pushes another commit onto an existing upstream PR's branch via the
- * contents API. Used by Tier 4 to verify `venfork sync upstream-pr/<n>`
- * picks up new commits.
+ * contents API. Used by Tier 4 to verify that a re-run of
+ * `venfork pull pr <n>` picks up new commits.
  */
 export async function pushToUpstreamPrBranch(args: {
   branch: string;

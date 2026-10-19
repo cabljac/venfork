@@ -45,7 +45,7 @@ describe('stage against real repos', () => {
   test('a post-checkout hook in the clone does not leak into the staged branch', async () => {
     await seedPreserve(fx, [CALLER]);
     await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
-    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await syncCommand({ cwd: fx.work, quiet: true });
     await cutFeatureBranch('origin/main');
     const hook = `${fx.work}/.git/hooks/post-checkout`;
     await Bun.write(
@@ -64,7 +64,7 @@ describe('stage against real repos', () => {
   test('stage strips a preserve-only managed commit', async () => {
     await seedPreserve(fx, [CALLER]);
     await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
-    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await syncCommand({ cwd: fx.work, quiet: true });
     await cutFeatureBranch('origin/main');
 
     await stageCommand('feature');
@@ -99,7 +99,7 @@ describe('stage against real repos', () => {
   test('stage re-pushes a rebuilt branch when the public tracking ref is missing', async () => {
     await seedPreserve(fx, [CALLER]);
     await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
-    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await syncCommand({ cwd: fx.work, quiet: true });
     await cutFeatureBranch('origin/main');
     await stageCommand('feature');
     await fx.git(fx.work, 'commit', '--quiet', '--amend', '-m', 'feat: v2');
@@ -115,7 +115,7 @@ describe('stage against real repos', () => {
   test('stage names the preserved path when a commit touching it cannot be replayed', async () => {
     await seedPreserve(fx, [CALLER]);
     await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
-    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await syncCommand({ cwd: fx.work, quiet: true });
     await cutFeatureBranch('origin/main');
     await Bun.write(`${fx.work}/${CALLER}`, 'edited on the branch\n');
     await fx.git(fx.work, 'commit', '--quiet', '-am', 'chore: tweak caller');
@@ -183,7 +183,7 @@ describe.each(['standard', 'no-public'] as const)(
 
     test('a branch squashed onto upstream after sync', async () => {
       await fx.commitOnOrigin({ [DOC]: 'mirror only\n' });
-      await syncCommand(undefined, { cwd: fx.work, quiet: true });
+      await syncCommand({ cwd: fx.work, quiet: true });
       await cutFeatureBranch('origin/main');
       await fx.git(fx.work, 'reset', '--quiet', '--soft', 'upstream/main');
       await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: squashed');

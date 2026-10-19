@@ -430,6 +430,8 @@ export async function pushBranchWithLease(args: {
   target: string;
   expected: string;
   cwd?: string;
+  /** The command a stale lease tells the user to re-run. */
+  rerun?: string;
 }): Promise<boolean> {
   const { remote, branch, target, expected, cwd } = args;
   if (target === expected) {
@@ -442,7 +444,9 @@ export async function pushBranchWithLease(args: {
     const reason = netFailureReason(result);
     throw new GitError(
       /stale info/i.test(reason)
-        ? `${remote}/${branch} moved since this sync fetched it. Re-run \`venfork sync\` to pick up the new commits.`
+        ? args.rerun
+          ? `${remote}/${branch} moved since venfork last fetched it. Re-run \`${args.rerun}\` to pick up the new commits.`
+          : `${remote}/${branch} moved since this sync fetched it. Re-run \`venfork sync\` to pick up the new commits.`
         : `push to ${remote}/${branch} failed: ${reason}`,
       `git push ${remote} ${branch}`
     );

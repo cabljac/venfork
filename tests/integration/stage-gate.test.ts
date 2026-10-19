@@ -193,7 +193,7 @@ describe.each(['standard', 'no-public'] as const)(
       await fx.commitOnOrigin({ [DOC]: 'client roadmap\n' }, 'docs: notes');
       await featureFrom('origin/main');
       await seedPreserve(fx, [DOC]);
-      await syncCommand(undefined, { cwd: fx.work, quiet: true });
+      await syncCommand({ cwd: fx.work, quiet: true });
       await fx.git(fx.work, 'mv', DOC, 'docs/renamed.md');
       await fx.git(fx.work, 'commit', '--quiet', '-m', 'docs: rename');
 
@@ -203,7 +203,7 @@ describe.each(['standard', 'no-public'] as const)(
     test('a copy of a preserved file under a new path is refused', async () => {
       await fx.commitOnOrigin({ [DOC]: 'client roadmap\n' }, 'docs: notes');
       await seedPreserve(fx, [DOC]);
-      await syncCommand(undefined, { cwd: fx.work, quiet: true });
+      await syncCommand({ cwd: fx.work, quiet: true });
       await featureFrom('origin/main');
       await commitFile('docs/copy.md', 'client roadmap\n', 'docs: copy');
       await fx.git(fx.work, 'rm', '--quiet', 'docs/copy.md');
@@ -215,7 +215,7 @@ describe.each(['standard', 'no-public'] as const)(
     test('a preserved file added by a clean commit after sync is refused', async () => {
       await seedPreserve(fx, [DOC]);
       await fx.commitOnOrigin({ [DOC]: 'client roadmap\n' }, 'docs: notes');
-      await syncCommand(undefined, { cwd: fx.work, quiet: true });
+      await syncCommand({ cwd: fx.work, quiet: true });
       await featureFrom('origin/main');
       await fx.git(fx.work, 'rm', '--quiet', DOC);
       await fx.git(fx.work, 'commit', '--quiet', '-m', 'chore: drop');
@@ -307,7 +307,7 @@ describe('the gate trusts refs/remotes/upstream, not the short name', () => {
     process.chdir(fx.work);
     await fx.commitOnOrigin({ [DOC]: 'internal\n' }, 'chore: add internal');
     await seedPreserve(fx, [DOC]);
-    await syncCommand(undefined, { cwd: fx.work, quiet: true });
+    await syncCommand({ cwd: fx.work, quiet: true });
     await fx.git(fx.work, 'fetch', '--quiet', 'origin');
   });
 

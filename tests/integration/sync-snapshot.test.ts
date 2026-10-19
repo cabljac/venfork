@@ -77,7 +77,7 @@ afterEach(async () => {
 });
 
 function sync(cwd = fx.work): Promise<unknown> {
-  return syncCommand(undefined, { cwd, quiet: true });
+  return syncCommand({ cwd, quiet: true });
 }
 
 /** A second developer clone of the mirror with every remote wired up. */

@@ -1,9 +1,9 @@
-import { isPromptFlag, scanArgs, unexpectedArgument } from './shared/args.js';
+import { UsageError } from './errors.js';
+import { isPromptFlag, scanArgs } from './shared/args.js';
 import { JSON_FLAG } from './shared/json-output.js';
 
 /** Parsed `venfork sync` arguments. */
 export type ParsedSyncArgs = {
-  branch?: string;
   /** Open/close the `venfork-sync-blocked` issue on the mirror. */
   reportIssues: boolean;
   /** Print the `--json` envelope on stdout. */
@@ -12,11 +12,12 @@ export type ParsedSyncArgs = {
 
 /** Usage line for `venfork sync`. */
 export const SYNC_USAGE =
-  'venfork sync [branch] [--report-issues] [--no-input] [--json]';
+  'venfork sync [--report-issues] [--no-input] [--json]';
 
 /**
- * Parse `venfork sync [branch] [--report-issues] [--json] [--no-input]` argv
- * after the `sync` token. `--` ends options. Throws a `UsageError`.
+ * Parse `venfork sync [--report-issues] [--json] [--no-input]` argv after
+ * the `sync` token. `--` ends options. Throws a `UsageError`, also for any
+ * positional: sync always syncs upstream's default branch.
  */
 export function parseSyncCliArgs(args: string[]): ParsedSyncArgs {
   let reportIssues = false;
@@ -31,8 +32,16 @@ export function parseSyncCliArgs(args: string[]): ParsedSyncArgs {
     reportIssues = true;
     return 0;
   });
-  if (positional.length > 1) {
-    throw unexpectedArgument(positional[1], SYNC_USAGE);
+  if (positional.length > 0) {
+    throw syncBranchArgumentError(positional[0]);
   }
-  return { branch: positional[0], reportIssues, json };
+  return { reportIssues, json };
+}
+
+/** The usage error for `venfork sync <branch>`, pointing at `pull pr`. */
+function syncBranchArgumentError(arg: string): UsageError {
+  const prNumber = /^upstream-pr\/(\d+)$/.exec(arg)?.[1] ?? '<n>';
+  return new UsageError(
+    `venfork sync takes no branch ('${arg}'): it always syncs upstream's default branch. To refresh a pulled upstream PR, run \`venfork pull pr ${prNumber}\` again. Usage: ${SYNC_USAGE}`
+  );
 }

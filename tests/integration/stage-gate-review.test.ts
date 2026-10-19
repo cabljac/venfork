@@ -32,7 +32,7 @@ afterEach(async () => {
 });
 
 const git = (...args: string[]) => fx.git(fx.work, ...args);
-const sync = () => syncCommand(undefined, { cwd: fx.work, quiet: true });
+const sync = () => syncCommand({ cwd: fx.work, quiet: true });
 
 async function featureFrom(base: string): Promise<void> {
   await git('fetch', '--quiet', 'origin');

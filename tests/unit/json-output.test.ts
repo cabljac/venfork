@@ -292,7 +292,7 @@ describe('jsonRequested', () => {
   test.each([
     ['sync', []],
     ['sync', ['--json']],
-    ['sync', ['main', '--report-issues', '--json']],
+    ['sync', ['--report-issues', '--json']],
     ['stage', ['feat']],
     ['stage', ['feat', '--json', '--pr']],
     ['stage', ['branch', 'feat', '--json']],

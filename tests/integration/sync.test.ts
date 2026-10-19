@@ -43,7 +43,7 @@ afterEach(async () => {
 });
 
 function sync(): Promise<unknown> {
-  return syncCommand(undefined, { cwd: fx.work, quiet: true });
+  return syncCommand({ cwd: fx.work, quiet: true });
 }
 
 function enableSchedule(): Promise<unknown> {

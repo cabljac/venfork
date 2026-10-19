@@ -65,7 +65,7 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'sync',
-    `venfork sync [branch] [--report-issues] [--yes] [--no-input] [--json]
+    `venfork sync [--report-issues] [--yes] [--no-input] [--json]
   Update the default branches of origin (and public, unless the mirror is in no-public mode) to match upstream
   --report-issues (used by the scheduled workflow) opens a venfork-sync-blocked
     issue on the mirror when sync is blocked and closes it after a successful sync
@@ -121,7 +121,7 @@ venfork stage issue <number-or-url> [--title <text>] [--yes] [--no-input] [--jso
 venfork pull issue <number-or-url> [--title <text>] [--yes] [--no-input] [--json]
   Bring upstream content into the private mirror
   • pr: fetch pull/<n>/head from upstream into a new branch (default: upstream-pr/<n>)
-    and push it to origin so the team can review it. Refresh later with: venfork sync <branch>
+    and push it to origin so the team can review it. Run it again to refresh the branch
   • issue: read the upstream issue, open an internal triage issue on the mirror,
     record linkage. No comment sync; the linkage is one-shot.
     --yes opens it without the confirm; --no-input without --yes exits 2.
@@ -154,7 +154,7 @@ const SUBCOMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   Bring a third-party upstream PR into the mirror for internal review
   Fetches pull/<n>/head from upstream into a new branch (default: upstream-pr/<n>)
   Pushes the branch to origin so the team can see it
-  Refresh later with: venfork sync <branch>
+  Run it again to refresh the branch to the PR's current head
   --json prints one JSON envelope on stdout`,
   ],
   [
@@ -236,7 +236,7 @@ venfork stage feature/new-thing
 
 # Bring a third-party upstream PR in for internal review
 venfork pull pr 1234
-# Refresh as the contributor pushes updates: venfork sync upstream-pr/1234`,
+# Refresh as the contributor pushes updates: venfork pull pr 1234`,
     'Example Workflow'
   );
 

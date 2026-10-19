@@ -107,7 +107,7 @@ describe('setupSyncMirror', () => {
     const sync = mock(syncStub);
     await setupSyncMirror(sync)('/work/acme-private');
     expect(sync).toHaveBeenCalledTimes(1);
-    expect(sync).toHaveBeenCalledWith(undefined, {
+    expect(sync).toHaveBeenCalledWith({
       cwd: '/work/acme-private',
       quiet: true,
     });
@@ -141,7 +141,13 @@ describe('partialFailureExitCode', () => {
   });
 
   test('pull pr exits 1 when the asked-for push to origin failed', () => {
-    const pulled = { branch: 'b', head: 'h', prNumber: 1, prUrl: 'u' };
+    const pulled = {
+      branch: 'b',
+      head: 'h',
+      prNumber: 1,
+      prUrl: 'u',
+      refreshed: false,
+    };
     expect(
       partialFailureExitCode({
         command: 'pull pr',
@@ -156,20 +162,5 @@ describe('partialFailureExitCode', () => {
         push: false,
       })
     ).toBe(0);
-  });
-
-  test('sync exits 1 when a pulled PR branch could not be pushed', () => {
-    expect(
-      partialFailureExitCode({
-        command: 'sync',
-        result: {
-          kind: 'pulled-pr',
-          status: 'push-failed',
-          branch: 'b',
-          prNumber: 1,
-          head: 'h',
-        },
-      })
-    ).toBe(1);
   });
 });

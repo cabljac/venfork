@@ -4,7 +4,7 @@ import { commandHelp } from '../../src/commands/help.js';
 describe('commandHelp', () => {
   test('sync help names no flag that sync does not accept', () => {
     const usage = commandHelp('sync', []) ?? '';
-    expect(usage).toContain('venfork sync [branch] [--report-issues]');
+    expect(usage).toContain('venfork sync [--report-issues]');
     expect(usage).not.toContain('--no-public');
     expect(usage).toContain('no-public mode');
   });
