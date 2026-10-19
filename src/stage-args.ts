@@ -36,6 +36,8 @@ export type ParsedStageBranchArgs = {
   noUpdateExisting: boolean;
   /** `--dry-run`: show what would be published and push nothing. */
   dryRun: boolean;
+  /** `--force`: stage past an approval gate refusal after a person confirms. */
+  force: boolean;
   /** `--yes` / `--no-input`. */
   prompt: PromptContext;
   /** Print the `--json` envelope on stdout. */
@@ -84,7 +86,7 @@ const APPROVAL_WORDS: Record<string, ApprovalLevel> = {
 
 /** Usage line for `venfork stage <branch>`. */
 export const STAGE_USAGE =
-  'venfork stage <branch> [--no-pr] [--draft] [--dry-run] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]';
+  'venfork stage <branch> [--no-pr] [--draft] [--dry-run] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--force] [--yes] [--no-input] [--json]';
 
 /**
  * Parse `venfork stage ...` argv after the `stage` token.
@@ -102,6 +104,7 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   let internalPrNumber: number | undefined;
   let noUpdateExisting = false;
   let dryRun = false;
+  let force = false;
   const promptFlags = parsePromptFlags({ allowJson: true });
 
   const positional = scanArgs(stageArgs, STAGE_USAGE, (a, i) => {
@@ -124,6 +127,10 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     }
     if (a === '--dry-run') {
       dryRun = true;
+      return 0;
+    }
+    if (a === '--force') {
+      force = true;
       return 0;
     }
     if (a === '--title' || a.startsWith('--title=')) {
@@ -152,6 +159,7 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
   const [first, ...rest] = positional;
   const branchFlags = [
     dryRun && '--dry-run',
+    force && '--force',
     prFlag,
     noPr && '--no-pr',
     draft && '--draft',
@@ -235,6 +243,12 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     }
   }
 
+  if (force && dryRun) {
+    throw new UsageError(
+      '--force cannot be combined with --dry-run, which already pushes nothing and reports the approval result'
+    );
+  }
+
   return {
     kind: 'branch',
     branch,
@@ -245,6 +259,7 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
     internalPrNumber,
     noUpdateExisting,
     dryRun,
+    force,
     prompt: promptFlags.prompt,
     json: promptFlags.json,
   };

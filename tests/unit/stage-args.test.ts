@@ -397,3 +397,25 @@ describe('parseStageCliArgs: stage approval', () => {
     expect(parseStageCliArgs(['branch', 'approval']).branch).toBe('approval');
   });
 });
+
+describe('parseStageCliArgs: --force', () => {
+  test('--force parses on a branch stage, with or without --no-pr', () => {
+    expect(parseStageCliArgs(['feat/auth']).force).toBe(false);
+    expect(parseStageCliArgs(['feat/auth', '--force']).force).toBe(true);
+    expect(parseStageCliArgs(['feat/auth', '--force', '--no-pr']).force).toBe(
+      true
+    );
+  });
+
+  test('--force with --dry-run, stage issue or stage approval is a usage error', () => {
+    expect(() =>
+      parseStageUnion(['feat/auth', '--force', '--dry-run'])
+    ).toThrow('--force cannot be combined with --dry-run');
+    expect(() => parseStageUnion(['issue', '7', '--force'])).toThrow(
+      '--force only applies to stage branch, not stage issue'
+    );
+    expect(() => parseStageUnion(['approval', '--force'])).toThrow(
+      '--force only applies to stage branch, not stage approval'
+    );
+  });
+});

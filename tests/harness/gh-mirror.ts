@@ -31,6 +31,8 @@ export interface GhMirror {
   setRoutes(routes: GhRoute[]): Promise<void>;
   /** Each gh argv the stub received, joined by spaces. */
   calls(): Promise<string[]>;
+  /** What gh read on stdin for each `--input -` call, in order. */
+  inputs(): Promise<string[]>;
 }
 
 const GH_STUB = `#!/usr/bin/env node
@@ -38,6 +40,9 @@ const fs = require('node:fs');
 const argv = process.argv.slice(2);
 const args = argv.join(' ');
 fs.appendFileSync(process.env.GHSTUB_LOG, args + '\\n');
+if (args.includes('--input -')) {
+  fs.appendFileSync(process.env.GHSTUB_STDIN, fs.readFileSync(0, 'utf8') + '\\n');
+}
 const routes = JSON.parse(fs.readFileSync(process.env.GHSTUB_ROUTES, 'utf8'));
 const route = routes.find((r) => args.includes(r.match));
 if (!route) {
@@ -95,8 +100,10 @@ export async function githubMirror(
   await chmod(gh, 0o755);
   const routesFile = path.join(bin, 'routes.json');
   const logFile = path.join(bin, 'calls.log');
+  const stdinFile = path.join(bin, 'stdin.log');
   await writeFile(routesFile, '[]');
   await writeFile(logFile, '');
+  await writeFile(stdinFile, '');
   await fx.git(fx.work, 'config', 'core.sshCommand', ssh);
   for (const [remote, repo] of remotes) {
     await fx.git(
@@ -110,12 +117,16 @@ export async function githubMirror(
   process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ''}`;
   process.env.GHSTUB_ROUTES = routesFile;
   process.env.GHSTUB_LOG = logFile;
+  process.env.GHSTUB_STDIN = stdinFile;
   return {
     async setRoutes(routes) {
       await writeFile(routesFile, JSON.stringify(routes));
     },
     async calls() {
       return (await readFile(logFile, 'utf8')).split('\n').filter(Boolean);
+    },
+    async inputs() {
+      return (await readFile(stdinFile, 'utf8')).split('\n').filter(Boolean);
     },
   };
 }

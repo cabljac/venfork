@@ -154,6 +154,7 @@ function parseCommand(
           internalPrNumber: parsed.internalPrNumber,
           noUpdateExisting: parsed.noUpdateExisting,
           dryRun: parsed.dryRun,
+          force: parsed.force,
           prompt: parsed.prompt,
         });
         return {

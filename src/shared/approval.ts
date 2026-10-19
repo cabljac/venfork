@@ -53,6 +53,39 @@ export interface ApprovalPass {
   approvers: string[];
 }
 
+/**
+ * Posts the `--force` record on the mirror PR, and only there: the gh
+ * login, the level that was bypassed, the commit staged and why the gate
+ * refused. The body travels on stdin.
+ * @throws GitHubError when the comment cannot be posted.
+ */
+export async function recordBypassOnMirrorPr(input: {
+  mirror: string;
+  prNumber: number;
+  prUrl: string;
+  login: string;
+  level: GateLevel;
+  sourceHead: string;
+  refusal: string;
+  cwd: string;
+}): Promise<void> {
+  const body = [
+    `The venfork approval gate (${input.level}) was bypassed with \`venfork stage --force\` by @${input.login}.`,
+    '',
+    `Staged commit: ${input.sourceHead}`,
+    `Gate refusal: ${input.refusal}`,
+  ].join('\n');
+  const result = await netExec(input.cwd, {
+    bufferOutput: true,
+    input: JSON.stringify({ body }),
+  })`gh api --method POST repos/${input.mirror}/issues/${String(input.prNumber)}/comments --input -`;
+  if (result.exitCode !== 0) {
+    throw new GitHubError(
+      `Not staged: could not record the --force bypass on ${input.prUrl}: ${netFailureReason(result)}`
+    );
+  }
+}
+
 const PASSING = new Set(['success', 'neutral', 'skipped']);
 
 function isBot(review: Pick<PrReview, 'login' | 'type'>): boolean {

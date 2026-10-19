@@ -74,6 +74,10 @@ Determinism rule: the managed commit's author and committer are the venfork bot 
 
 `venfork stage` (unless `--no-pr`) and `venfork stage issue` promote internal content to upstream. Before doing so, `stripInternalBlocks` removes `<!-- venfork:internal -->…<!-- /venfork:internal -->` regions from PR/issue bodies and titles. Markers match case-insensitively (`<!-- VENFORK: internal (note) -->` works); an unmatched close marker or any leftover HTML comment mentioning venfork throws `RedactionError` instead of publishing. Anything that flows from mirror → public/upstream must go through this redaction. Stage also refuses (`StageLeakError`) to push a head whose diff against `upstream/<default>` adds the managed workflow or a preserved path upstream does not have.
 
+### Approval gate
+
+With `approval` set (`venfork stage approval`), stage reads the branch's open mirror PR through `gh api` (`src/shared/approval.ts`): the latest approving or changes-requested review per reviewer, candidate approvers' permission, and every check run and status on the head. It pins the rebuild to the approved head with `source.sha`. A lowered level (compared with the clone memory in the git common dir, `src/shared/approval-guard.ts`) and a `--force` bypass each need a person at a TTY; `--yes` never answers those confirms. The bypass is recorded only as a comment on the mirror PR. Nothing about approval goes upstream, to the public fork or into venfork-config. It is a guardrail, not enforcement: never describe it as protection.
+
 ### Health checks
 
 `venfork doctor` (`src/commands/doctor.ts`) returns `{ id, ok: true | false | 'skipped', detail, fix? }` per check and exits 1 when any check is `false`. Git checks are covered by integration tests; the network checks (`transport`, `token`, `last-run`, `cron-age`) are string-mocked in `tests/unit/doctor.test.ts`. `token`, `last-run` and `cron-age` degrade to `skipped` without gh auth or a GitHub origin; `transport` skips only for a non-GitHub origin.

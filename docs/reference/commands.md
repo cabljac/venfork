@@ -163,7 +163,7 @@ venfork sync           # Sync default branches with upstream
 - Workflow allow/block entries match file basenames exactly (no glob patterns)
 - A preserved file that upstream adds is replaced by upstream's version. If upstream later deletes that path again, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork keep remove <path>` to let it go
 
-### `venfork stage <branch> [--no-pr] [--draft] [--dry-run] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--yes] [--no-input] [--json]`
+### `venfork stage <branch> [--no-pr] [--draft] [--dry-run] [--title <text>] [--base <branch>] [--internal-pr <n>] [--no-update-existing] [--force] [--yes] [--no-input] [--json]`
 
 Push a branch to the public fork, making it visible and ready for PR to upstream. `venfork stage branch <name>` is the explicit form of the same command; use it for a branch named `issue`, `approval` or `branch`. It also opens the upstream PR for you using your internal review PR's body, unless you pass `--no-pr`. With `--json`, stage never prompts and prints one JSON envelope on stdout (see [JSON output](json.md#json-output)).
 
@@ -182,7 +182,8 @@ Push a branch to the public fork, making it visible and ready for PR to upstream
 - `--title <text>` - Override the upstream PR title (default: the internal PR title, or the branch name if no internal PR was found).
 - `--base <branch>` - Override the upstream base branch (default: upstream's default branch).
 - `--internal-pr <n>` - Pin a specific internal-review PR number (skips the most-recent-open lookup). Useful when multiple PRs target the same branch.
-- `--no-update-existing` - Do not update an already-open upstream PR body when staging. By default, if an upstream PR for the branch already exists, `venfork stage` refreshes its body with the latest translated content.
+- `--no-update-existing` - Do not update an already-open upstream PR body when staging.
+- `--force` - Stage past an approval gate refusal (see [`venfork stage approval`](#venfork-stage-approval-onreviewedtwo-personoff---yes---no-input---json)). A person must confirm the bypass at a terminal; `--yes` does not answer that confirm. Not with `--dry-run`. By default, if an upstream PR for the branch already exists, `venfork stage` refreshes its body with the latest translated content.
 - `--yes`, `-y` - Answer the "Push to public fork and open the upstream PR?" (no-public: "Push to upstream and open the PR?") confirm with yes. With `--no-pr` the confirm is "Push to public fork?" (or "Push to upstream?"). Required when venfork cannot prompt.
 - `--no-input` - Never prompt. Without `--yes`, the confirm exits 2 and nothing is pushed. See [Non-interactive use](headless.md#non-interactive-use).
 
@@ -282,7 +283,9 @@ A refusal exits 1 with code `approval` and a hint. The two refusals a solo vendo
 
 The memory is a convenience, not protection. A fresh clone has no memory, so it does not know an earlier level: its first stage records the level it finds and does not ask. Venfork does not read the venfork-config history for a lowered level. To protect the level, add a branch protection rule or ruleset on the `venfork-config` branch that limits who can push it. The scheduled sync workflow and `sync --report-issues` only read that branch; the commands that write it are `setup`, `stage` (the PR step records the link), `stage issue`, `pull pr`, `pull issue`, `keep`, `schedule`, `workflows` and `stage approval`, so the ruleset must allow the people who run them.
 
-Nothing about the gate leaves the mirror: no reviewer name, approval or process note goes into the published commits or the upstream PR. GitHub's review records on the mirror PR are the approval log.
+**Bypassing the gate.** `venfork stage <branch> --force` runs the same checks. If the gate says no, stage asks a person at a terminal to confirm the bypass (`--yes` does not answer it; without a terminal stage stops with reason `bypass-unconfirmed`). Just before the push it posts a comment on the mirror PR that names the gh login, the level, the commit staged and why the gate refused. When the comment cannot be posted, nothing is pushed. A branch with no open mirror PR cannot be forced, because the bypass has no PR to be recorded on. A local branch that is not at the mirror PR head cannot be forced either (reason `branch-moved`), because the comment must name a commit on that PR. When stage cannot find the mirror to post on, nothing is pushed. With the level `off`, `--force` changes nothing and says so. The comment is the record; stage writes nothing about the bypass to venfork-config, which anyone with write access to the mirror can push.
+
+Nothing about the gate leaves the mirror: no reviewer name, approval, bypass or process note goes into the published commits, the public fork or the upstream PR. GitHub's review records on the mirror PR are the approval log.
 
 The gate is a guardrail against publishing by accident or by an agent, not enforcement. Anyone with push access to the public fork or upstream can publish without venfork, and anyone with write access to the mirror can change the setting.
 

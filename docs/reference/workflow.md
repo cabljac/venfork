@@ -165,4 +165,4 @@ This usually means setup never finished for this clone, or the clone is not the 
 
 ### Branch Already Exists on Public Fork
 
-If you've staged a branch before and need to update it, run `venfork stage <branch>` again. Stage rebuilds the branch and replaces the public copy with `--force-with-lease`. Do not push the branch to the public fork with plain `git push`: that skips the checks stage runs (see [`venfork stage`](commands.md#venfork-stage-branch---no-pr---draft---dry-run---title-text---base-branch---internal-pr-n---no-update-existing---yes---no-input---json)).
+If you've staged a branch before and need to update it, run `venfork stage <branch>` again. Stage rebuilds the branch and replaces the public copy with `--force-with-lease`. Do not push the branch to the public fork with plain `git push`: that skips the checks stage runs (see [`venfork stage`](commands.md#venfork-stage-branch---no-pr---draft---dry-run---title-text---base-branch---internal-pr-n---no-update-existing---force---yes---no-input---json)).
