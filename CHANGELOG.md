@@ -1,5 +1,31 @@
 # venfork
 
+## [0.14.0](https://github.com/cabljac/venfork/compare/v0.13.1...v0.14.0) (2026-10-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** `venfork preserve` and `--no-public` exit 2 and name `venfork keep` and `--own-upstream`.
+* **sync:** `venfork sync <branch>` exits 2. Use `venfork pull pr <n>` to refresh a pulled upstream PR. The `pulled-pr` sync JSON result is gone, and `syncCommand` takes only an options object.
+* **stage:** venfork stage <branch> now opens the upstream PR and needs gh auth; pass --no-pr for the old push-only behaviour. --pr is accepted for one release and does nothing.
+* **cli:** stage with prAction "failed", pull pr with a failed push and sync <branch> with status "push-failed" now exit 1 instead of 0. stage --pr whose `gh pr edit` fails on an existing upstream PR now reports prAction "failed" (was "unchanged") and exits 1.
+* **json:** the --json error code command-failed is removed. A CommandExitError without a cause now reports runtime (exit 1), usage (exit 2) or cancelled (exit 0, 130 or 143). Without --json, sync divergence now prints one error line with the hint instead of the multi-line divergence report and warning note.
+
+### Features
+
+* **cli:** exit 1 on partial success and accept --yes everywhere ([#126](https://github.com/cabljac/venfork/issues/126)) ([b9a554f](https://github.com/cabljac/venfork/commit/b9a554fb5718e1a65903be063fd849e3a8fefca8))
+* **cli:** rename preserve to keep and --no-public to --own-upstream ([#130](https://github.com/cabljac/venfork/issues/130)) ([d9f76e7](https://github.com/cabljac/venfork/commit/d9f76e76c43e10b44eaa5ea00e6f30d835924719))
+* **help:** print one grouped screen for venfork help ([#131](https://github.com/cabljac/venfork/issues/131)) ([31c46b9](https://github.com/cabljac/venfork/commit/31c46b946ce9b59a333b3241ee4231388a86951e))
+* **json:** add hint and details to error envelopes ([#125](https://github.com/cabljac/venfork/issues/125)) ([173c587](https://github.com/cabljac/venfork/commit/173c587f2d0d67f3676a688860de3cccc48f4180))
+* **stage:** open the upstream PR by default ([#127](https://github.com/cabljac/venfork/issues/127)) ([adefc55](https://github.com/cabljac/venfork/commit/adefc55cf4fdc53af3e5f5ed0c607c7d7f82b2b0))
+* **stage:** preview what would be published with --dry-run ([#128](https://github.com/cabljac/venfork/issues/128)) ([a22a376](https://github.com/cabljac/venfork/commit/a22a3761cb397ba5f59c42ca4f6f0dadb23acb2a))
+* **sync:** drop the sync &lt;branch&gt; positional; re-run pull pr to refresh ([#129](https://github.com/cabljac/venfork/issues/129)) ([d4ab466](https://github.com/cabljac/venfork/commit/d4ab46657f02ffc759e72844e0d09e3c7fdb6460))
+
+
+### Bug Fixes
+
+* **cli:** print one line per failure ([#123](https://github.com/cabljac/venfork/issues/123)) ([416b8e7](https://github.com/cabljac/venfork/commit/416b8e7486ce578a381c608f3e70110469ae692c))
+
 ## [0.13.1](https://github.com/cabljac/venfork/compare/v0.13.0...v0.13.1) (2026-10-18)
 
 
