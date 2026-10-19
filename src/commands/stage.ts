@@ -19,6 +19,11 @@ import {
 } from '../errors.js';
 import { getDefaultBranch } from '../git.js';
 import {
+  type AiAttribution,
+  findCommitAttribution,
+  findPrAttribution,
+} from '../shared/ai-attribution.js';
+import {
   checkApprovalGate,
   type GateLevel,
   ghLogin,
@@ -827,6 +832,8 @@ interface PreparedStage {
   removedLater: string[];
   /** Commits whose message mentions an issue or PR number (`#N`). */
   issueRefCommits: number;
+  /** Commit lines and identities that credit an AI tool, published as they are. */
+  aiAttribution: AiAttribution[];
 }
 
 /**
@@ -872,9 +879,18 @@ async function prepareStage(
   const log = await $({
     cwd,
   })`git log --reverse --format=%s ${base}..${rebuilt.head}`;
-  const messages = await $({
+  const commitFormat = '%an <%ae>%x1f%cn <%ce>%x1f%B%x00';
+  const commitLog = await $({
     cwd,
-  })`git log --format=%B%x00 ${base}..${rebuilt.head}`;
+  })`git -c log.showSignature=false log --reverse --format=${commitFormat} ${base}..${rebuilt.head}`;
+  const commits = commitLog.stdout
+    .split('\0')
+    .map((record) => record.replace(/^\n+/, ''))
+    .filter(Boolean)
+    .map((record) => {
+      const [author = '', committer = '', ...message] = record.split('\x1f');
+      return { author, committer, message: message.join('\x1f') };
+    });
   const atHead =
     files.length === 0
       ? ''
@@ -890,9 +906,27 @@ async function prepareStage(
     denyList,
     files,
     removedLater: files.filter((file) => !present.has(file)),
-    issueRefCommits: messages.stdout.split('\0').filter(mentionsIssueNumber)
-      .length,
+    issueRefCommits: commits.filter((commit) =>
+      mentionsIssueNumber(commit.message)
+    ).length,
+    aiAttribution: findCommitAttribution(commits),
   };
+}
+
+/** Where an AI attribution line sits, for the Staging Details note. */
+function attributionPlace(a: AiAttribution): string {
+  switch (a.where) {
+    case 'commit-message':
+      return `message of "${a.subject}"`;
+    case 'commit-author':
+      return `author of "${a.subject}"`;
+    case 'commit-committer':
+      return `committer of "${a.subject}"`;
+    case 'pr-title':
+      return 'PR title';
+    case 'pr-body':
+      return 'PR body';
+  }
 }
 
 /** True when `text` contains a `#N` issue or PR reference. */
@@ -1043,6 +1077,8 @@ export interface StageDryRunResult {
   approval?: ApprovalReport;
   /** The lowered approval level a real stage would ask a person to confirm. */
   weakened?: Weakening;
+  /** Published lines that credit an AI tool; absent when there are none. */
+  aiAttribution?: AiAttribution[];
 }
 
 /** `--json` result of a `venfork stage <branch>` that pushed. */
@@ -1067,6 +1103,8 @@ export interface StagePushResult {
   internalPrUrl?: string;
   /** The approval that let the stage through; absent when the level is `off`. */
   approval?: ApprovalReport;
+  /** Published lines that credit an AI tool; absent when there are none. */
+  aiAttribution?: AiAttribution[];
 }
 
 /**
@@ -1302,6 +1340,23 @@ export async function stageCommand(
         `  Draft:       ${options.draft ? 'yes' : 'no'}`
       );
     }
+    const aiAttribution = [
+      ...prepared.aiAttribution,
+      ...findPrAttribution(
+        publishesTitle ? prTitle : undefined,
+        publishesBody ? translatedBody : undefined
+      ),
+    ];
+    if (aiAttribution.length > 0) {
+      detailLines.push(
+        '',
+        `  AI attribution (${aiAttribution.length}), published as is:`,
+        ...aiAttribution.map((a) => `    - ${a.line} (${attributionPlace(a)})`)
+      );
+      p.log.warn(
+        `${aiAttribution.length} published line(s) credit an AI tool. Rewrite the commits or the PR text first if upstream should not see them.`
+      );
+    }
     if (plan.approval) {
       detailLines.push('', `  Approval:    ${approvalLine(plan.approval)}`);
     }
@@ -1337,6 +1392,7 @@ export async function stageCommand(
         ...(internalPr ? { internalPrUrl: internalPr.url } : {}),
         ...(plan.approval ? { approval: plan.approval } : {}),
         ...(plan.weakening ? { weakened: plan.weakening } : {}),
+        ...(aiAttribution.length > 0 ? { aiAttribution } : {}),
       };
     }
 
@@ -1482,6 +1538,7 @@ export async function stageCommand(
       ...(upstreamPrUrl ? { prUrl: upstreamPrUrl } : {}),
       ...(internalPr ? { internalPrUrl: internalPr.url } : {}),
       ...(plan.approval ? { approval: plan.approval } : {}),
+      ...(aiAttribution.length > 0 ? { aiAttribution } : {}),
     };
   } catch (error) {
     throw p.reportFailure(error, s);

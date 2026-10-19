@@ -105,9 +105,9 @@ venfork stage approval [on|reviewed|two-person|off] [--yes] [--no-input] [--json
   • --no-pr                Push the branch only; --draft, --title, --internal-pr and
                            --no-update-existing need the PR and are refused with it
   • --draft                Open the upstream PR as a draft
-  • --dry-run              Show the commits, files and PR text that would be published;
-                           push nothing. Needs no --yes; with --no-pr it uses no GitHub
-                           API beyond the fetch
+  • --dry-run              Show the commits, files, PR text and AI attribution lines
+                           that would be published; push nothing. Needs no --yes; with
+                           --no-pr it uses no GitHub API beyond the fetch
   • --internal-pr <n>      Pin a specific internal review PR number (skips most-recent-open lookup)
   • --no-update-existing   Do not update an already-open upstream PR body when staging
   • --force                Stage past an approval refusal; a person confirms at a
