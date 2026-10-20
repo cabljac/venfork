@@ -1,7 +1,7 @@
 ---
 command: schedule
 entry: src/commands/schedule.ts
-shared: [config-change, constants, cron, json-output, net, push-token, divergence, mirror-commit]
+shared: [config-change, constants, cron, json-output, mirror-origin, net, push-token, divergence, mirror-commit]
 config:
   read: [schedule, scheduleAuth, mode, publicForkUrl, preserve, enabledWorkflows, disabledWorkflows]
   written: [schedule, scheduleAuth]

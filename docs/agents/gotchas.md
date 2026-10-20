@@ -43,3 +43,6 @@ In a `$` template, literal text is split on spaces and quotes are kept: `--jq '.
 
 ## pull pr can run on the fixture
 Set the upstream remote to `acme/widget`, a symlink to `upstream.git` inside the clone (excluded in `.git/info/exclude`): `parseRepoPath` reads owner/repo and git reads a relative path. Push the PR head to `refs/pull/<n>/head` and put a gh stub that answers `gh pr view` first on PATH. `tests/integration/pull-pr-refresh.test.ts` does this.
+
+## The approval memory outlives a fixture drive
+`venfork stage approval on` then `off` without a TTY leaves `<git common dir>/venfork/approval.json` at `two-person`, so every later non-TTY stage in that clone exits 1 with `gate-weakened`. Delete the file, or use a fresh fixture, before other stage drives.

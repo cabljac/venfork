@@ -1,7 +1,7 @@
 ---
 command: clone
 entry: src/commands/clone.ts
-shared: [json-output, prompt]
+shared: [json-output, net, prompt]
 config:
   read: [mode, upstreamUrl, publicForkUrl]
   written: []

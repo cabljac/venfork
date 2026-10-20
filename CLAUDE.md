@@ -28,7 +28,7 @@ bun test ./tests/unit/utils.test.ts      # single file
 bun test -t "parses owner" ./tests/unit  # single test by name
 bun run test:watch                    # watch
 bun run test:coverage                 # coverage
-bun run verify           # the only command that means "done": format:check, lint, lint:invariants, typecheck, tests, node smoke (non-mutating)
+bun run verify           # the only command that means "done": format:check, lint, lint:invariants, typecheck, tests, build, node smoke (non-mutating)
 bun run check            # biome check + autofix (lint + format); mutates files, so it is not a gate
 bun run lint             # biome lint only
 bun run lint:invariants  # scripts/lint-invariants.ts repo invariant checks
@@ -52,7 +52,7 @@ Never run the real-GitHub e2e unless the user asks. It needs the test org (`memc
 
 ## Architecture
 
-CLI entry `src/index.ts` parses `argv[0]` as the command and dispatches via a switch. Each command has a dedicated arg parser (`src/<command>-args.ts`) returning a typed options object, then calls the matching `*Command` function in `src/commands/<command>.ts` (re-exported through the `src/commands.ts` barrel). To add/modify a command: touch the arg parser, the command impl, the `index.ts` switch, and `showHelp()`.
+CLI entry `src/index.ts` parses `argv[0]` as the command and dispatches via a switch. Each command has a dedicated arg parser (`src/<command>-args.ts`) returning a typed options object, then calls the matching `*Command` function in `src/commands/<command>.ts` (re-exported through the `src/commands.ts` barrel). To add/modify a command: touch the arg parser, the command impl, the `src/index.ts` switch, `src/dispatch.ts` (gh auth, repo check), the help entry in `src/commands/help.ts` (and `showHelp` if it belongs on the one screen), its `docs/reference/commands.md` section and its `verify-venfork` feature file.
 
 `src/commands/` holds one file per command. Helpers shared by several commands live in `src/shared/`: `net.ts` (network-op safety), `managed-commit.ts` (managed-commit detection), `mirror-commit.ts` (building the managed commit), `divergence.ts`, `redaction.ts`, `worktree.ts` (temporary detached worktrees), `prompt.ts` (every interactive prompt), `ui.ts` (all human output, on stderr), `json-output.ts` (the one `--json` envelope: a command returns its result, `src/index.ts` writes it, `error.code` comes from `VenforkError.code`, and a failed `git`/`gh` subprocess maps to `git`/`github`), `interrupt.ts` (a command that handles SIGINT/SIGTERM itself claims them, so the `--json` signal envelope waits for its rejection), `constants.ts`. The rest are focused modules:
 
@@ -64,7 +64,7 @@ CLI entry `src/index.ts` parses `argv[0]` as the command and dispatches via a sw
 
 ### The "+0/+1 managed commit" model (the core invariant)
 
-When scheduled sync or a `preserve` allowlist is active, the mirror's default branch is kept at **`upstream/<default>` plus at most one venfork-managed commit** (subject `chore: venfork-managed mirror commit`, trailer `Venfork-Managed: 1`). That commit carries the sync workflow YAML (filtered by `enabledWorkflows`/`disabledWorkflows`) and any preserved mirror-only files. When that content adds nothing to the upstream tree (for example every preserved file now exists upstream), there is no managed commit and the mirror tip equals the upstream tip (+0).
+When scheduled sync, a `preserve` allowlist or a workflow allow/block list is active, the mirror's default branch is kept at **`upstream/<default>` plus at most one venfork-managed commit** (subject `chore: venfork-managed mirror commit`, trailer `Venfork-Managed: 1`). That commit carries the sync workflow YAML (filtered by `enabledWorkflows`/`disabledWorkflows`) and any preserved mirror-only files. When that content adds nothing to the upstream tree (for example every preserved file now exists upstream), there is no managed commit and the mirror tip equals the upstream tip (+0).
 
 Determinism rule: the managed commit's author and committer are the venfork bot and both dates are the committer date of the upstream tip, and it is built with `git commit-tree` (no hooks, no signing). Its SHA is therefore a function of the upstream tip and the tree. A sync with no upstream or config change rebuilds the same SHA, sees origin already points at it, and pushes nothing. When a push is needed it is a single `--force-with-lease=refs/heads/<default>:<previous tip>` push; public is skipped when it already equals upstream.
 
@@ -76,7 +76,7 @@ Determinism rule: the managed commit's author and committer are the venfork bot 
 
 ### Approval gate
 
-With `approval` set (`venfork stage approval`), stage reads the branch's open mirror PR through `gh api` (`src/shared/approval.ts`): the latest approving or changes-requested review per reviewer, candidate approvers' permission, and every check run and status on the head. It pins the rebuild to the approved head with `source.sha`. A lowered level (compared with the clone memory in the git common dir, `src/shared/approval-guard.ts`) and a `--force` bypass each need a person at a TTY; `--yes` never answers those confirms. The bypass is recorded only as a comment on the mirror PR. Nothing about approval goes upstream, to the public fork or into venfork-config. It is a guardrail, not enforcement: never describe it as protection.
+With `approval` set (`venfork stage approval`), stage reads the branch's open mirror PR through `gh api` (`src/shared/approval.ts`): the latest approving or changes-requested review per reviewer, candidate approvers' permission, and every check run and status on the head. It pins the rebuild to the approved head with `source.sha`. A lowered level (compared with the clone memory in the git common dir, `src/shared/approval-guard.ts`) and a `--force` bypass each need a person at a TTY; `--yes` never answers those confirms. The bypass is recorded only as a comment on the mirror PR. venfork-config stores only the level. No approval result or bypass record goes upstream, to the public fork or into venfork-config. It is a guardrail, not enforcement: never describe it as protection.
 
 ### Health checks
 

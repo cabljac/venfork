@@ -24,7 +24,10 @@ T=$(mktemp -d); bun scripts/verify-fixture.ts --shell > "$T/vf.env"
 - Helpers: `venfork`, `vf_tip <repo> [ref]`, `vf_pushes <repo> [ref]` (reflog count = accepted pushes),
   `vf_yes <args>` (answers one confirm through a pseudo-TTY), `vf_upstream_commit <path> <text> [msg]`,
   `vf_origin_commit <path> <text> [msg]` (a teammate push to origin).
+  `vf_yes` answers one confirm only. A lowered approval level or a `--force` bypass adds a gate confirm before the push confirm, and `--yes` never answers a gate confirm. Then use `vf_yes ... --yes`: `vf_yes` answers the gate confirm and `--yes` the push confirm. Without `--yes`, the push confirm hits end of input and exits 130.
+- The fixture's venfork-config has no `approval` (off), unlike a new `setup` mirror (`two-person`). Stage and `stage approval` remember the level in the clone memory `$VF_WORK/.git/venfork/approval.json`. After an unconfirmed lowering (`stage approval off` without a TTY), every later non-TTY stage in this fixture exits 1 with `approval` reason `gate-weakened`. Reset with `rm "$VF_WORK/.git/venfork/approval.json"`, or use a fresh fixture.
 - Each tool call is a new shell. Source `"$T/vf.env"` again in each one.
+- When a sandbox refuses to source `vf.env` or to set `GIT_*` variables inline, write the drive to a script file that exports the JSON `env` (read it with `jq`) and calls `node "$CLI"`, then run it with `sh <file>`.
 
 ## Doctor
 
@@ -68,7 +71,7 @@ Evidence is git state, read from the bare repos:
 - "Sync complete!" prints after a no-op too. Read the spinner lines (`already up to date` vs `Updated`) and the push count.
 - `stage` rebuilds every commit, so the public SHA changes on every stage. Compare trees and subjects, not SHAs.
 - The fixture remotes are local paths. The deny-list then holds the origin path and `venfork`, not `owner/name`.
-- gh-backed paths (`setup`, `clone`, `pull`, `stage` without `--no-pr`, issues) stop at the stub. Their success paths are proven only by e2e.
+- gh-backed paths (`setup`, `clone`, `pull`, `stage` without `--no-pr`, any `stage` with approval `reviewed` or `two-person`, issues) stop at the stub. A gated stage stops even earlier on the fixture, at `precondition`, because origin is not a GitHub repository. Their success paths are proven only by e2e.
 
 ## Clean up
 
