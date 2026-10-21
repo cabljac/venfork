@@ -59,6 +59,7 @@
     "@clack/prompts": "^1.8.1",
     "@types/bun": "latest",
     "execa": "^9.6.1",
+    "frog": "1.1.0",
     "typescript": "^5.7.3"
   },
   "engines": {
