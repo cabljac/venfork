@@ -137,6 +137,24 @@ describe('lowering the level with stage approval', () => {
     expect(errorText()).toContain('this clone last saw two-person');
   });
 
+  test('a gated mirror not on GitHub says the lowering needs a terminal, and following that stages', async () => {
+    await approvalCommand('two-person');
+    await cutFeature();
+
+    await expect(
+      stageCommand('feature', { prompt: NO_TERMINAL })
+    ).rejects.toThrow(new CommandExitError(1));
+    expect(errorText()).toContain(
+      'run `venfork stage approval off` at a terminal and confirm it'
+    );
+
+    await approvalCommand('off', AT_TERMINAL);
+    await stageCommand('feature', { prompt: NO_TERMINAL });
+    expect(
+      await fx.git(fx.publicFork ?? '', 'branch', '--list', 'feature')
+    ).not.toBe('');
+  });
+
   test('an unconfirmed lowering in a clone with no memory records the level it lowered from', async () => {
     const raw = await fx.readRawConfig();
     await fx.writeRawConfig(
