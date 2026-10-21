@@ -587,7 +587,7 @@ export async function checkApprovalGate(input: {
     throw new PreconditionError(
       `Not staged: approval is ${input.level}, and origin is not a GitHub repository, so venfork cannot read the mirror PR.`,
       {
-        hint: 'Run `venfork stage approval off` on a mirror that is not on GitHub.',
+        hint: 'A mirror that is not on GitHub cannot use the approval gate: run `venfork stage approval off` at a terminal and confirm it.',
       }
     );
   }
