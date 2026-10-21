@@ -1,13 +1,13 @@
 ---
 command: approval
 entry: src/commands/approval.ts
-shared: [json-output]
+shared: [approval-guard, prompt, json-output]
 config:
   read: [approval]
   written: [approval]
 tests:
-  unit: [tests/unit/stage-args.test.ts, tests/unit/config.test.ts]
-  integration: [tests/integration/approval.test.ts]
+  unit: [tests/unit/stage-args.test.ts, tests/unit/config.test.ts, tests/unit/approval.test.ts]
+  integration: [tests/integration/approval.test.ts, tests/integration/approval-guard.test.ts]
   e2e: []
 ---
 
@@ -33,12 +33,27 @@ venfork stage approval on </dev/null 2>&1 | grep -o "Approval set to two-person"
 git -C "$VF_ORIGIN" show venfork-config:.venfork/config.json | jq -r .approval   # two-person
 venfork stage approval off </dev/null 2>&1 | grep -o "The approval gate is off"
 venfork stage approval maybe </dev/null; echo $?                                # 2
+rm "$VF_WORK/.git/venfork/approval.json"                                        # reset the clone memory (see What usually lies)
+```
+
+What the level does to a stage on the fixture (the last two lines reset the memory):
+
+```bash
+git checkout -q -b feat upstream/main && echo f > src/feat.txt && git add . && git commit -qm "feat: add feat"
+venfork stage approval on </dev/null >/dev/null 2>&1
+venfork stage feat --no-pr --yes --json </dev/null 2>/dev/null | jq -r .error.code   # precondition: the fixture origin is not GitHub
+venfork stage approval off </dev/null >/dev/null 2>&1                            # the hint's next step, without a TTY
+venfork stage feat --no-pr --yes --json </dev/null 2>/dev/null | jq -c '[.error.code, .error.details.reason]'   # ["approval","gate-weakened"]
+rm "$VF_WORK/.git/venfork/approval.json"
+venfork stage feat --no-pr --yes </dev/null >/dev/null 2>&1; echo $?            # 0, and the memory now holds off
 ```
 
 ## What proves it
 
 - `git -C "$VF_ORIGIN" show venfork-config:.venfork/config.json` has `"approval"` after `on`/`reviewed`, and none after `off`.
+- `cat "$VF_WORK/.git/venfork/approval.json"` holds `{ "level" }`: the new level after a raise or a confirmed lowering, the earlier level after a lowering that no one confirmed.
 
 ## What usually lies
 
-- The setting alone proves nothing about stage. Check the stage feature file for what stage does with the level.
+- The setting alone proves nothing about stage. Check the stage feature file for what stage does with the level. With `reviewed` or `two-person`, every fixture stage (also with `--no-pr`) stops at `precondition` "origin is not a GitHub repository". Its hint `venfork stage approval off` leads to the next point.
+- `stage approval on` then `stage approval off` without a TTY leaves this clone's memory (`<git common dir>/venfork/approval.json`, in the fixture `$VF_WORK/.git/venfork/approval.json`) at `two-person` while venfork-config says `off`. After that, every non-TTY `venfork stage` in this fixture exits 1 with `approval` reason `gate-weakened`, so the `stage.md` and `leak-invariants.md` drives do not give their documented results (`tests/integration/approval.test.ts` pins this). Reset with `rm "$VF_WORK/.git/venfork/approval.json"` (the next stage records `off`), or run this file last on a fresh fixture. At a TTY, `vf_yes stage feat --no-pr --yes` answers the lowering confirm once and `--yes` answers the push confirm.

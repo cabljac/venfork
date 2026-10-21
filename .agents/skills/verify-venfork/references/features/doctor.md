@@ -1,7 +1,7 @@
 ---
 command: doctor
 entry: src/commands/doctor.ts
-shared: [constants, cron, divergence, json-output, managed-commit, mirror-commit, net, push-token, semver]
+shared: [constants, cron, divergence, json-output, managed-commit, mirror-commit, mirror-origin, net, push-token, semver]
 config:
   read: [mode, upstreamUrl, publicForkUrl, schedule, scheduleAuth, preserve, invalidPreserve, shippedBranches, pulledPrs, shippedIssues, pulledIssues]
   written: []

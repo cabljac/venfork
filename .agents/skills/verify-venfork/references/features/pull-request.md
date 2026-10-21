@@ -28,7 +28,7 @@ tests:
 
 ## How a user reaches it
 
-`venfork pull pr <n-or-url> [--branch-name <name>] [--no-push] [--yes] [--no-input] [--json]`, then the same command again to refresh. No prompt: `--no-input` is accepted and changes nothing, and `--yes` is an unknown option (exit 2).
+`venfork pull pr <n-or-url> [--branch-name <name>] [--no-push] [--yes] [--no-input] [--json]`, then the same command again to refresh. No prompt: `--no-input`, `--yes` and `-y` are accepted and change nothing.
 
 ## How to drive it
 
@@ -63,7 +63,7 @@ venfork sync upstream-pr/7 </dev/null 2>&1; echo $?                             
 
 - `vf_tip "$VF_ORIGIN" upstream-pr/7` equals the PR head.
 - `git -C "$VF_ORIGIN" show venfork-config:.venfork/config.json` has `pulledPrs["upstream-pr/7"].head` at that SHA.
-- `venfork doctor --json | jq .links.pulledPrs`.
+- `venfork doctor --json | jq .result.links.pulledPrs`.
 
 ## What usually lies
 

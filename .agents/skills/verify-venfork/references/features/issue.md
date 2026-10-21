@@ -1,7 +1,7 @@
 ---
 command: stage issue, pull issue
 entry: src/commands/issue.ts
-shared: [args, prompt, deny-list, json-output, redaction, repo]
+shared: [args, prompt, deny-list, json-output, redaction, repo, upstream-publish]
 config:
   read: []
   written: [shippedIssues, pulledIssues]
@@ -20,11 +20,11 @@ tests:
 - `--yes` answers both confirms. Unless stdin and stderr are both a TTY, and with `CI` set, with `VENFORK_NONINTERACTIVE=1` or with `--no-input`, a confirm without `--yes` exits 2 naming `--yes` (`MissingInputError`) before it reads the issue, and opens nothing. At a TTY a "no" exits 0; a cancel or EOF exits 130.
 - `--json` never prompts (it implies `--no-input`); without `--yes` it is the `missing-input` envelope, exit 2. On success `result` is `{ number, url, source: { number, url } }`: the issue venfork opened and the issue it came from.
 - One-shot: no later comment or state sync. A failed config write only warns.
-- `stage issue` with a branch-only flag (`--pr`, `--draft`, `--base`, `--internal-pr`, `--no-update-existing`) is a usage error (exit 2). Bare `stage issue` points at `venfork stage branch issue` (exit 2). A malformed `<number-or-url>` exits 2; a URL to another repo exits 1. The old `venfork issue ...` exits 2 and names both new forms.
+- `stage issue` with a branch-only flag (`--pr`, `--no-pr`, `--draft`, `--dry-run`, `--base`, `--internal-pr`, `--no-update-existing`, `--force`) is a usage error (exit 2). Bare `stage issue` points at `venfork stage branch issue` (exit 2). A malformed `<number-or-url>` exits 2; a URL to another repo exits 1. The old `venfork issue ...` exits 2 and names both new forms.
 
 ## How a user reaches it
 
-`venfork stage issue <n-or-url> [--title <t>] [--yes] [--no-input] [--json]`, `venfork pull issue <n-or-url> [--title <t>] [--yes] [--no-input] [--json]`. `pull pr` never prompts: it accepts `--no-input` (a no-op) and refuses `--yes`.
+`venfork stage issue <n-or-url> [--title <t>] [--yes] [--no-input] [--json]`, `venfork pull issue <n-or-url> [--title <t>] [--yes] [--no-input] [--json]`. `pull pr` never prompts: it accepts `--no-input`, `--yes` and `-y`, and they change nothing.
 
 ## How to drive it
 

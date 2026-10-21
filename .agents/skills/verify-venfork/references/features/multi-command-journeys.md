@@ -5,7 +5,7 @@ Record the evidence after each step; a journey passes only when every line match
 
 ## 1. Setup, schedule, sync twice
 
-The fixture stands in for `setup`: it is the layout setup builds (remotes, `DISABLE` push URL, `venfork-config`). Real setup is e2e tier 1.
+The fixture stands in for `setup`: it is the layout setup builds (remotes, `DISABLE` push URL, `venfork-config`), except approval: setup writes `two-person`, the fixture writes no level (`off`), so stage drives need no mirror PR. Do not run `venfork stage approval` in a journey (see `approval.md`). Real setup is e2e tier 1.
 
 1. `venfork doctor --json; echo $?` - exit 0, `invariant` "upstream (+0)".
 2. `venfork schedule set "0 */6 * * *" </dev/null 2>&1 | grep "Scheduled sync enabled"` - one line. `vf_tip "$VF_ORIGIN" main^` equals `vf_tip "$VF_UPSTREAM"`. `git -C "$VF_ORIGIN" log -1 --format=%an main` is `venfork-bot`.

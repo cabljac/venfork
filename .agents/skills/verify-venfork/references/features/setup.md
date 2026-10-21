@@ -1,10 +1,10 @@
 ---
 command: setup
 entry: src/commands/setup.ts
-shared: [net, fs, json-output, prompt]
+shared: [net, fs, json-output, prompt, approval-guard, interrupt]
 config:
   read: [mode, upstreamUrl, publicForkUrl]
-  written: [version, mode, upstreamUrl, publicForkUrl]
+  written: [version, mode, upstreamUrl, publicForkUrl, approval]
 tests:
   unit: [tests/unit/commands.test.ts, tests/unit/setup-args.test.ts, tests/unit/net.test.ts, tests/unit/json-output.test.ts, tests/unit/prompt.test.ts]
   integration: [tests/integration/cli.test.ts, tests/integration/integrity.test.ts]
@@ -21,7 +21,7 @@ tests:
 - Writes the orphan `venfork-config` branch. Never overwrites one: an existing config that agrees is kept, one that disagrees is a `ConfigError` ("The mirror's existing venfork settings disagree with this setup").
 - Sets remotes: `origin`, `public` (not with `--own-upstream`; a stale `public` is removed), `upstream` with push URL `DISABLE`. URLs follow `gh config get git_protocol`.
 - Recovery: when the fork or the mirror already exists on GitHub, setup skips the seed, reuses a matching local clone and runs `sync` quietly inside it.
-- Usage errors (exit 2, before gh auth): `--own-upstream` with `--fork-name`, invalid upstream, invalid `--fork-name`. Runtime errors (exit 1): `PreconditionError` for upstream already under the owner without `--fork-name`, an existing repo that is not a fork of upstream, a local directory that is not the expected mirror clone; `GitHubError` (gh's own message) when `gh repo fork` or `gh repo create` fails and no usable repo exists.
+- Usage errors (exit 2, before gh auth): `--own-upstream` with `--fork-name`, invalid upstream, invalid `--fork-name`, an unknown `--approval` level. Runtime errors (exit 1): `PreconditionError` for upstream already under the owner without `--fork-name`, an existing repo that is not a fork of upstream, a local directory that is not the expected mirror clone; `GitHubError` (gh's own message) when `gh repo fork` or `gh repo create` fails and no usable repo exists.
 - SIGINT and SIGTERM during the run: setup stops its spinner ("Setup interrupted"), removes its temp dir and exits 130 for SIGINT or 143 for SIGTERM (`CommandExitError`, code `cancelled`), with or without `--json`.
 - `--json` implies `--no-input` and prints one envelope line on stdout. `result` is `{ mode, mirror: { repo, url }, publicFork?: { repo, url }, upstream: { repo, url }, directory }`: `repo` is `owner/name`, `url` the `https://github.com/` page, `publicFork` absent with `--own-upstream`, `directory` the absolute checkout path. Failures carry `error.code` (`missing-input` with `flag`, `usage`, `auth`, `precondition`, `github`, `config`, `cancelled`).
 
@@ -41,6 +41,7 @@ venfork setup a/b b-private --json </dev/null 2>/dev/null | jq -c '[.error.code,
 venfork setup a/b --org c </dev/null 2>&1 | grep -o "Private mirror repo name? b-private.*"   # default used, then exit 1 at gh
 venfork setup a/b --own-upstream --fork-name x </dev/null 2>&1; echo $?   # 2, "--own-upstream cannot be combined with --fork-name"
 venfork setup a/b m --fork-name "bad name" --org c </dev/null 2>&1 | grep -o "Invalid --fork-name"
+venfork setup a/b --approval maybe </dev/null 2>&1; echo $?            # 2, "--approval must be on, two-person, reviewed or off, not 'maybe'"
 venfork setup a/b m --org c </dev/null 2>&1 | grep "gh stub"           # exit 1 at the first gh call
 cp "$VF_ROOT/bin/gh" "$VF_ROOT/gh.ok"; printf '#!/bin/sh\nexit 1\n' > "$VF_ROOT/bin/gh"
 venfork setup a/b </dev/null 2>&1                                      # AuthenticationError, exit 1
@@ -53,12 +54,13 @@ mv "$VF_ROOT/gh.ok" "$VF_ROOT/bin/gh"
 ## What proves it
 
 - e2e only: `gh repo view <owner>/<name>-private --json visibility`, `git -C <name>-private remote -v` (upstream push `DISABLE`), `git -C <name>-private show origin/venfork-config:.venfork/config.json`.
+- e2e only: `git -C <name>-private show origin/venfork-config:.venfork/config.json | jq -r .approval` is `two-person` (or the `--approval` level; absent for `off`), and `<name>-private/.git/venfork/approval.json` holds the same level.
 - `venfork doctor --json` inside the new clone: `remotes`, `mode` and `invariant` ok.
 - On the fixture: exit code and message only. No repo is created.
 
 ## What usually lies
 
 - `tests/unit/commands.test.ts` answers every `gh` call with a string. A green setup test does not show that GitHub accepted a fork, a create or a push.
-- The fixture already contains what setup would build. It does not exercise setup.
+- The fixture already contains what setup would build, except approval: setup writes `two-person`, the fixture writes no level (`off`). It does not exercise setup.
 - Exit 0 after "Continue with personal account?" answered no is a cancel, not a success.
 - `VENFORK_NONINTERACTIVE=1` does not confirm. Only `--yes` does; without it the confirm exits 2.
