@@ -1,5 +1,12 @@
 # venfork
 
+## [0.15.1](https://github.com/cabljac/venfork/compare/v0.15.0...v0.15.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **stage:** say the not-on-GitHub approval hint needs a terminal ([#146](https://github.com/cabljac/venfork/issues/146)) ([fca9179](https://github.com/cabljac/venfork/commit/fca91793e2b743edb21c368565a1831fd37c56d6))
+
 ## [0.15.0](https://github.com/cabljac/venfork/compare/v0.14.0...v0.15.0) (2026-10-19)
 
 
