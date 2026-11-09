@@ -3,6 +3,7 @@ import {
   preserveRemoveHint,
   readVenforkConfigFromRepo,
   scheduleAuthOf,
+  trackedBranchesOf,
   type VenforkConfig,
 } from '../config.js';
 import {
@@ -33,6 +34,11 @@ import {
   isUnpinnedWorkflow,
   pinnedVenforkVersion,
 } from '../shared/semver.js';
+import {
+  acceptRewriteFlag,
+  readTrackedBranches,
+  type TrackedBranchPlan,
+} from '../shared/tracked-branches.js';
 import * as p from '../shared/ui.js';
 import { githubUrlTransport, parseRepoPath } from '../utils.js';
 import { VENFORK_VERSION } from '../version.js';
@@ -285,6 +291,76 @@ async function runDoctor(
     config = read;
   });
   return { checks, config };
+}
+
+/**
+ * The `tracked` row: every `trackedBranches` entry exists on upstream, and
+ * origin's copy equals upstream's or is behind it (the next sync
+ * fast-forwards or creates it). A diverged copy fails with the command
+ * that accepts the rewrite, when `allowRewrite` is `explicit`.
+ */
+async function trackedBranchesCheck(
+  config: VenforkConfig,
+  defaultBranch: string,
+  cwd: string
+): Promise<DoctorCheck> {
+  let plans: TrackedBranchPlan[];
+  try {
+    plans = await readTrackedBranches(
+      trackedBranchesOf(config),
+      defaultBranch,
+      cwd
+    );
+  } catch (err) {
+    if (!(err instanceof VenforkError)) throw err;
+    return {
+      id: 'tracked',
+      ok: false,
+      detail: oneLine(err.message),
+      fix: 'Fix trackedBranches in .venfork/config.json on the venfork-config branch of origin.',
+    };
+  }
+  const unsynced = plans.filter(
+    (plan) => plan.state === 'diverged' || plan.state === 'no-upstream'
+  );
+  if (unsynced.length > 0) {
+    return {
+      id: 'tracked',
+      ok: false,
+      detail: unsynced
+        .map((plan) =>
+          plan.state === 'no-upstream'
+            ? `upstream/${plan.branch.name} not found`
+            : `origin/${plan.branch.name} is not an ancestor of upstream/${plan.branch.name}`
+        )
+        .join('; '),
+      fix: unsynced
+        .map((plan) =>
+          plan.state === 'no-upstream'
+            ? `Check ${plan.branch.name} on upstream, or remove it from trackedBranches`
+            : plan.branch.allowRewrite === 'explicit'
+              ? `If upstream rewrote ${plan.branch.name}: \`venfork sync ${acceptRewriteFlag(plan)}\``
+              : `Move origin/${plan.branch.name}'s own commits to another branch, or set "allowRewrite": "explicit" on its entry`
+        )
+        .join('; '),
+    };
+  }
+  return {
+    id: 'tracked',
+    ok: true,
+    detail:
+      plans.length === 0
+        ? 'no tracked branches'
+        : plans
+            .map((plan) =>
+              plan.state === 'up-to-date'
+                ? `${plan.branch.name} up to date`
+                : plan.state === 'missing'
+                  ? `${plan.branch.name} not on origin yet; the next sync creates it`
+                  : `${plan.branch.name} behind upstream; the next sync fast-forwards it`
+            )
+            .join('; '),
+  };
 }
 
 async function collectChecks(
@@ -727,6 +803,18 @@ async function collectChecks(
               fix: 'Run `venfork sync` (or `venfork schedule disable`).',
             }
       );
+    }
+  }
+
+  if (config.trackedBranches !== undefined) {
+    if (!haveBothRemotes) {
+      skip('tracked', 'needs the origin and upstream remotes');
+    } else if (fetchFailed) {
+      skip('tracked', 'needs a successful git fetch');
+    } else if (defaultBranchError) {
+      checks.push({ id: 'tracked', ok: false, detail: defaultBranchError });
+    } else {
+      checks.push(await trackedBranchesCheck(config, defaultBranch, cwd));
     }
   }
 

@@ -67,7 +67,7 @@ const cases: ReadonlyArray<
     'sync',
     parseSyncCliArgs,
     ['--bogus'],
-    'Usage: venfork sync [--report-issues] [--yes] [--no-input] [--json]',
+    'Usage: venfork sync [--report-issues] [--accept-rewrite <branch>=<old>..<new>] [--yes] [--no-input] [--json]',
   ],
   [
     'doctor',

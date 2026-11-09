@@ -125,7 +125,14 @@ function parseCommand(
     }
     case 'sync': {
       const parsed = parseSyncCliArgs(args);
-      return resultOf(() => syncCommand({ reportIssues: parsed.reportIssues }));
+      return resultOf(() =>
+        syncCommand({
+          reportIssues: parsed.reportIssues,
+          ...(parsed.acceptRewrites.length > 0
+            ? { acceptRewrites: parsed.acceptRewrites }
+            : {}),
+        })
+      );
     }
     case 'schedule': {
       const parsed = parseScheduleCliArgs(args);

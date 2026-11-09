@@ -1,6 +1,7 @@
 import {
   assertNoInvalidPreserve,
   readVenforkConfigFromRepo,
+  trackedBranchesOf,
 } from '../config.js';
 import {
   ConfigError,
@@ -28,6 +29,14 @@ import {
   reportSyncBlocked,
   resolveSyncBlocked,
 } from '../shared/sync-report.js';
+import {
+  type AcceptedRewrite,
+  assertRewritesAccepted,
+  leftAsIsWarning,
+  pushTrackedBranches,
+  readTrackedBranches,
+  type TrackedBranchResult,
+} from '../shared/tracked-branches.js';
 import * as p from '../shared/ui.js';
 
 /** `--json` result of a default-branch sync. */
@@ -40,6 +49,8 @@ export interface DefaultBranchSyncResult {
   origin: { tip: string; pushed: boolean };
   /** Absent in no-public mode. */
   public?: { tip: string; pushed: boolean };
+  /** One entry per `trackedBranches` entry; absent when none are configured. */
+  trackedBranches?: TrackedBranchResult[];
 }
 
 /** What `venfork sync` did, reported as the `--json` result. */
@@ -83,6 +94,8 @@ export async function syncCommand(options?: {
   cwd?: string;
   quiet?: boolean;
   reportIssues?: boolean;
+  /** `--accept-rewrite`: rewrites of tracked branches sync may push. */
+  acceptRewrites?: AcceptedRewrite[];
 }): Promise<SyncResult> {
   const quiet = options?.quiet ?? false;
 
@@ -103,6 +116,7 @@ export async function syncCommand(options?: {
     await netFetch('origin', options?.cwd);
     const config = await readVenforkConfigFromRepo(repoDir);
     assertNoInvalidPreserve(config);
+    const tracked = trackedBranchesOf(config);
     const noPublic = config?.mode === 'no-public';
     if (!noPublic) {
       await netFetch('public', options?.cwd);
@@ -201,6 +215,17 @@ export async function syncCommand(options?: {
       throw divergence;
     }
 
+    // A diverged tracked branch does not block the default branch: it is
+    // left as it is and reported. A wrong --accept-rewrite refuses before
+    // anything is pushed.
+    const trackedPlans = await readTrackedBranches(
+      tracked,
+      defaultBranch,
+      options?.cwd
+    );
+    const acceptRewrites = options?.acceptRewrites ?? [];
+    assertRewritesAccepted(trackedPlans, acceptRewrites);
+
     warnWeakManaged([
       ...originDivergence.weakManaged,
       ...publicDivergence.weakManaged,
@@ -238,6 +263,37 @@ export async function syncCommand(options?: {
       publicResult = { tip: upstreamTip, pushed: publicPushed };
     }
 
+    let trackedResults: TrackedBranchResult[] = [];
+    if (trackedPlans.length > 0) {
+      s.start('Syncing tracked branches to origin');
+      trackedResults = await pushTrackedBranches(
+        trackedPlans,
+        acceptRewrites,
+        options?.cwd
+      );
+      s.stop(
+        trackedResults
+          .map((r) =>
+            r.status === 'up-to-date'
+              ? `origin/${r.name} already up to date`
+              : `origin/${r.name} ${r.status}`
+          )
+          .join('; ')
+      );
+      for (const result of trackedResults) {
+        if (result.status === 'diverged' || result.status === 'no-upstream') {
+          p.log.warn(leftAsIsWarning(result));
+        }
+      }
+    }
+    const trackedPushed = trackedResults.some(
+      (r) => r.previous !== undefined || r.status === 'created'
+    );
+    const trackedLine =
+      trackedResults.length === 0
+        ? ''
+        : ` (tracked: ${trackedResults.map((r) => `${r.name} ${r.status}`).join(', ')})`;
+
     if (options?.reportIssues) {
       await resolveSyncBlocked({ cwd: repoDir });
     }
@@ -245,17 +301,21 @@ export async function syncCommand(options?: {
     if (!quiet) {
       p.outro(
         noPublic
-          ? `✨ Sync complete! origin/${defaultBranch} is now up to date with upstream/${defaultBranch}`
-          : `✨ Sync complete! origin/${defaultBranch} and public/${defaultBranch} are now up to date with upstream/${defaultBranch}`
+          ? `✨ Sync complete! origin/${defaultBranch} is now up to date with upstream/${defaultBranch}${trackedLine}`
+          : `✨ Sync complete! origin/${defaultBranch} and public/${defaultBranch} are now up to date with upstream/${defaultBranch}${trackedLine}`
       );
     }
     return {
       kind: 'default-branch',
-      status: originPushed || publicResult?.pushed ? 'pushed' : 'up-to-date',
+      status:
+        originPushed || publicResult?.pushed || trackedPushed
+          ? 'pushed'
+          : 'up-to-date',
       branch: defaultBranch,
       upstreamTip,
       origin: { tip: originTip, pushed: originPushed },
       ...(publicResult ? { public: publicResult } : {}),
+      ...(tracked.length > 0 ? { trackedBranches: trackedResults } : {}),
     };
   } catch (error) {
     if (error instanceof SyncDivergenceError || error instanceof ConfigError) {

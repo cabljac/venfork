@@ -122,7 +122,7 @@ venfork clone git@github.com:acme-corp/awesome-project-private.git
 - An empty answer is rejected and the prompt asks again; cancelling a prompt (Ctrl-C) exits 130
 - Without a terminal (see [Non-interactive use](headless.md#non-interactive-use)) these prompts exit 2 instead and name the flag: `--public-fork <url>` for the public fork, `--upstream <url>` for upstream. Use `--own-upstream --upstream <url>` when the mirror has no public fork
 
-### `venfork sync [--report-issues] [--yes] [--no-input] [--json]`
+### `venfork sync [--report-issues] [--accept-rewrite <branch>=<old>..<new>] [--yes] [--no-input] [--json]`
 
 With `--json`, sync prints one JSON envelope on stdout (see [JSON output](json.md#json-output)).
 
@@ -133,15 +133,35 @@ Update default branches from upstream. With scheduled sync or a preserve list en
 
 Normally you run this from your private mirror directory (or any subfolder of that repo). The same behavior is also used internally when **`venfork setup`** completes in recovery mode (existing GitHub repos), using the new clone’s path automatically.
 
-Sync takes no branch: it always syncs upstream's default branch (auto-detected, usually `main` or `master`). `venfork sync <branch>` is a usage error (exit 2); to refresh a pulled upstream PR, run `venfork pull pr <n>` again.
+Sync takes no branch: it always syncs upstream's default branch (auto-detected, usually `main` or `master`), plus any `trackedBranches` (below). `venfork sync <branch>` is a usage error (exit 2); to refresh a pulled upstream PR, run `venfork pull pr <n>` again.
+
+**Tracked branches:** to keep a long-lived non-default upstream branch (for example a release branch that `venfork stage --base` targets) on the mirror, list it in `trackedBranches` in `.venfork/config.json` on the `venfork-config` branch. An entry is a branch name, or an object with `allowRewrite`:
+
+```json
+{
+  "trackedBranches": ["release/1.x", { "name": "ga", "allowRewrite": "explicit" }]
+}
+```
+
+There is no command that edits the list yet: edit the file on the `venfork-config` branch and push it (see [Concurrency](headless.md#concurrency) for how venfork replaces that branch). For each tracked branch, sync makes `origin/<branch>` equal to `upstream/<branch>`, with no managed commit and no kept files:
+- A missing `origin/<branch>` is created, and one that is behind is fast-forwarded. Every push has an explicit lease on the tip sync read.
+- When `origin/<branch>` is not an ancestor of `upstream/<branch>` (upstream rewrote the branch, or someone committed to the mirror's copy), or upstream has no such branch, sync leaves `origin/<branch>` as it is, prints a warning and still syncs the default branch and the other tracked branches. The run exits 0; `result.trackedBranches` reports the branch as `diverged` (with `upstreamTip`, `hint` and, with `allowRewrite`, `command`) or `no-upstream`, and `venfork doctor` fails its `tracked` row until it is resolved. A scheduled sync therefore keeps the default branch current while a person decides about the rewrite.
+- With `"allowRewrite": "explicit"`, a rewrite is replaced only when you pass `--accept-rewrite <branch>=<old>..<new>` with the full commit ids of `origin/<branch>` and `upstream/<branch>` as sync sees them; the warning and `command` print that flag. Sync then pushes `upstream/<branch>` with a lease on `<old>`. Without `allowRewrite`, sync never rewrites the branch.
+- An `--accept-rewrite` that names an untracked branch, a branch without `"allowRewrite": "explicit"`, a branch that has not diverged, or tips that no longer match is refused (`precondition`) before anything is pushed.
+- The tracked pushes run after the default-branch pushes. When one fails (for example its lease, because someone pushed to `origin/<branch>` meanwhile), sync exits 1 with the default branch already synced; run it again.
+- The public fork's copy is not touched. The default branch, `venfork-config`, a duplicate or an `allowRewrite` other than `"explicit"` in the list is refused (`config`).
+- `--report-issues` does not open a `venfork-sync-blocked` issue for a tracked branch left as it is; `venfork doctor` shows it in the `tracked` row.
+- An older venfork ignores `trackedBranches`: it neither syncs nor checks those branches.
 
 **Flags:**
 - `--report-issues` - Open or refresh a `venfork-sync-blocked` issue on the mirror when sync is blocked, and close it after a successful sync. The scheduled workflow passes this flag (see "When a scheduled sync fails" in [`venfork schedule`](scheduled-sync.md#venfork-schedule-statusset-cron---app--tokendisable---yes---no-input---json))
+- `--accept-rewrite <branch>=<old>..<new>` - Accept that upstream rewrote the tracked branch `<branch>` from `<old>` to `<new>` (full commit ids), so sync replaces `origin/<branch>`. Needs `"allowRewrite": "explicit"` on the branch's `trackedBranches` entry. Repeat it for several branches.
 - `--no-input` - Never prompt. `sync` asks nothing, so it changes nothing; it is accepted so a wrapper can pass one fixed flag set. See [Non-interactive use](headless.md#non-interactive-use).
 
 **Examples:**
 ```bash
-venfork sync           # Sync default branches with upstream
+venfork sync           # Sync default branches (and tracked branches) with upstream
+venfork sync --accept-rewrite ga=<old sha>..<new sha>   # Accept a rewritten tracked branch
 ```
 
 **What it does:**
@@ -382,6 +402,7 @@ Check that a mirror is healthy, then list the links recorded in `venfork-config`
 | `divergence` | No user commits on `origin`/`public` that would make sync abort |
 | `preserve` | Every keep entry is a valid single-file path and exists on `origin/<default>`. The text report labels this row `keep`; the JSON id stays `preserve` |
 | `workflow` | The sync workflow on `origin/<default>` matches what this venfork version would write |
+| `tracked` | Only when `trackedBranches` is set: every tracked branch exists on upstream, and `origin/<branch>` equals `upstream/<branch>` or is behind it (the next sync creates or fast-forwards it). A diverged branch fails, with the `--accept-rewrite` command when `allowRewrite` is `explicit` |
 | `transport` | git can reach origin: `git ls-remote --exit-code <origin push URL> HEAD` runs the way venfork's other git calls run (your ssh command with BatchMode for SSH, the gh credential helper for HTTPS), capped at 30 seconds. SSH failure fix: `gh config set git_protocol https` and re-clone, or load an SSH key (or accept GitHub's host key when ssh does not know it). HTTPS failure fix: `gh auth login`. With a schedule set, an HTTPS origin also needs a gh token with the `workflow` scope, because the managed commit changes a workflow file; the fix is `gh auth refresh -s workflow`. Skipped when origin is not on GitHub |
 | `token` | When a schedule is enabled, in both modes: `VENFORK_PUSH_TOKEN` is set on the mirror, or with `schedule set --app` both `VENFORK_APP_CLIENT_ID` and `VENFORK_APP_PRIVATE_KEY` are set, and the public fork has the mirror's owner. In app mode a leftover `VENFORK_PUSH_TOKEN` is a note, not a failure: the check passes and its fix is the `gh secret delete` command. Doctor can only see that the secrets exist: the token itself needs the `workflow` scope (classic) or Workflows: write (fine-grained), and doctor cannot check the App key or installation |
 | `last-run` | The last `venfork-sync.yml` run, from any trigger, did not fail |

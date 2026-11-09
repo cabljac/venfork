@@ -68,10 +68,12 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'sync',
-    `venfork sync [--report-issues] [--yes] [--no-input] [--json]
+    `venfork sync [--report-issues] [--accept-rewrite <branch>=<old>..<new>] [--yes] [--no-input] [--json]
   Update the default branches of origin (and public, unless the mirror has no public fork) to match upstream
   --report-issues (used by the scheduled workflow) opens a venfork-sync-blocked
     issue on the mirror when sync is blocked and closes it after a successful sync
+  Fast-forwards origin's copy of each trackedBranches entry to upstream's;
+    --accept-rewrite replaces one upstream rewrote (needs allowRewrite explicit)
   Keeps the private default branch at upstream plus one sync commit from venfork
     when the mirror has a schedule or kept files
   Applies the workflow allow and block lists (see venfork workflows)
