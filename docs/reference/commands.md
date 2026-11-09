@@ -432,7 +432,7 @@ venfork workflows clear
 3. `block` adds workflow filenames to the blocklist; `unblock` removes them. Blocking one more file never unblocks the files already on the list
 4. `clear` removes both lists
 5. Precedence: if `enabledWorkflows` is non-empty, it is used and `disabledWorkflows` is ignored
-6. Changes apply to the mirror default branch on next `venfork sync` (a non-empty allow or block list is enough to put the managed commit on the mirror, with or without a schedule or a preserve list)
+6. Changes apply to the mirror default branch on next `venfork sync` (a non-empty allow or block list is enough to put the managed commit on the mirror, with or without a schedule or a preserve list). The command itself writes only `venfork-config`; see [Which commands rewrite shared branches](headless.md#which-commands-rewrite-shared-branches)
 
 ### `venfork keep <list|add|remove|clear> [path ...] [--yes] [--no-input] [--json]`
 
@@ -452,7 +452,7 @@ venfork keep clear
 - Commit the file to `origin/<default>` before you sync. On every sync, venfork copies each preserved file from the previous origin tip into the new managed commit. If a preserved file is missing, sync aborts until you commit it or remove the entry.
 - Upstream wins. When upstream adds a file at a preserved path, sync uses upstream's version. If upstream later deletes that path, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork keep remove <path>` to let it go. A preserved file also cannot be restored when upstream adds a file at one of its parent directories; sync aborts and names the path.
 - Commits that only touch preserved files do not count as divergence on origin, so sync folds them into the managed commit.
-- `venfork keep remove` and `clear` re-stamp `origin/<default>` in the same step when the managed commit still carries a dropped file.
+- `venfork keep add` writes only `venfork-config`; the next `venfork sync` adds the file to the managed commit. `venfork keep remove` and `clear` re-stamp `origin/<default>` in the same step when the managed commit still carries a dropped file, after a divergence check against the shorter list. See [Which commands rewrite shared branches](headless.md#which-commands-rewrite-shared-branches).
 - The sync workflow and anything under `.venfork/` cannot be preserved: venfork owns them. A commit with the managed trailer that also changes any other file counts as your work, so sync stops on it as divergence.
 - If the `venfork-config` branch is missing while `origin/<default>` still carries a managed commit, sync refuses. Restore the branch. `venfork setup` never overwrites an existing config branch.
 
