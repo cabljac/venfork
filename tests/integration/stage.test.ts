@@ -7,7 +7,11 @@ import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
-import { stageCommand, syncCommand } from '../../src/commands.js';
+import {
+  runDoctorChecks,
+  stageCommand,
+  syncCommand,
+} from '../../src/commands.js';
 import { CommandExitError } from '../../src/errors.js';
 import { githubMirror, MIRROR_REPO } from '../harness/gh-mirror.js';
 import {
@@ -610,5 +614,236 @@ describe('stage lists AI attribution in commit messages', () => {
     expect(
       await fx.git(fx.publicFork ?? '', 'log', '-1', '--format=%B', 'feature')
     ).toBe(MESSAGE);
+  });
+});
+
+describe('stage refuses the mirror deny list (denyTerms)', () => {
+  async function denyList(denyTerms: unknown[]) {
+    const config = await fx.readRawConfig();
+    await fx.writeRawConfig(JSON.stringify({ ...config, denyTerms }));
+  }
+
+  async function commitFeature(
+    files: Record<string, string>,
+    message = 'feat: feature work',
+    branch = 'feature'
+  ): Promise<void> {
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+    await fx.git(fx.work, 'checkout', '--quiet', '-b', branch, 'origin/main');
+    for (const [file, content] of Object.entries(files)) {
+      await mkdir(path.dirname(path.join(fx.work, file)), { recursive: true });
+      await Bun.write(path.join(fx.work, file), content);
+      await fx.git(fx.work, 'add', file);
+    }
+    await fx.git(fx.work, 'commit', '--quiet', '-m', message);
+  }
+
+  async function expectRefused(
+    branch: string,
+    where: string,
+    matched: string
+  ): Promise<void> {
+    const error = await stageCommand(branch).catch((err: unknown) => err);
+    expect(error).toMatchObject({
+      cause: {
+        code: 'mirror-reference',
+        details: { matched, list: 'custom' },
+      },
+    });
+    expect(
+      (error as { cause: { details: { where: string } } }).cause.details.where
+    ).toContain(where);
+    expect(await refExists(pushTarget(), `refs/heads/${branch}`)).toBe(false);
+  }
+
+  test('an added line with a deny term is refused, ignoring case', async () => {
+    await denyList(['Globex']);
+    await commitFeature({ 'src/feature.txt': 'thanks GLOBEX team\n' });
+
+    await expectRefused('feature', 'file src/feature.txt', 'Globex');
+  });
+
+  test('an added line that looks like a diff header is still checked', async () => {
+    await denyList(['Globex']);
+    await commitFeature({
+      'docs/a.md': 'intro\n++ Globex here\n',
+    });
+
+    await expectRefused('feature', 'file docs/a.md', 'Globex');
+  });
+
+  test('a line after an added "+++ b/<path>" line keeps its own file name', async () => {
+    await denyList(['Globex']);
+    await commitFeature({
+      'docs/a.md': '++ b/other.txt\nGlobex\n',
+    });
+
+    await expectRefused('feature', 'file docs/a.md', 'Globex');
+  });
+
+  async function commitMore(
+    files: Record<string, string | null>,
+    message: string
+  ): Promise<void> {
+    for (const [file, content] of Object.entries(files)) {
+      if (content === null) {
+        await fx.git(fx.work, 'rm', '--quiet', file);
+      } else {
+        await Bun.write(path.join(fx.work, file), content);
+        await fx.git(fx.work, 'add', file);
+      }
+    }
+    await fx.git(fx.work, 'commit', '--quiet', '-m', message);
+  }
+
+  test('a term added in one commit and removed in the next is still refused', async () => {
+    await denyList(['Globex']);
+    await commitFeature({ 'src/feature.txt': 'hello Globex\n' });
+    await commitMore({ 'src/feature.txt': 'hello\n' }, 'fix: drop the name');
+
+    await expectRefused('feature', 'file src/feature.txt', 'Globex');
+  });
+
+  test('a term only in an intermediate commit among several is refused', async () => {
+    await denyList(['Globex']);
+    await commitFeature({ 'src/a.txt': 'one\n' });
+    await commitMore({ 'src/b.txt': 'two Globex\n' }, 'feat: two');
+    await commitMore({ 'src/b.txt': 'two\n' }, 'feat: three');
+    await commitMore({ 'src/c.txt': 'four\n' }, 'feat: four');
+
+    await expectRefused('feature', 'file src/b.txt', 'Globex');
+  });
+
+  test('a file whose name has a term, added then deleted, is still refused', async () => {
+    await denyList(['Globex']);
+    await commitFeature({ 'docs/globex-notes.md': 'notes\n' });
+    await commitMore({ 'docs/globex-notes.md': null }, 'chore: remove notes');
+
+    await expectRefused('feature', 'file name docs/globex-notes.md', 'Globex');
+  });
+
+  test('a term that only an upstream line already has is not refused', async () => {
+    await fx.commitOnUpstream({ 'src/notes.txt': 'globex\nkeep\n' });
+    await denyList(['globex']);
+    await fx.git(fx.work, 'fetch', '--quiet', 'upstream');
+    await fx.git(
+      fx.work,
+      'checkout',
+      '--quiet',
+      '-b',
+      'feature',
+      'upstream/main'
+    );
+    await Bun.write(`${fx.work}/src/notes.txt`, 'globex\nkeep\nmore\n');
+    await fx.git(fx.work, 'add', 'src/notes.txt');
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: more notes');
+
+    await stageCommand('feature');
+
+    expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(true);
+  });
+
+  test('a deny term in the commit message is refused', async () => {
+    await denyList(['GLX-42']);
+    await commitFeature(
+      { 'src/feature.txt': 'feature\n' },
+      'feat: feature work\n\nRefs glx-42'
+    );
+
+    await expectRefused('feature', 'message', 'GLX-42');
+  });
+
+  test('a text file marked -diff in .gitattributes is still scanned', async () => {
+    await denyList(['Globex']);
+    await commitFeature({
+      '.gitattributes': 'gen.txt -diff\n',
+      'gen.txt': 'generated\nGlobex inside\n',
+    });
+
+    await expectRefused('feature', 'file gen.txt', 'Globex');
+  });
+
+  test('a binary file is scanned as text, so a term in its bytes is refused', async () => {
+    await denyList(['Globex']);
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+    await fx.git(
+      fx.work,
+      'checkout',
+      '--quiet',
+      '-b',
+      'feature',
+      'origin/main'
+    );
+    await Bun.write(
+      path.join(fx.work, 'assets/blob.bin'),
+      new Uint8Array([0, 1, 2, ...new TextEncoder().encode('Globex'), 0, 255])
+    );
+    await fx.git(fx.work, 'add', 'assets/blob.bin');
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: add blob');
+
+    await expectRefused('feature', 'file assets/blob.bin', 'Globex');
+  });
+
+  test('a deny term in a file name or the branch name is refused', async () => {
+    await denyList(['globex']);
+    await commitFeature({ 'docs/globex-notes.md': 'notes\n' });
+
+    await expectRefused('feature', 'file name docs/globex-notes.md', 'globex');
+
+    await fx.git(fx.work, 'checkout', '--quiet', 'main');
+    await commitFeature(
+      { 'src/feature.txt': 'feature\n' },
+      'feat: feature work',
+      'globex-fix'
+    );
+    await expectRefused('globex-fix', 'the branch name', 'globex');
+  });
+
+  test('the PR title is refused before anything is pushed', async () => {
+    await denyList(['globex']);
+    await cutFeatureBranch('origin/main');
+    await mkdir(path.join(fx.work, 'acme'));
+    for (const [name, target] of [
+      ['upstream', fx.upstream],
+      ['public', fx.publicFork ?? ''],
+    ] as const) {
+      await symlink(target, path.join(fx.work, 'acme', name));
+      await fx.git(fx.work, 'remote', 'set-url', name, `acme/${name}`);
+    }
+    await appendFile(path.join(fx.work, '.git', 'info', 'exclude'), 'acme/\n');
+    const gh = await githubMirror(fx);
+    await gh.setRoutes([
+      {
+        match: `pr list --repo ${MIRROR_REPO} --head feature --state open`,
+        stdout: JSON.stringify([]),
+      },
+    ]);
+
+    const error = await stageCommand('feature', {
+      dryRun: true,
+      createPr: true,
+      title: 'feat: Globex feature',
+    }).catch((err: unknown) => err);
+
+    expect(error).toMatchObject({
+      cause: {
+        code: 'mirror-reference',
+        details: { where: 'the upstream PR title', matched: 'globex' },
+      },
+    });
+  });
+
+  test('an invalid denyTerms entry refuses stage', async () => {
+    await denyList(['ok', '']);
+    await commitFeature({ 'src/feature.txt': 'feature\n' });
+
+    await expect(stageCommand('feature')).rejects.toMatchObject({
+      cause: { code: 'config' },
+    });
+    const checks = await runDoctorChecks({ cwd: fx.work });
+    expect(checks.find((check) => check.id === 'repo')).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining('denyTerms must be a list'),
+    });
   });
 });

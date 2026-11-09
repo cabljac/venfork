@@ -37,7 +37,10 @@ import {
 } from '../shared/approval-guard.js';
 import { WORKFLOWS_DIR } from '../shared/constants.js';
 import {
+  assertNoDeniedTerm,
   assertNoMirrorReference,
+  type CustomDenyRules,
+  customDenyRules,
   mirrorDenyList,
 } from '../shared/deny-list.js';
 import { changedFilesInCommit } from '../shared/divergence.js';
@@ -281,6 +284,8 @@ export interface StagingPlan {
   upstreamTip: string;
   /** Mirror-only paths from the preserve allowlist. */
   preserve: string[];
+  /** The mirror's `denyTerms`. */
+  customDeny: CustomDenyRules;
   /** True when the head and base of the upstream PR live in the same repo (no-public mode). */
   noPublic: boolean;
   /** Upstream and public fork URLs from the config and the remotes. */
@@ -375,6 +380,8 @@ async function planStaging(
 
   const config = await readVenforkConfigFromRepo(cwd);
   assertNoInvalidPreserve(config);
+  const customDeny = customDenyRules(config);
+  assertNoDeniedTerm(branch, 'the branch name', customDeny);
   const level = approvalOf(config);
   const noPublic = config?.mode === 'no-public';
 
@@ -538,6 +545,7 @@ async function planStaging(
     upstreamBase,
     upstreamTip,
     preserve: config?.preserve ?? [],
+    customDeny,
     noPublic,
     recordedUrls: [
       ...new Set(
@@ -899,6 +907,8 @@ interface PreparedStage {
   subjects: string[];
   /** Output of `mirrorDenyList`, reused for the PR title and body. */
   denyList: string[];
+  /** The mirror's `denyTerms`, reused for the PR title and body. */
+  customDeny: CustomDenyRules;
   /** Paths some commit in `upstream/<base>..head` adds, modifies or retypes. */
   files: string[];
   /** Paths in `files` that are absent at `head` but still in its history. */
@@ -945,6 +955,7 @@ async function prepareStage(
     mirrorBlobs,
     mirrorTexts,
     denyList,
+    customDeny: plan.customDeny,
     recordedUrls: plan.recordedUrls,
     originalOf: rebuilt.originalOf,
     cwd,
@@ -977,6 +988,7 @@ async function prepareStage(
     head: rebuilt.head,
     subjects: log.stdout.split('\n').filter(Boolean),
     denyList,
+    customDeny: plan.customDeny,
     files,
     removedLater: files.filter((file) => !present.has(file)),
     issueRefCommits: commits.filter((commit) =>
@@ -1226,6 +1238,8 @@ function buildUpstreamPrPayload(
   );
   assertNoMirrorReference(title, 'the upstream PR title', prepared.denyList);
   assertNoMirrorReference(body, 'the upstream PR body', prepared.denyList);
+  assertNoDeniedTerm(title, 'the upstream PR title', prepared.customDeny);
+  assertNoDeniedTerm(body, 'the upstream PR body', prepared.customDeny);
   return { title, body };
 }
 

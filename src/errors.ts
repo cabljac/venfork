@@ -271,6 +271,29 @@ export class MirrorReferenceError extends VenforkError {
 }
 
 /**
+ * Thrown when text bound for the public fork or upstream contains a
+ * `denyTerms` entry in venfork-config. It shares the `mirror-reference`
+ * code.
+ */
+export class DeniedTermError extends VenforkError {
+  constructor(
+    public readonly where: string,
+    public readonly matched: string,
+    hint = `Remove it from ${where} and retry.`
+  ) {
+    super(
+      `Refusing to publish: ${where} contains '${matched}', which the mirror's deny list (denyTerms in venfork-config) refuses.`,
+      'mirror-reference',
+      {
+        hint,
+        details: { where, matched, list: 'custom' },
+      }
+    );
+    this.name = 'DeniedTermError';
+  }
+}
+
+/**
  * Thrown when `venfork stage` would push mirror-only paths (the managed
  * sync workflow, `.venfork/` or preserved files) or mirror-held content to
  * the public fork or upstream.

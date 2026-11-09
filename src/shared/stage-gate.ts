@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { $ } from 'execa';
 import { invalidPreserveError } from '../config.js';
 import {
+  DeniedTermError,
   GitError,
   MirrorReferenceError,
   StageLeakError,
@@ -10,8 +11,11 @@ import {
 import { parseRepoPath } from '../utils.js';
 import { SYNC_WORKFLOW_PATH, VENFORK_BOT_EMAIL } from './constants.js';
 import {
+  type CustomDenyRules,
   canonicalText,
+  findCustomDenied,
   findDeniedText,
+  isEmptyDeny,
   mirrorLocationTerms,
   selfReferenceAllowed,
 } from './deny-list.js';
@@ -648,6 +652,8 @@ export interface StageGateInput {
   mirrorTexts: readonly MirrorText[];
   /** Output of `mirrorDenyList`. */
   denyList: readonly string[];
+  /** The mirror's `denyTerms`; absent means none. */
+  customDeny?: CustomDenyRules;
   /**
    * This mirror's upstream and public fork URLs (from the config and the
    * remotes). A config-shaped file naming one is refused even when
@@ -732,6 +738,57 @@ function findTermInBytes(
 }
 
 /**
+ * The lines a unified diff (`git show --patch`) adds, by file. `--- ` and
+ * `+++ ` are file headers only between a `diff --git` line and the first
+ * `@@` of that file; inside a hunk every line that starts with `+` is
+ * content, so an added `++ x` (shown as `+++ x`) is still an added line.
+ * A `Binary files ... differ` entry has no hunks and so no lines, which is
+ * why {@link addedLines} asks git for `--text`.
+ *
+ * @internal Exported for unit testing.
+ */
+export function parseAddedLines(
+  patch: string
+): Array<{ file: string; line: string }> {
+  const lines: Array<{ file: string; line: string }> = [];
+  let file = '';
+  let inHunk = false;
+  for (const raw of patch.split('\n')) {
+    if (raw.startsWith('diff --git ')) {
+      inHunk = false;
+      const at = raw.lastIndexOf(' b/');
+      file = at >= 0 ? raw.slice(at + 3) : '';
+      continue;
+    }
+    if (!inHunk) {
+      if (raw.startsWith('@@')) inHunk = true;
+      else if (raw.startsWith('+++ ') && raw !== '+++ /dev/null') {
+        file = raw.slice(4).replace(/^b\//, '');
+      }
+      continue;
+    }
+    if (raw.startsWith('+')) lines.push({ file, line: raw.slice(1) });
+  }
+  return lines;
+}
+
+/**
+ * The lines commit `commit` adds, by file, against its first parent. With
+ * `--text`, a file git would show as binary (real binary content, or text
+ * marked `-diff` or `binary` in `.gitattributes`) is diffed as text, so
+ * its bytes are scanned too.
+ */
+async function addedLines(
+  commit: string,
+  cwd: string
+): Promise<Array<{ file: string; line: string }>> {
+  const patch = await $({
+    cwd,
+  })`git -c core.quotePath=false show --format= --patch --text --unified=0 --no-color --no-ext-diff --no-textconv --no-renames --first-parent ${commit}`;
+  return parseAddedLines(patch.stdout);
+}
+
+/**
  * Checks every commit in `base..head` before anything is pushed and throws
  * on the first one that would publish mirror state:
  *  - {@link StageLeakError} when it adds, modifies or retypes the managed
@@ -751,6 +808,8 @@ function findTermInBytes(
  *    also searched for the URL-derived terms as UTF-8, UTF-16LE and
  *    UTF-16BE bytes; compressed and UTF-32 content is not decoded.
  *  - {@link VenforkError} when a file is too large to read.
+ *  - {@link DeniedTermError} when a `denyTerms` term is in a file name, a
+ *    line the commit adds, or its author, committer or message.
  *
  * Deleting a preserved path is allowed: no content leaves.
  *
@@ -761,6 +820,8 @@ export async function assertPublishableCommits(
   input: StageGateInput
 ): Promise<string[]> {
   const { branch, base, head, preserve, mirrorBlobs, denyList, cwd } = input;
+  const customDeny = input.customDeny;
+  const checkCustom = customDeny !== undefined && !isEmptyDeny(customDeny);
   const list = await $({
     cwd,
   })`git rev-list --reverse ${base}..${head}`;
@@ -803,6 +864,16 @@ export async function assertPublishableCommits(
     }
 
     for (const change of published) {
+      const customNameHit = checkCustom
+        ? findCustomDenied(change.path, customDeny)
+        : null;
+      if (customNameHit !== null) {
+        throw new DeniedTermError(
+          `commit ${label} file name ${change.path}`,
+          customNameHit,
+          `Rename the file so no commit contains '${customNameHit}' and retry.`
+        );
+      }
       const nameHit = findDeniedText(change.path, locationTerms, {
         nameMatch: 'owner',
       });
@@ -854,6 +925,19 @@ export async function assertPublishableCommits(
       }
     }
 
+    if (checkCustom) {
+      for (const { file, line } of await addedLines(commit, cwd)) {
+        const matched = findCustomDenied(line, customDeny);
+        if (matched !== null) {
+          throw new DeniedTermError(
+            `commit ${label} file ${file}`,
+            matched,
+            `Remove it from ${file} and retry.`
+          );
+        }
+      }
+    }
+
     const meta = await $({
       cwd,
     })`git show -s --format=%an%x00%ae%x00%cn%x00%ce%x00%B ${commit}`;
@@ -884,6 +968,16 @@ export async function assertPublishableCommits(
           `commit ${label} ${field}`,
           marker,
           'Rewrite the branch so no commit contains internal markers and retry.'
+        );
+      }
+      const customHit = checkCustom
+        ? findCustomDenied(value, customDeny)
+        : null;
+      if (customHit !== null) {
+        throw new DeniedTermError(
+          `commit ${label} ${field}`,
+          customHit,
+          `Rewrite the branch so no commit contains '${customHit}' and retry.`
         );
       }
       const matched = findDeniedText(value, denyList);

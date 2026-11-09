@@ -6,6 +6,7 @@ import { $ } from 'execa';
 import { ConfigError, GitError } from './errors.js';
 import { SYNC_WORKFLOW_PATH } from './shared/constants.js';
 import { isValidCronExpression } from './shared/cron.js';
+import { customDenyRules } from './shared/deny-list.js';
 import { netExec, netFailureReason } from './shared/net.js';
 import { parseRepoPath, shellQuote } from './utils.js';
 
@@ -130,6 +131,12 @@ export interface VenforkConfig {
    * {@link trackedBranchesOf}; set by editing the config.
    */
   trackedBranches?: unknown;
+  /**
+   * Extra literal terms `venfork stage` refuses to publish, matched
+   * case-insensitively. Read through `customDenyRules`; set by editing the
+   * config.
+   */
+  denyTerms?: unknown;
   /** Branch -> upstream PR linkage recorded by `venfork stage`. */
   shippedBranches?: Record<string, ShippedBranch>;
   /** Branch -> upstream PR tracking recorded by `venfork pull pr`. */
@@ -707,6 +714,9 @@ function normalizeConfig(
   if (normalized.approval === '' || normalized.approval === 'off') {
     delete normalized.approval;
   }
+
+  // Refused on every read, so a deny list stage cannot apply never reaches it.
+  customDenyRules(normalized);
 
   if (normalized.schedule) {
     const cron =

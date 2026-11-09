@@ -1,5 +1,10 @@
 import { $ } from 'execa';
-import { MirrorReferenceError } from '../errors.js';
+import type { VenforkConfig } from '../config.js';
+import {
+  ConfigError,
+  DeniedTermError,
+  MirrorReferenceError,
+} from '../errors.js';
 import { parseRepoPath } from '../utils.js';
 
 /** The bare word that also covers the internal markers and the bot identity. */
@@ -204,6 +209,81 @@ export function findDeniedText(
     if (found) return term;
   }
   return null;
+}
+
+/** The mirror's own deny list from `denyTerms`. */
+export interface CustomDenyRules {
+  /** Literal terms, matched case-insensitively after {@link canonicalText}. */
+  terms: string[];
+}
+
+/** No `denyTerms`. */
+export const NO_CUSTOM_DENY: CustomDenyRules = { terms: [] };
+
+/** True when `rules` holds no term. */
+export function isEmptyDeny(rules: CustomDenyRules): boolean {
+  return rules.terms.length === 0;
+}
+
+/**
+ * Reads `denyTerms` from `config`.
+ *
+ * @throws ConfigError when it is not a list of non-empty strings, so
+ *   venfork never runs with a deny list it cannot apply.
+ */
+export function customDenyRules(
+  config: Pick<VenforkConfig, 'denyTerms'> | null | undefined
+): CustomDenyRules {
+  const raw = config?.denyTerms;
+  if (raw === undefined) return NO_CUSTOM_DENY;
+  if (
+    !Array.isArray(raw) ||
+    raw.some((entry) => typeof entry !== 'string' || entry.trim() === '')
+  ) {
+    throw new ConfigError(
+      'Invalid venfork-config config: denyTerms must be a list of non-empty strings.'
+    );
+  }
+  return { terms: raw.map((entry: string) => entry.trim()) };
+}
+
+/**
+ * The first `denyTerms` term found in `text`, as written in the config, or
+ * null. Terms match anywhere, case-insensitively, after `%XX` decoding and
+ * {@link canonicalText}.
+ *
+ * @param text Text bound for the public side.
+ * @param rules Output of {@link customDenyRules}.
+ */
+export function findCustomDenied(
+  text: string,
+  rules: CustomDenyRules
+): string | null {
+  if (isEmptyDeny(rules)) return null;
+  const folded = foldForMatch(text);
+  for (const term of rules.terms) {
+    const needle = foldForMatch(term);
+    if (needle && folded.includes(needle)) return term;
+  }
+  return null;
+}
+
+/**
+ * Throws {@link DeniedTermError} when `text` contains a `denyTerms` term.
+ *
+ * @param text Text bound for the public side.
+ * @param where What the text is, for the error (e.g. `the upstream PR body`).
+ * @param rules Output of {@link customDenyRules}.
+ */
+export function assertNoDeniedTerm(
+  text: string,
+  where: string,
+  rules: CustomDenyRules
+): void {
+  const matched = findCustomDenied(text, rules);
+  if (matched !== null) {
+    throw new DeniedTermError(where, matched);
+  }
 }
 
 /**
