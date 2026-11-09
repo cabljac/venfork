@@ -310,6 +310,24 @@ export interface PrTarget {
   level: GateLevel;
   mirror: string;
   branch: string;
+  /**
+   * The mirror branch the PR must target: `stage --base`. Absent means the
+   * mirror default branch.
+   */
+  base?: string;
+}
+
+/** The base a mirror PR must have for `target`, and how to name it. */
+function wantedBase(
+  raw: unknown,
+  target: PrTarget,
+  what: string
+): { branch: string; label: string } {
+  if (target.base !== undefined) {
+    return { branch: target.base, label: `the --base branch '${target.base}'` };
+  }
+  const branch = defaultBranchOf(raw, what);
+  return { branch, label: `the mirror default branch '${branch}'` };
 }
 
 function wrongBase(
@@ -319,21 +337,29 @@ function wrongBase(
 ): ApprovalError {
   const { level, mirror } = target;
   const defaultBranch = defaultBranchOf(raw, what);
+  const wanted = wantedBase(raw, target, what);
   const baseRef = text(raw, 'base', 'ref');
   return new ApprovalError(
     'wrong-base',
-    `Not staged: PR ${prNumberOf(raw)} on ${mirror} targets '${baseRef}', not the mirror default branch '${defaultBranch}'.`,
-    `Retarget the PR to '${defaultBranch}' and get it approved there, so the review covers every commit stage ships.`,
-    { level, prUrl: text(raw, 'html_url'), base: baseRef, defaultBranch }
+    `Not staged: PR ${prNumberOf(raw)} on ${mirror} targets '${baseRef}', not ${wanted.label}.`,
+    `Retarget the PR to '${wanted.branch}' and get it approved there, so the review covers every commit stage ships.`,
+    {
+      level,
+      prUrl: text(raw, 'html_url'),
+      base: baseRef,
+      defaultBranch,
+      ...(target.base !== undefined ? { expectedBase: target.base } : {}),
+    }
   );
 }
 
 /**
  * Picks the mirror PR the gate reads from the open PRs listed for `branch`:
  * a PR whose head is `branch` on the mirror and whose base is the mirror
- * default branch. Returns null when no PR has that head.
+ * default branch, or `target.base` when set. Returns null when no PR has
+ * that head.
  * @throws ApprovalError `wrong-base` when every such PR targets another
- *   branch, or `ambiguous-pr` when more than one targets the default branch.
+ *   branch, or `ambiguous-pr` when more than one targets the wanted base.
  */
 export function selectMirrorPr(
   listed: unknown[],
@@ -347,28 +373,28 @@ export function selectMirrorPr(
   );
   const [first] = heads;
   if (first === undefined) return null;
-  const onDefault = heads.filter(
-    (raw) => text(raw, 'base', 'ref') === defaultBranchOf(raw, what)
+  const onBase = heads.filter(
+    (raw) => text(raw, 'base', 'ref') === wantedBase(raw, target, what).branch
   );
-  if (onDefault.length === 0) throw wrongBase(first, target, what);
-  if (onDefault.length > 1) {
-    const numbers = onDefault
+  if (onBase.length === 0) throw wrongBase(first, target, what);
+  if (onBase.length > 1) {
+    const numbers = onBase
       .map((raw) => field(raw, 'number'))
       .filter((n): n is number => typeof n === 'number')
       .sort((a, b) => a - b);
     throw new ApprovalError(
       'ambiguous-pr',
-      `Not staged: '${branch}' has ${numbers.length} open PRs on ${mirror} into '${defaultBranchOf(first, what)}': ${numbers.map((n) => `#${n}`).join(', ')}.`,
+      `Not staged: '${branch}' has ${numbers.length} open PRs on ${mirror} into '${wantedBase(first, target, what).branch}': ${numbers.map((n) => `#${n}`).join(', ')}.`,
       'Pass --internal-pr <n> to name the PR whose approval counts, or close the others.',
       { level, branch, mirror, prNumbers: numbers }
     );
   }
-  return toMirrorPr(onDefault[0], what);
+  return toMirrorPr(onBase[0], what);
 }
 
 /**
  * Checks that PR `pinned`, named with `--internal-pr`, is an open PR from
- * `branch` on the mirror into the mirror default branch.
+ * `branch` on the mirror into the mirror default branch (or `target.base`).
  * @throws ApprovalError naming what does not match.
  */
 export function checkPinnedPr(
@@ -406,15 +432,15 @@ export function checkPinnedPr(
       { ...details, headRef }
     );
   }
-  if (text(raw, 'base', 'ref') !== defaultBranchOf(raw, what)) {
+  if (text(raw, 'base', 'ref') !== wantedBase(raw, target, what).branch) {
     throw wrongBase(raw, target, what);
   }
   return toMirrorPr(raw, what);
 }
 
 /**
- * The open PR on `mirror` from `branch` into the mirror default branch, or
- * PR `pinned` when `--internal-pr` names it. Null when the branch has no
+ * The open PR on `mirror` from `branch` into the mirror default branch (or
+ * `target.base`), or PR `pinned` when `--internal-pr` names it. Null when the branch has no
  * open PR.
  * @throws ApprovalError when the PR found cannot be the one the gate reads.
  */
@@ -518,10 +544,16 @@ export async function readApprovalFacts(input: {
   branch: string;
   cwd: string;
   pinnedPr?: number;
+  base?: string;
 }): Promise<ApprovalFacts> {
   const { level, mirror, branch, cwd } = input;
   const pr = await findOpenMirrorPr(
-    { level, mirror, branch },
+    {
+      level,
+      mirror,
+      branch,
+      ...(input.base !== undefined ? { base: input.base } : {}),
+    },
     cwd,
     input.pinnedPr
   );
@@ -582,6 +614,8 @@ export async function checkApprovalGate(input: {
   branch: string;
   cwd: string;
   pinnedPr?: number;
+  /** `stage --base`: the mirror branch the PR must target. */
+  base?: string;
 }): Promise<ApprovalPass> {
   if (!input.mirror) {
     throw new PreconditionError(

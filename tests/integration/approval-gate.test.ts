@@ -448,6 +448,128 @@ describe('which mirror PR the approval gate reads', () => {
   });
 });
 
+describe('the approval gate with stage --base', () => {
+  /**
+   * Creates `ga` on upstream, mirrors it to origin (plus `extra` commits
+   * the mirror alone has), and pushes `feature` cut from origin/ga.
+   */
+  async function pushGaFeature(extra = false): Promise<string> {
+    await fx.commitOnUpstreamBranch(
+      'ga',
+      { 'src/ga.txt': 'ga only\n' },
+      'feat: ga only'
+    );
+    await fx.git(fx.work, 'fetch', '--quiet', 'upstream');
+    await fx.git(fx.work, 'checkout', '--quiet', '-b', 'ga', 'upstream/ga');
+    if (extra) {
+      await Bun.write(`${fx.work}/src/unreviewed.txt`, 'never reviewed\n');
+      await fx.git(fx.work, 'add', 'src/unreviewed.txt');
+      await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: mirror-only ga');
+    }
+    await fx.git(fx.work, 'push', '--quiet', 'origin', 'ga');
+    await fx.git(fx.work, 'checkout', '--quiet', '-b', 'feature', 'ga');
+    await Bun.write(`${fx.work}/src/feature.txt`, 'feature\n');
+    await fx.git(fx.work, 'add', 'src/feature.txt');
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: feature work');
+    await fx.git(fx.work, 'push', '--quiet', 'origin', 'feature');
+    return fx.sha(fx.work, 'feature');
+  }
+
+  test('an approved mirror PR into the --base branch counts', async () => {
+    const head = await pushGaFeature();
+    await setApproval('reviewed');
+    await scenario({
+      headSha: head,
+      baseRef: 'ga',
+      reviews: [{ login: 'alice', state: 'APPROVED' }],
+    });
+
+    const result = await stageCommand('feature', {
+      base: 'ga',
+      prompt: { yes: true, noInput: true },
+    });
+
+    expect(result).toMatchObject({
+      approval: { level: 'reviewed', ok: true, headSha: head },
+    });
+    expect(await fx.git(fx.publicFork ?? '', 'rev-parse', 'feature~1')).toBe(
+      await fx.sha(fx.upstream, 'ga')
+    );
+  });
+
+  test('--internal-pr naming an approved PR into the --base branch counts', async () => {
+    const head = await pushGaFeature();
+    await setApproval('reviewed');
+    await scenario({
+      headSha: head,
+      prNumber: 12,
+      baseRef: 'ga',
+      reviews: [{ login: 'alice', state: 'APPROVED' }],
+    });
+
+    const result = await stageCommand('feature', {
+      base: 'ga',
+      internalPrNumber: 12,
+      prompt: { yes: true, noInput: true },
+    });
+
+    expect(result).toMatchObject({
+      approval: {
+        ok: true,
+        prUrl: 'https://github.com/acme/project-private/pull/12',
+      },
+    });
+  });
+
+  test('a mirror PR into the default branch is refused with wrong-base', async () => {
+    const head = await pushGaFeature();
+    await setApproval('reviewed');
+    await scenario({
+      headSha: head,
+      baseRef: 'main',
+      reviews: [{ login: 'alice', state: 'APPROVED' }],
+    });
+
+    await expect(
+      stageCommand('feature', {
+        base: 'ga',
+        prompt: { yes: true, noInput: true },
+      })
+    ).rejects.toThrow(new CommandExitError(1));
+
+    expect(errorLines().join('\n')).toContain(
+      "targets 'main', not the --base branch 'ga'"
+    );
+    expect(await publicFeature()).toBeNull();
+  });
+
+  test('mirror commits on the base that upstream lacks are refused, since the review does not cover them', async () => {
+    const head = await pushGaFeature(true);
+    await setApproval('reviewed');
+    await scenario({
+      headSha: head,
+      baseRef: 'ga',
+      reviews: [{ login: 'alice', state: 'APPROVED' }],
+    });
+
+    await expect(
+      stageCommand('feature', {
+        base: 'ga',
+        prompt: { yes: true, noInput: true },
+      })
+    ).rejects.toThrow(new CommandExitError(1));
+
+    expect(errorLines().join('\n')).toContain(
+      "origin/ga has 1 commit(s) in 'feature' that upstream/ga does not"
+    );
+    expect(await publicFeature()).toBeNull();
+    const dry = await stageCommand('feature', { base: 'ga', dryRun: true });
+    expect(dry).toMatchObject({
+      approval: { ok: false, reason: 'wrong-base' },
+    });
+  });
+});
+
 describe('approval gate reads through gh', () => {
   test('reviewed: an App token that cannot read /user still stages', async () => {
     const head = await pushFeature();

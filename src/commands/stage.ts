@@ -500,6 +500,31 @@ async function planStaging(
       'git merge-base'
     );
   }
+  if (approval?.ok && upstreamBase !== upstreamDefaultBranch) {
+    const uncovered = await unreviewedBaseCommits(
+      upstreamBase,
+      upstreamTip,
+      sourceRef,
+      cwd
+    );
+    if (uncovered > 0) {
+      const error = new ApprovalError(
+        'wrong-base',
+        `Not staged: origin/${upstreamBase} has ${uncovered} commit(s) in '${branch}' that upstream/${upstreamBase} does not, so the approval on ${approval.prUrl} does not cover every commit stage would publish.`,
+        `Bring origin/${upstreamBase} back in line with upstream/${upstreamBase}, rebase '${branch}' and get it approved again.`,
+        { level, prUrl: approval.prUrl, base: upstreamBase }
+      );
+      if (!consent.dryRun) throw error;
+      approval = {
+        level: approval.level,
+        ok: false,
+        reason: 'wrong-base',
+        message: errorLine(error),
+        ...(approval.prUrl ? { prUrl: approval.prUrl } : {}),
+      };
+      approvedPrNumber = null;
+    }
+  }
 
   return {
     branch,
@@ -531,6 +556,32 @@ async function planStaging(
     approvalLevel: level,
     weakening,
   };
+}
+
+/**
+ * The number of non-merge commits that `sourceRef` shares with the mirror's
+ * `origin/<base>` but that `upstream/<base>` (`upstreamTip`) lacks. A
+ * mirror PR into `<base>` is reviewed against `origin/<base>`, so stage
+ * would publish those commits without the review covering them. Zero when
+ * the mirror has no `<base>`.
+ */
+async function unreviewedBaseCommits(
+  base: string,
+  upstreamTip: string,
+  sourceRef: string,
+  cwd: string
+): Promise<number> {
+  const mirrorBase = await resolveCommit(`refs/remotes/origin/${base}`, cwd);
+  if (!mirrorBase) return 0;
+  const shared = await $({
+    cwd,
+    reject: false,
+  })`git merge-base ${mirrorBase} ${sourceRef}`;
+  if (shared.exitCode !== 0) return 0;
+  const count = await $({
+    cwd,
+  })`git rev-list --count --no-merges ${`${upstreamTip}..${shared.stdout.trim()}`}`;
+  return Number(count.stdout.trim());
 }
 
 function weakenedError(
@@ -583,7 +634,12 @@ async function approvalGate(
   branch: string,
   sourceHead: string,
   cwd: string,
-  consent: { dryRun?: boolean; internalPrNumber?: number; force?: boolean }
+  consent: {
+    dryRun?: boolean;
+    internalPrNumber?: number;
+    force?: boolean;
+    base?: string;
+  }
 ): Promise<{ report: ApprovalReport; prNumber?: number }> {
   try {
     const pass = await checkApprovalGate({
@@ -592,6 +648,7 @@ async function approvalGate(
       branch,
       cwd,
       pinnedPr: consent.internalPrNumber,
+      ...(consent.base !== undefined ? { base: consent.base } : {}),
     });
     if (pass.headSha !== sourceHead) {
       throw branchMovedError(level, branch, sourceHead, pass);
