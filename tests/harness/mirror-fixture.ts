@@ -43,6 +43,15 @@ export interface MirrorFixture {
   work: string;
   /** Commits `files` on upstream's default branch and returns the new SHA. */
   commitOnUpstream(files: FileMap, message?: string): Promise<string>;
+  /**
+   * Commits `files` on upstream's `branch`, creating the branch from the
+   * default branch when it does not exist, and returns the new SHA.
+   */
+  commitOnUpstreamBranch(
+    branch: string,
+    files: FileMap,
+    message?: string
+  ): Promise<string>;
   /** Commits `files` straight onto origin's default branch, as a teammate would. */
   commitOnOrigin(files: FileMap, message?: string): Promise<string>;
   /** Resolves `ref` in a repo (bare or not) to a full SHA. */
@@ -263,6 +272,29 @@ export async function createMirrorFixture(
         await git(upstreamDev, 'pull', '--quiet', '--ff-only');
         const sha = await commitFiles(upstreamDev, files, message);
         await git(upstreamDev, 'push', '--quiet', 'origin', defaultBranch);
+        return sha;
+      },
+      async commitOnUpstreamBranch(
+        branch,
+        files,
+        message = 'feat: upstream branch change'
+      ) {
+        await git(upstreamDev, 'fetch', '--quiet', 'origin');
+        const exists = await $({
+          cwd: upstreamDev,
+          reject: false,
+        })`git rev-parse --verify --quiet ${`refs/remotes/origin/${branch}`}`;
+        await git(
+          upstreamDev,
+          'checkout',
+          '--quiet',
+          '-B',
+          branch,
+          exists.exitCode === 0 ? `origin/${branch}` : `origin/${defaultBranch}`
+        );
+        const sha = await commitFiles(upstreamDev, files, message);
+        await git(upstreamDev, 'push', '--quiet', 'origin', branch);
+        await git(upstreamDev, 'checkout', '--quiet', defaultBranch);
         return sha;
       },
       async commitOnOrigin(files, message = 'chore: mirror-only change') {

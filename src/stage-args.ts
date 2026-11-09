@@ -20,7 +20,7 @@ export type ParsedStageBranchArgs = {
   draft: boolean;
   /** Override the upstream PR title; default is the internal PR title. */
   title?: string;
-  /** Override the upstream base branch; default is upstream's default branch. */
+  /** Upstream branch to rebuild on and open the PR into; default is upstream's default branch. */
   base?: string;
   /**
    * Pin the internal review PR by number, instead of letting venfork pick

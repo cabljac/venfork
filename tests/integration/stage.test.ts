@@ -9,11 +9,11 @@ mock.module('@clack/prompts', quietPrompts);
 
 import { stageCommand, syncCommand } from '../../src/commands.js';
 import { CommandExitError } from '../../src/errors.js';
+import { githubMirror, MIRROR_REPO } from '../harness/gh-mirror.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
-import { githubMirror, MIRROR_REPO } from '../harness/gh-mirror.js';
 import { seedPreserve } from '../harness/preserve.js';
 
 const CALLER = '.github/workflows/caller.yml';
@@ -236,6 +236,93 @@ describe('stage refuses branches that are not upstream work', () => {
       ON_STDERR
     );
     expect(await refExists(pushTarget(), 'refs/heads/lonely')).toBe(false);
+  });
+});
+
+describe('stage --base', () => {
+  async function cutFromUpstreamGa(): Promise<string> {
+    await fx.commitOnUpstreamBranch(
+      'ga',
+      { 'src/ga.txt': 'ga only\n' },
+      'feat: ga only'
+    );
+    await fx.commitOnUpstream({ 'src/main-later.txt': 'main only\n' });
+    await fx.git(fx.work, 'fetch', '--quiet', 'upstream');
+    return cutFeatureBranch('upstream/ga');
+  }
+
+  test('rebuilds the branch on upstream/<base>, not the default branch', async () => {
+    await cutFromUpstreamGa();
+
+    await stageCommand('feature', { base: 'ga' });
+
+    const publicFork = fx.publicFork ?? '';
+    expect(await fx.sha(publicFork, 'feature~1')).toBe(
+      await fx.sha(fx.upstream, 'ga')
+    );
+    expect(await fx.fileAt(publicFork, 'feature', 'src/ga.txt')).toBe(
+      'ga only\n'
+    );
+    expect(
+      await fx.fileAt(publicFork, 'feature', 'src/main-later.txt')
+    ).toBeNull();
+  });
+
+  test('a dry run reports the base and only the commits beyond it', async () => {
+    await cutFromUpstreamGa();
+
+    const result = await stageCommand('feature', { base: 'ga', dryRun: true });
+
+    expect(result).toMatchObject({
+      dryRun: true,
+      base: 'ga',
+      commits: ['feat: feature work'],
+      files: ['src/feature.txt'],
+    });
+  });
+
+  test('a branch with nothing beyond upstream/<base> is "Nothing to stage"', async () => {
+    await cutFromUpstreamGa();
+    await fx.git(fx.work, 'reset', '--quiet', '--hard', 'upstream/ga');
+
+    await expect(stageCommand('feature', { base: 'ga' })).rejects.toThrow(
+      new CommandExitError(1)
+    );
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining('beyond upstream/ga'),
+      ON_STDERR
+    );
+    expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(false);
+  });
+
+  test('a base upstream does not have is refused', async () => {
+    await cutFeatureBranch('upstream/main');
+
+    await expect(stageCommand('feature', { base: 'nope' })).rejects.toThrow(
+      new CommandExitError(1)
+    );
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining('upstream/nope not found after fetch'),
+      ON_STDERR
+    );
+    expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(false);
+  });
+
+  test('the --base branch itself is refused', async () => {
+    await cutFromUpstreamGa();
+    await fx.git(fx.work, 'branch', '--quiet', 'ga', 'feature');
+
+    await expect(stageCommand('ga', { base: 'ga' })).rejects.toThrow(
+      new CommandExitError(1)
+    );
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining('it is the --base branch'),
+      ON_STDERR
+    );
+    expect(await refExists(pushTarget(), 'refs/heads/ga')).toBe(false);
   });
 });
 

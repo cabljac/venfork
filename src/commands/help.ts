@@ -108,6 +108,8 @@ venfork stage approval [on|reviewed|two-person|off] [--yes] [--no-input] [--json
   • --no-pr                Push the branch only; --draft, --title, --internal-pr and
                            --no-update-existing need the PR and are refused with it
   • --draft                Open the upstream PR as a draft
+  • --base <branch>        Rebuild on upstream/<branch> and open the PR into it
+                           (default: upstream's default branch)
   • --dry-run              Show the commits, files, PR text and AI attribution lines
                            that would be published; push nothing. Needs no --yes; with
                            --no-pr it uses no GitHub API beyond the fetch
