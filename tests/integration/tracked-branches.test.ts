@@ -19,6 +19,7 @@ import {
   createMirrorFixture,
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
+import { seedPreserve } from '../harness/preserve.js';
 
 let fx: MirrorFixture;
 let active: MirrorFixture | undefined;
@@ -258,5 +259,72 @@ describe('sync with trackedBranches', () => {
     await track([{ name: 'ga', allowRewrite: 'always' }]);
 
     await expect(sync()).rejects.toMatchObject({ code: 'config' });
+  });
+});
+
+describe('doctor tracked-kept', () => {
+  const CALLER = '.github/workflows/caller.yml';
+
+  async function commitOnOriginGa(files: Record<string, string>) {
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+    await fx.git(fx.work, 'checkout', '--quiet', '-B', 'ga', 'origin/ga');
+    for (const [file, content] of Object.entries(files)) {
+      await Bun.write(`${fx.work}/${file}`, content);
+      await fx.git(fx.work, 'add', file);
+    }
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'chore: on mirror ga');
+    await fx.git(fx.work, 'push', '--quiet', 'origin', 'ga');
+    await fx.git(fx.work, 'checkout', '--quiet', 'main');
+  }
+
+  async function keptRow(): Promise<DoctorCheck | undefined> {
+    const checks = await runDoctorChecks({ cwd: fx.work });
+    return checks.find((check) => check.id === 'tracked-kept');
+  }
+
+  test('a tracked branch equal to upstream carries no mirror-only files', async () => {
+    await seedPreserve(fx, [CALLER]);
+    await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
+    await fx.commitOnUpstreamBranch('ga', { 'src/ga.txt': 'ga\n' });
+    await track(['ga']);
+    await sync();
+
+    expect(await keptRow()).toMatchObject({
+      ok: true,
+      detail: 'no kept or venfork files on tracked branches',
+    });
+  });
+
+  test('a kept file or venfork file on origin/<branch> fails, naming each', async () => {
+    await seedPreserve(fx, [CALLER]);
+    await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
+    await fx.commitOnUpstreamBranch('ga', { 'src/ga.txt': 'ga\n' });
+    await track(['ga']);
+    await sync();
+    await commitOnOriginGa({
+      [CALLER]: 'mirror only\n',
+      '.venfork/notes.json': '{}\n',
+      'src/other.txt': 'not kept\n',
+    });
+
+    const row = await keptRow();
+
+    expect(row).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining(
+        `origin/ga: .github/workflows/caller.yml, .venfork/notes.json`
+      ),
+    });
+    expect(String(row?.detail)).not.toContain('src/other.txt');
+  });
+
+  test('a kept path whose content upstream/<branch> also has is not mirror-only', async () => {
+    await seedPreserve(fx, [CALLER]);
+    await fx.commitOnOrigin({ [CALLER]: 'mirror only\n' });
+    await fx.commitOnUpstreamBranch('ga', { [CALLER]: 'upstream too\n' });
+    await track(['ga']);
+    await sync();
+
+    expect(await keptRow()).toMatchObject({ ok: true });
   });
 });

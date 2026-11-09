@@ -97,6 +97,49 @@ export async function readTrackedBranches(
   return plans;
 }
 
+/** `path` to `<mode> <oid>` at `ref`, for the paths `paths` select. */
+async function entriesAt(
+  ref: string,
+  paths: readonly string[],
+  cwd?: string
+): Promise<Map<string, string>> {
+  const result = await $({
+    ...(cwd ? { cwd } : {}),
+  })`git --literal-pathspecs ls-tree -r -z ${ref} -- ${paths}`;
+  const entries = new Map<string, string>();
+  for (const record of result.stdout.split('\0').filter(Boolean)) {
+    const [meta = '', file = ''] = record.split('\t');
+    const [mode = '', , oid = ''] = meta.split(' ');
+    entries.set(file, `${mode} ${oid}`);
+  }
+  return entries;
+}
+
+/**
+ * Mirror-only files on origin's copy of a tracked branch: kept files
+ * (`preserve`), the managed sync workflow and anything under `.venfork/`
+ * that `origin/<name>` holds with other content than `upstream/<name>`
+ * (or that upstream lacks, branch included). Kept files belong on the default branch only;
+ * a tracked branch is upstream's branch as it is.
+ */
+export async function mirrorOnlyFilesOn(
+  plan: TrackedBranchPlan,
+  preserve: readonly string[],
+  workflowPath: string,
+  cwd?: string
+): Promise<string[]> {
+  if (!plan.originTip) return [];
+  const paths = [...new Set([...preserve, workflowPath, '.venfork'])];
+  const onOrigin = await entriesAt(plan.originTip, paths, cwd);
+  const onUpstream = plan.upstreamTip
+    ? await entriesAt(plan.upstreamTip, paths, cwd)
+    : new Map<string, string>();
+  return [...onOrigin]
+    .filter(([file, entry]) => onUpstream.get(file) !== entry)
+    .map(([file]) => file)
+    .sort();
+}
+
 /** The `venfork sync --accept-rewrite` value that accepts `plan` as it is now. */
 export function acceptRewriteFlag(plan: TrackedBranchPlan): string {
   return `--accept-rewrite ${plan.branch.name}=${plan.originTip}..${plan.upstreamTip}`;
