@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import * as prompts from '@clack/prompts';
+import { chmod, mkdir } from 'node:fs/promises';
+import path from 'node:path';
+import { $ } from 'execa';
 import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
@@ -526,6 +529,157 @@ describe('the approval gate with stage --base', () => {
     );
     expect(await publicFeature()).toBeNull();
   });
+
+  async function crissCross() {
+    await fx.git(fx.work, 'checkout', '-qb', 'a', 'refs/remotes/upstream/main');
+    await Bun.write(`${fx.work}/src/a.txt`, 'side A\n');
+    await fx.git(fx.work, 'add', 'src/a.txt');
+    await fx.git(fx.work, 'commit', '-qm', 'feat: side A');
+    const a = await fx.sha(fx.work, 'HEAD');
+    await fx.git(fx.work, 'checkout', '-qb', 'b', 'refs/remotes/upstream/main');
+    await Bun.write(`${fx.work}/src/b.txt`, 'side B\n');
+    await fx.git(fx.work, 'add', 'src/b.txt');
+    await fx.git(fx.work, 'commit', '-qm', 'feat: side B');
+    const b = await fx.sha(fx.work, 'HEAD');
+    await fx.git(fx.work, 'checkout', '-q', 'a');
+    await fx.git(fx.work, 'merge', '--no-ff', '-qm', 'Merge B into A', b);
+    await fx.git(fx.work, 'checkout', '-q', 'b');
+    await fx.git(fx.work, 'merge', '--no-ff', '-qm', 'Merge A into B', a);
+    const mirrorBase = await fx.sha(fx.work, 'HEAD');
+    await fx.git(fx.work, 'checkout', '-qb', 'feature', 'a');
+    await Bun.write(`${fx.work}/src/feature.txt`, 'feature\n');
+    await fx.git(fx.work, 'add', 'src/feature.txt');
+    await fx.git(fx.work, 'commit', '-qm', 'feat: feature work');
+    const head = await fx.sha(fx.work, 'HEAD');
+    expect(
+      (await fx.git(fx.work, 'merge-base', '--all', mirrorBase, head)).split(
+        '\n'
+      )
+    ).toHaveLength(2);
+    await fx.git(
+      fx.work,
+      'push',
+      'origin',
+      `${mirrorBase}:refs/heads/ga`,
+      'feature'
+    );
+    await setApproval('reviewed');
+    await scenario({
+      headSha: head,
+      baseRef: 'ga',
+      reviews: [{ login: 'alice', state: 'APPROVED' }],
+    });
+    return { mirrorBase, head };
+  }
+
+  test('criss-cross approval covers every common ancestor', async () => {
+    const { mirrorBase, head } = await crissCross();
+    const selected = await fx.git(fx.work, 'merge-base', mirrorBase, head);
+    await fx.git(fx.work, 'push', fx.upstream, `${selected}:refs/heads/ga`);
+
+    await expect(
+      stageCommand('feature', {
+        base: 'ga',
+        prompt: { yes: true, noInput: true },
+      })
+    ).rejects.toThrow(new CommandExitError(1));
+    expect(errorLines().join('\n')).toContain('origin/ga has 1 commit(s)');
+    expect(await publicFeature()).toBeNull();
+    const dry = await stageCommand('feature', { base: 'ga', dryRun: true });
+    expect(dry).toMatchObject({
+      approval: { ok: false, reason: 'wrong-base' },
+    });
+  });
+
+  test('criss-cross approval allows covered ancestors and ignores mirror-only descendants', async () => {
+    const { mirrorBase } = await crissCross();
+    await fx.git(fx.work, 'push', fx.upstream, `${mirrorBase}:refs/heads/ga`);
+    await fx.git(fx.work, 'checkout', '-q', 'b');
+    await Bun.write(`${fx.work}/src/only-on-base.txt`, 'not on feature\n');
+    await fx.git(fx.work, 'add', 'src/only-on-base.txt');
+    await fx.git(fx.work, 'commit', '-qm', 'feat: unrelated mirror work');
+    await fx.git(fx.work, 'push', 'origin', 'HEAD:refs/heads/ga');
+
+    const result = await stageCommand('feature', {
+      base: 'ga',
+      prompt: { yes: true, noInput: true },
+    });
+    expect(result).toMatchObject({ approval: { ok: true } });
+    expect(
+      await fx.subjects(
+        fx.publicFork ?? '',
+        'feature',
+        `${mirrorBase}..feature`
+      )
+    ).toEqual(['feat: feature work']);
+    expect(
+      await fx.fileAt(fx.publicFork ?? '', 'feature', 'src/only-on-base.txt')
+    ).toBeNull();
+  });
+
+  test('approval fails closed when the mirror base has unrelated history', async () => {
+    const head = await pushGaFeature();
+    const tree = await fx.git(fx.work, 'rev-parse', `${head}^{tree}`);
+    const orphan = await fx.git(
+      fx.work,
+      'commit-tree',
+      tree,
+      '-m',
+      'feat: unrelated root'
+    );
+    await fx.git(fx.work, 'push', 'origin', `+${orphan}:refs/heads/ga`);
+    await setApproval('reviewed');
+    await scenario({
+      headSha: head,
+      baseRef: 'ga',
+      reviews: [{ login: 'alice', state: 'APPROVED' }],
+    });
+
+    await expect(
+      stageCommand('feature', {
+        base: 'ga',
+        prompt: { yes: true, noInput: true },
+      })
+    ).rejects.toThrow(new CommandExitError(1));
+    expect(errorLines().join('\n')).toContain('no common history');
+    expect(await publicFeature()).toBeNull();
+  });
+
+  test.each(['merge-base', 'rev-list'])(
+    'approval fails closed on a coverage %s error',
+    async (command) => {
+      const head = await pushGaFeature();
+      await setApproval('reviewed');
+      await scenario({
+        headSha: head,
+        baseRef: 'ga',
+        reviews: [{ login: 'alice', state: 'APPROVED' }],
+      });
+      const realGit = (await $`which git`).stdout.trim();
+      const bin = path.join(fx.root, 'failing-coverage-git');
+      await mkdir(bin);
+      const flag = command === 'merge-base' ? '--all' : '--count';
+      await Bun.write(
+        path.join(bin, 'git'),
+        `#!/bin/sh\nif [ "$1" = "${command}" ] && [ "$2" = "${flag}" ]; then echo 'coverage read failed' >&2; exit 128; fi\nexec '${realGit}' "$@"\n`
+      );
+      await chmod(path.join(bin, 'git'), 0o755);
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${path.delimiter}${previousPath}`;
+      try {
+        await expect(
+          stageCommand('feature', {
+            base: 'ga',
+            prompt: { yes: true, noInput: true },
+          })
+        ).rejects.toThrow(new CommandExitError(1));
+        expect(errorLines().join('\n')).toContain('coverage read failed');
+      } finally {
+        process.env.PATH = previousPath;
+      }
+      expect(await publicFeature()).toBeNull();
+    }
+  );
 
   test('--internal-pr naming an approved PR into the --base branch counts', async () => {
     const head = await pushGaFeature();

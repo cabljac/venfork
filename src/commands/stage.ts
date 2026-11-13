@@ -577,8 +577,9 @@ async function planStaging(
  * The number of non-merge commits that `sourceRef` shares with the mirror's
  * `origin/<base>` but that `upstream/<base>` (`upstreamTip`) lacks. A
  * mirror PR into `<base>` is reviewed against `origin/<base>`, so stage
- * would publish those commits without the review covering them. Zero when
- * the mirror has no `<base>`.
+ * would publish those commits without the review covering them. Every best
+ * common ancestor contributes: criss-cross merges can have more than one.
+ * Missing refs and failed Git reads refuse instead of implying coverage.
  */
 async function unreviewedBaseCommits(
   base: string,
@@ -595,16 +596,33 @@ async function unreviewedBaseCommits(
   const shared = await $({
     cwd,
     reject: false,
-  })`git merge-base ${mirrorBase} ${sourceRef}`;
-  if (shared.exitCode !== 0) {
+  })`git merge-base --all ${mirrorBase} ${sourceRef}`;
+  if (shared.exitCode === 1) {
     throw new PreconditionError(
       `Cannot establish approval coverage: origin/${base} and the approved branch have no common history.`
     );
   }
+  if (shared.exitCode !== 0 || !shared.stdout.trim()) {
+    throw new GitError(
+      `Cannot establish approval coverage: ${shared.stderr.trim() || 'git merge-base returned no commits'}`,
+      'git merge-base --all'
+    );
+  }
+  const ancestors = shared.stdout.trim().split('\n');
+  // Git counts the union once, excluding everything already on upstream.
+  // Descendants unique to the mirror base are not part of the review gap.
   const count = await $({
     cwd,
-  })`git rev-list --count --no-merges ${`${upstreamTip}..${shared.stdout.trim()}`}`;
-  return Number(count.stdout.trim());
+  })`git rev-list --count --no-merges ${ancestors} --not ${upstreamTip}`;
+  const raw = count.stdout.trim();
+  const uncovered = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(uncovered)) {
+    throw new GitError(
+      'Cannot establish approval coverage: invalid commit count',
+      'git rev-list'
+    );
+  }
+  return uncovered;
 }
 
 function weakenedError(

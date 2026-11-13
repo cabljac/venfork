@@ -81,3 +81,7 @@ venfork stage feat --no-pr --force --yes </dev/null 2>&1 | grep -o "nothing to b
 - A TTY on stdin is not enough. At a terminal, `venfork stage feat --no-pr 2>/dev/null` (or `2>log`) exits 2 naming `--yes` and pushes nothing: stderr is not a TTY, so the prompt would be hidden. `tests/integration/cli.test.ts` ("stage with stderr redirected at a TTY") pins it.
 - The fixture deny-list has the origin path and `venfork` only. `owner/name` and repo-name terms need a GitHub URL: see `tests/integration/stage-gate-content.test.ts`.
 - The PR step cannot succeed on the fixture, so every fixture drive passes `--no-pr` (`tests/unit/docs-drift.test.ts` refuses a verify-venfork stage drive without it); without it stage stops at "Cannot open an upstream PR" before the leak gate runs. The redaction and PR payload are proven by `tests/unit/redaction.test.ts` and e2e tier 3 only.
+
+## Approval ancestry regression
+
+Build clean criss-cross merges with two best common ancestors, set upstream/ga to just one and origin/ga to the other merge, and approve a feature on the first merge. `stage --base ga` must refuse with `wrong-base`, report it in a dry run and leave the public feature absent. When upstream contains both common ancestors, unrelated commits present only on origin/ga must not block publication. The `criss-cross` tests in `tests/integration/approval-gate.test.ts` drive both cases; failed merge-base and rev-list reads also refuse before a push.
