@@ -14,7 +14,7 @@ tests:
 ## What exists
 
 - Refuses before any fetch: `venfork-config`, a branch name that hits the deny-list (`MirrorReferenceError`), a ref that is not a local branch (tag, remote ref), a missing branch (`BranchNotFoundError`), a missing `upstream` or `public` remote (`RemoteNotFoundError`), invalid preserve entries (`ConfigError`).
-- After fetch: refuses upstream's default branch, the `--base` branch, a `--base` that is not on upstream, and a branch with no history in common with `upstream/<base>`.
+- `--base` is validated as a literal Git branch name (slash-separated names are allowed; revision expressions are usage errors before I/O). After fetch: refuses upstream's default branch, the `--base` branch, a `--base` that is not on upstream, and a branch with no history in common with `upstream/<base>`.
 - Reads the branch tip once, before the fetches; the merge-base check, the merge scan and the rebuild all use that commit, so a branch moved during the fetch does not change what ships (`tests/integration/stage.test.ts`, "stage reads the local branch once").
 - Rebuilds the branch linearly on `upstream/<default>` (or `upstream/<base>` with `--base`; "Nothing to stage" and the merge-base check use the same base, `tests/integration/stage.test.ts`, "stage --base") by cherry-pick with hooks off. Managed commits are dropped. Merge commits are dropped; a merge with a manual conflict resolution is refused.
 - `denyTerms` from venfork-config (see `leak-invariants.md`) refuse the branch name, file names, added lines, commit identities and messages and the PR title and body (`tests/integration/stage.test.ts`, "stage refuses the mirror deny list").

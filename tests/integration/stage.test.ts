@@ -328,6 +328,30 @@ describe('stage --base', () => {
     );
     expect(await refExists(pushTarget(), 'refs/heads/ga')).toBe(false);
   });
+
+  test('a revision expression as --base is rejected before upstream can move', async () => {
+    const original = await fx.commitOnUpstreamBranch(
+      'ga',
+      { 'release.txt': 'release\n' },
+      'release'
+    );
+    await fx.git(fx.work, 'fetch', '--quiet', 'upstream');
+    await fx.git(fx.work, 'checkout', '--quiet', '-b', 'ga', 'upstream/ga');
+    await Bun.write(`${fx.work}/feature.txt`, 'unreviewed feature\n');
+    await fx.git(fx.work, 'add', 'feature.txt');
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'feature');
+
+    await expect(
+      stageCommand('ga', {
+        base: 'ga~1',
+        createPr: false,
+        prompt: { yes: true, noInput: true },
+      })
+    ).rejects.toThrow('--base requires a literal branch name');
+
+    expect(await fx.sha(fx.upstream, 'refs/heads/ga')).toBe(original);
+    expect(await fx.fileAt(fx.upstream, 'ga', 'feature.txt')).toBeNull();
+  });
 });
 
 describe('stage in no-public mode', () => {
@@ -845,5 +869,23 @@ describe('stage refuses the mirror deny list (denyTerms)', () => {
       ok: false,
       detail: expect.stringContaining('denyTerms must be a list'),
     });
+  });
+
+  test('a multiline deny term is rejected as invalid config before publication', async () => {
+    const secret = 'Globex\nConfidential';
+    await denyList([secret]);
+    await commitFeature({ 'src/feature.txt': `${secret}\n` });
+
+    await expect(stageCommand('feature')).rejects.toThrow(
+      new CommandExitError(1)
+    );
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'denyTerms must be a list of non-empty single-line strings'
+      ),
+      ON_STDERR
+    );
+    expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(false);
   });
 });

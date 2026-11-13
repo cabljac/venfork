@@ -238,10 +238,15 @@ export function customDenyRules(
   if (raw === undefined) return NO_CUSTOM_DENY;
   if (
     !Array.isArray(raw) ||
-    raw.some((entry) => typeof entry !== 'string' || entry.trim() === '')
+    raw.some(
+      (entry) =>
+        typeof entry !== 'string' ||
+        entry.trim() === '' ||
+        /[\r\n]/u.test(entry)
+    )
   ) {
     throw new ConfigError(
-      'Invalid venfork-config config: denyTerms must be a list of non-empty strings.'
+      'Invalid venfork-config config: denyTerms must be a list of non-empty single-line strings.'
     );
   }
   return { terms: raw.map((entry: string) => entry.trim()) };

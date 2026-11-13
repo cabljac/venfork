@@ -76,6 +76,17 @@ describe('parseStageCliArgs', () => {
     );
   });
 
+  test('--base accepts literal slash branches and rejects revision syntax', () => {
+    expect(parseStageCliArgs(['feat', '--base', 'release/1.x']).base).toBe(
+      'release/1.x'
+    );
+    for (const base of ['ga~1', 'main^', 'a..b']) {
+      expect(() => parseStageCliArgs(['feat', '--base', base])).toThrow(
+        '--base requires a literal branch name'
+      );
+    }
+  });
+
   test('flag order does not matter; positional can come last', () => {
     const parsed = parseStageCliArgs(['--pr', '--draft', 'feat/auth']);
     expect(parsed.branch).toBe('feat/auth');

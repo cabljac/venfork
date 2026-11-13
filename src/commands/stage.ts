@@ -49,7 +49,13 @@ import {
   type ManagedCommitKind,
 } from '../shared/managed-commit.js';
 import { resolveCommit } from '../shared/mirror-commit.js';
-import { netExec, netFailureReason, netFetch } from '../shared/net.js';
+import { isLiteralBranchName } from '../shared/branch-name.js';
+import {
+  netExec,
+  netFailureReason,
+  netFetch,
+  netFetchBranch,
+} from '../shared/net.js';
 import {
   assertCanConfirm,
   canPrompt,
@@ -508,6 +514,7 @@ async function planStaging(
     );
   }
   if (approval?.ok && upstreamBase !== upstreamDefaultBranch) {
+    await netFetchBranch('origin', upstreamBase, cwd);
     const uncovered = await unreviewedBaseCommits(
       upstreamBase,
       upstreamTip,
@@ -580,12 +587,20 @@ async function unreviewedBaseCommits(
   cwd: string
 ): Promise<number> {
   const mirrorBase = await resolveCommit(`refs/remotes/origin/${base}`, cwd);
-  if (!mirrorBase) return 0;
+  if (!mirrorBase) {
+    throw new PreconditionError(
+      `Cannot establish approval coverage: origin/${base} was not found after fetch.`
+    );
+  }
   const shared = await $({
     cwd,
     reject: false,
   })`git merge-base ${mirrorBase} ${sourceRef}`;
-  if (shared.exitCode !== 0) return 0;
+  if (shared.exitCode !== 0) {
+    throw new PreconditionError(
+      `Cannot establish approval coverage: origin/${base} and the approved branch have no common history.`
+    );
+  }
   const count = await $({
     cwd,
   })`git rev-list --count --no-merges ${`${upstreamTip}..${shared.stdout.trim()}`}`;
@@ -1258,6 +1273,9 @@ export async function stageCommand(
 ): Promise<StageResult> {
   if (!branch) {
     throw new UsageError(`Missing branch name. Usage: ${STAGE_USAGE}`);
+  }
+  if (options.base !== undefined && !isLiteralBranchName(options.base)) {
+    throw new UsageError('--base requires a literal branch name');
   }
 
   p.intro('📤 Venfork Stage');

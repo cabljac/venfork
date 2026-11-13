@@ -497,6 +497,36 @@ describe('the approval gate with stage --base', () => {
     );
   });
 
+  test('an absent local mirror base is fetched before checking review coverage', async () => {
+    const head = await pushGaFeature(true);
+    await setApproval('reviewed');
+    await scenario({
+      headSha: head,
+      baseRef: 'ga',
+      reviews: [{ login: 'alice', state: 'APPROVED' }],
+    });
+    await fx.git(
+      fx.work,
+      'config',
+      '--replace-all',
+      'remote.origin.fetch',
+      '+refs/heads/feature:refs/remotes/origin/feature'
+    );
+    await fx.git(fx.work, 'update-ref', '-d', 'refs/remotes/origin/ga');
+
+    await expect(
+      stageCommand('feature', {
+        base: 'ga',
+        prompt: { yes: true, noInput: true },
+      })
+    ).rejects.toThrow(new CommandExitError(1));
+
+    expect(errorLines().join('\n')).toContain(
+      "origin/ga has 1 commit(s) in 'feature' that upstream/ga does not"
+    );
+    expect(await publicFeature()).toBeNull();
+  });
+
   test('--internal-pr naming an approved PR into the --base branch counts', async () => {
     const head = await pushGaFeature();
     await setApproval('reviewed');

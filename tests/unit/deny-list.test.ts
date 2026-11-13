@@ -290,6 +290,8 @@ describe('customDenyRules and findCustomDenied', () => {
       { denyTerms: [''] },
       { denyTerms: [42] },
       { denyTerms: ['ok', '  '] },
+      { denyTerms: ['Globex\nConfidential'] },
+      { denyTerms: ['Globex\rConfidential'] },
     ]) {
       expect(() => customDenyRules(config)).toThrow(ConfigError);
     }

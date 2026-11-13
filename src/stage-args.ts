@@ -1,5 +1,6 @@
 import { type ApprovalLevel, approvalWord } from './config.js';
 import { UsageError } from './errors.js';
+import { isLiteralBranchName } from './shared/branch-name.js';
 import {
   consumeValue,
   parseGitHubRef,
@@ -220,6 +221,9 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
 
   if (branch === undefined) {
     throw new UsageError(`Missing branch name. Usage: ${STAGE_USAGE}`);
+  }
+  if (base !== undefined && !isLiteralBranchName(base)) {
+    throw new UsageError('--base requires a literal branch name');
   }
   if (noPr) {
     const prOnly = [
