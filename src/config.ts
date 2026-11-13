@@ -6,6 +6,7 @@ import { $ } from 'execa';
 import { ConfigError, GitError } from './errors.js';
 import { SYNC_WORKFLOW_PATH } from './shared/constants.js';
 import { isValidCronExpression } from './shared/cron.js';
+import { customDenyRules } from './shared/deny-list.js';
 import { netExec, netFailureReason } from './shared/net.js';
 import { parseRepoPath, shellQuote } from './utils.js';
 
@@ -123,6 +124,19 @@ export interface VenforkConfig {
    * - unless upstream now contains the same path, in which case upstream wins.
    */
   preserve?: string[];
+  /**
+   * Upstream branches other than the default that `venfork sync` mirrors
+   * to origin as they are (no managed commit), for example a long-lived
+   * release branch that `stage --base` targets. Read through
+   * {@link trackedBranchesOf}; set by editing the config.
+   */
+  trackedBranches?: unknown;
+  /**
+   * Extra literal terms `venfork stage` refuses to publish, matched
+   * case-insensitively. Read through `customDenyRules`; set by editing the
+   * config.
+   */
+  denyTerms?: unknown;
   /** Branch -> upstream PR linkage recorded by `venfork stage`. */
   shippedBranches?: Record<string, ShippedBranch>;
   /** Branch -> upstream PR tracking recorded by `venfork pull pr`. */
@@ -204,6 +218,71 @@ export function approvalOf(
   throw new ConfigError(
     `approval ${JSON.stringify(level)} is not supported by this venfork version. Upgrade venfork, or run: venfork stage approval two-person`
   );
+}
+
+/** One entry of `trackedBranches`, after {@link trackedBranchesOf}. */
+export interface TrackedBranch {
+  /** The branch name, the same on upstream and origin. */
+  name: string;
+  /**
+   * `'explicit'`: when upstream rewrote the branch, sync replaces origin's
+   * copy only with `--accept-rewrite <name>=<old>..<new>`. Absent: sync
+   * only fast-forwards, and leaves a diverged copy as it is and warns.
+   */
+  allowRewrite?: 'explicit';
+}
+
+/** A branch name git accepts that cannot be read as an option or a range. */
+const TRACKED_BRANCH_NAME =
+  /^(?![-./])(?!.*(?:\.\.|\/\/|@\{|\/\.|\.lock(?:\/|$)))[A-Za-z0-9._/-]+(?<![./])$/;
+
+/**
+ * The tracked branches of `config`: `trackedBranches` entries are a branch
+ * name or `{ "name": "<branch>", "allowRewrite": "explicit" }`.
+ *
+ * @param config Venfork config, or `null` when the mirror has none.
+ * @throws ConfigError for an entry this version does not accept (a bad
+ * name, `venfork-config`, a duplicate, or an `allowRewrite` it does not
+ * know), so sync never guesses what a newer venfork meant.
+ */
+export function trackedBranchesOf(
+  config: Pick<VenforkConfig, 'trackedBranches'> | null | undefined
+): TrackedBranch[] {
+  const raw = config?.trackedBranches;
+  if (raw === undefined) return [];
+  const invalid = (what: string): ConfigError =>
+    new ConfigError(
+      `Invalid ${CONFIG_BRANCH} config: trackedBranches ${what}. Each entry is a branch name or { "name": "<branch>", "allowRewrite": "explicit" }.`
+    );
+  if (!Array.isArray(raw)) throw invalid('is not a list');
+  const seen = new Set<string>();
+  return raw.map((entry: unknown) => {
+    const name =
+      typeof entry === 'string'
+        ? entry
+        : entry && typeof entry === 'object' && !Array.isArray(entry)
+          ? (entry as { name?: unknown }).name
+          : undefined;
+    if (typeof name !== 'string' || !TRACKED_BRANCH_NAME.test(name)) {
+      throw invalid(
+        `entry ${JSON.stringify(entry)} has no valid branch name (ASCII letters, digits, ".", "_", "-" and "/"; no "..", no leading "-", "." or "/", no trailing "." or "/", no ".lock" component)`
+      );
+    }
+    if (name === CONFIG_BRANCH || name === 'HEAD') {
+      throw invalid(`cannot name ${name}`);
+    }
+    if (seen.has(name)) throw invalid(`names '${name}' twice`);
+    seen.add(name);
+    if (typeof entry === 'string') return { name };
+    const allowRewrite = (entry as { allowRewrite?: unknown }).allowRewrite;
+    if (allowRewrite === undefined) return { name };
+    if (allowRewrite !== 'explicit') {
+      throw invalid(
+        `entry '${name}' has allowRewrite ${JSON.stringify(allowRewrite)}; this venfork version knows only "explicit"`
+      );
+    }
+    return { name, allowRewrite };
+  });
 }
 
 const CONFIG_BRANCH = 'venfork-config';
@@ -635,6 +714,9 @@ function normalizeConfig(
   if (normalized.approval === '' || normalized.approval === 'off') {
     delete normalized.approval;
   }
+
+  // Refused on every read, so a deny list stage cannot apply never reaches it.
+  customDenyRules(normalized);
 
   if (normalized.schedule) {
     const cron =

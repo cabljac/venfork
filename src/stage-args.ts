@@ -1,5 +1,6 @@
 import { type ApprovalLevel, approvalWord } from './config.js';
 import { UsageError } from './errors.js';
+import { isLiteralBranchName } from './shared/branch-name.js';
 import {
   consumeValue,
   parseGitHubRef,
@@ -20,7 +21,7 @@ export type ParsedStageBranchArgs = {
   draft: boolean;
   /** Override the upstream PR title; default is the internal PR title. */
   title?: string;
-  /** Override the upstream base branch; default is upstream's default branch. */
+  /** Upstream branch to rebuild on and open the PR into; default is upstream's default branch. */
   base?: string;
   /**
    * Pin the internal review PR by number, instead of letting venfork pick
@@ -220,6 +221,9 @@ export function parseStageCliArgs(stageArgs: string[]): ParsedStageArgs {
 
   if (branch === undefined) {
     throw new UsageError(`Missing branch name. Usage: ${STAGE_USAGE}`);
+  }
+  if (base !== undefined && !isLiteralBranchName(base)) {
+    throw new UsageError('--base requires a literal branch name');
   }
   if (noPr) {
     const prOnly = [

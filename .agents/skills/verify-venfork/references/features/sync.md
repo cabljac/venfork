@@ -1,13 +1,13 @@
 ---
 command: sync
 entry: src/commands/sync.ts
-shared: [net, divergence, json-output, managed-commit, mirror-commit, stage-gate, sync-report]
+shared: [net, divergence, json-output, managed-commit, mirror-commit, stage-gate, sync-report, tracked-branches]
 config:
-  read: [mode, preserve, invalidPreserve, schedule, enabledWorkflows, disabledWorkflows, pulledPrs]
+  read: [mode, preserve, invalidPreserve, schedule, enabledWorkflows, disabledWorkflows, pulledPrs, trackedBranches]
   written: [pulledPrs]
 tests:
   unit: [tests/unit/commands.test.ts, tests/unit/sync-args.test.ts, tests/unit/sync-report.test.ts, tests/unit/json-output.test.ts]
-  integration: [tests/integration/cli.test.ts, tests/integration/sync.test.ts, tests/integration/sync-snapshot.test.ts, tests/integration/sync-preserve-guard.test.ts, tests/integration/tip-builder.test.ts, tests/integration/integrity.test.ts, tests/integration/config.test.ts, tests/integration/net-credential.test.ts]
+  integration: [tests/integration/cli.test.ts, tests/integration/sync.test.ts, tests/integration/sync-snapshot.test.ts, tests/integration/sync-preserve-guard.test.ts, tests/integration/tip-builder.test.ts, tests/integration/integrity.test.ts, tests/integration/config.test.ts, tests/integration/net-credential.test.ts, tests/integration/tracked-branches.test.ts]
   e2e: [tests/e2e/sync-flow.test.ts]
 ---
 
@@ -18,6 +18,7 @@ tests:
 - The managed commit is deterministic (bot identity, upstream committer date, `Venfork-Managed: 1`). No upstream or config change means the same SHA and no push.
 - One `--force-with-lease` push per remote, skipped when the remote already has the target. Public is set to the upstream tip.
 - Commits that touch only preserved paths on origin are folded into the managed commit, not divergence.
+- `trackedBranches` (config only, `trackedBranchesOf` validates it): sync explicitly refreshes each tracked `upstream/<b>` and `origin/<b>` ref before planning, including removing refs for remotely deleted branches. A missing `origin/<b>` is created and one behind is fast-forwarded, each with a lease, and public is not touched. A diverged `origin/<b>`, or one upstream lacks, is left as it is with a warning while the default branch still syncs (exit 0; `status: 'diverged' | 'no-upstream'` with `upstreamTip`, `hint`, `command?`), unless the entry has `allowRewrite: 'explicit'` and `--accept-rewrite <b>=<origin tip>..<upstream tip>` matches. An `--accept-rewrite` for an untracked branch, one without `allowRewrite`, one that has not diverged, or with stale tips is `precondition` before any push. A tracked lease failure exits 1 after the default branch was pushed. `--report-issues` does not report it. `result.trackedBranches` lists each branch's `status` (`tests/integration/tracked-branches.test.ts`).
 - Divergence (`SyncDivergenceError`) prints one `error:` line: the counts, up to three files, then the hint (`venfork keep add '<file>' ...` for origin's files, each single-quoted, when 1 to 10 of them can be preserved, and "move the commits to a branch and retry"). No warning note, no force-push advice. `--json` carries `hint` and `details: { branch, origin, public, command? }`. The `--report-issues` issue body keeps the full report.
 - Sync takes no branch. `sync <anything>` is a usage error (exit 2) that names `venfork pull pr <n>` (with the number for `upstream-pr/<n>`); refreshing a pulled PR is a `pull pr` re-run (see `pull-request.md`).
 - `--json` prints one envelope line on stdout. Default branch: `result` is `{ kind: 'default-branch', status: 'pushed' | 'up-to-date', branch, upstreamTip, origin: { tip, pushed }, public?: { tip, pushed } }` (`public` absent in no-public mode). A failure is `ok: false` with `error.code`, for example `sync-divergence`.
@@ -27,7 +28,7 @@ tests:
 
 ## How a user reaches it
 
-`venfork sync`, `venfork sync --report-issues` (the generated workflow), `venfork sync --json`. No prompt; `--no-input` is accepted and changes nothing.
+`venfork sync`, `venfork sync --report-issues` (the generated workflow), `venfork sync --accept-rewrite <b>=<old>..<new>`, `venfork sync --json`. No prompt; `--no-input` is accepted and changes nothing.
 
 ## How to drive it
 
@@ -53,6 +54,7 @@ venfork sync --json </dev/null 2>/dev/null | jq -r .error.code; echo "${PIPESTAT
 - `git -C "$VF_ORIGIN" log -1 --format='%an %cd%n%B' --date=raw main`: `venfork-bot`, the upstream tip's committer date, `Venfork-Managed: 1`.
 - `vf_pushes` unchanged after a no-op sync. `vf_tip "$VF_PUBLIC"` equals `vf_tip "$VF_UPSTREAM"`.
 - After an error, `vf_tip "$VF_ORIGIN"` is unchanged. The failing `doctor --json` check depends on the error: a divergence error gives `divergence` and `invariant` false; the pin guard gives `workflow` and `invariant` false with `divergence` ok; a stale lease leaves `divergence` ok.
+- `trackedBranches: ["HEAD"]` is a config error before the targeted refresh, and origin/main, upstream/main and their symbolic HEAD aliases stay intact. `--accept-rewrite HEAD=<old>..<new>` is a usage error before I/O. Pruning a deleted remote branch removes only its named tracking ref, never a symbolic ref's target (the `tracking refs and symbolic HEAD` tests in `tests/integration/tracked-branches.test.ts`).
 
 ## What usually lies
 

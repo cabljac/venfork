@@ -37,7 +37,10 @@ import {
 } from '../shared/approval-guard.js';
 import { WORKFLOWS_DIR } from '../shared/constants.js';
 import {
+  assertNoDeniedTerm,
   assertNoMirrorReference,
+  type CustomDenyRules,
+  customDenyRules,
   mirrorDenyList,
 } from '../shared/deny-list.js';
 import { changedFilesInCommit } from '../shared/divergence.js';
@@ -46,7 +49,13 @@ import {
   type ManagedCommitKind,
 } from '../shared/managed-commit.js';
 import { resolveCommit } from '../shared/mirror-commit.js';
-import { netExec, netFailureReason, netFetch } from '../shared/net.js';
+import { isLiteralBranchName } from '../shared/branch-name.js';
+import {
+  netExec,
+  netFailureReason,
+  netFetch,
+  netFetchBranch,
+} from '../shared/net.js';
 import {
   assertCanConfirm,
   canPrompt,
@@ -118,7 +127,7 @@ async function assertNoEvilMerges(
   ref: string,
   branch: string,
   base: string,
-  defaultBranch: string,
+  baseBranch: string,
   cwd: string
 ): Promise<void> {
   const mergeListResult = await $({
@@ -137,13 +146,13 @@ async function assertNoEvilMerges(
     if (hasNonWorkflowEvil) {
       const shortRef = mergeRef.slice(0, 9);
       throw new PreconditionError(
-        `Failed to stage '${branch}': merge commit ${shortRef} contains manual conflict resolutions (${evilFiles.join(', ')}) that would be lost when linearizing history for the public fork. Rebase '${branch}' onto upstream/${defaultBranch} (dropping merges) and retry.`
+        `Failed to stage '${branch}': merge commit ${shortRef} contains manual conflict resolutions (${evilFiles.join(', ')}) that would be lost when linearizing history for the public fork. Rebase '${branch}' onto upstream/${baseBranch} (dropping merges) and retry.`
       );
     }
   }
 }
 
-/** Result of rebuilding a branch as a linear head on `upstream/<default>`. */
+/** Result of rebuilding a branch as a linear head on `upstream/<base>`. */
 interface RebuiltHead {
   head: string;
   /** Rebuilt commit id to the branch commit it was cherry-picked from. */
@@ -154,7 +163,7 @@ interface RebuiltHead {
 
 /**
  * Rebuilds `branch` as a linear head on `base` (the commit id of
- * `refs/remotes/upstream/<defaultBranch>`) in a hooks-disabled worktree:
+ * `refs/remotes/upstream/<baseBranch>`) in a hooks-disabled worktree:
  * every non-merge, non-managed commit in `base..<sourceRef>` is
  * cherry-picked in topological order. Merge commits never ship; one with a manual conflict
  * resolution outside `.github/workflows/` is refused, since dropping it
@@ -164,12 +173,12 @@ async function rebuildLinearHead(
   branch: string,
   sourceRef: string,
   base: string,
-  defaultBranch: string,
+  baseBranch: string,
   preserve: string[],
   repoDir: string
 ): Promise<RebuiltHead> {
   const ref = sourceRef;
-  await assertNoEvilMerges(ref, branch, base, defaultBranch, repoDir);
+  await assertNoEvilMerges(ref, branch, base, baseBranch, repoDir);
 
   return withDetachedWorktree(
     repoDir,
@@ -217,7 +226,7 @@ async function rebuildLinearHead(
           );
           if (touched.length > 0) {
             throw new VenforkError(
-              `Failed to stage '${branch}': commit ${commit.slice(0, 9)} changes preserved mirror-only path(s) ${touched.join(', ')}, which do not exist on upstream/${defaultBranch}. Move those changes to the mirror default branch (they cannot go upstream), drop them from '${branch}', and retry.`,
+              `Failed to stage '${branch}': commit ${commit.slice(0, 9)} changes preserved mirror-only path(s) ${touched.join(', ')}, which do not exist on upstream/${baseBranch}. Move those changes to the mirror default branch (they cannot go upstream), drop them from '${branch}', and retry.`,
               'stage-leak'
             );
           }
@@ -226,7 +235,7 @@ async function rebuildLinearHead(
             pickResult.stdout.trim() ||
             `exit ${pickResult.exitCode}`;
           throw new GitError(
-            `Failed to stage '${branch}': cherry-picking ${commit} onto upstream/${defaultBranch} failed:\n${reason}\nRebase '${branch}' on upstream/${defaultBranch} and retry.`,
+            `Failed to stage '${branch}': cherry-picking ${commit} onto upstream/${baseBranch} failed:\n${reason}\nRebase '${branch}' on upstream/${baseBranch} and retry.`,
             'git cherry-pick'
           );
         }
@@ -269,13 +278,20 @@ export interface StagingPlan {
   upstreamRepoPath: string;
   upstreamDefaultBranch: string;
   /**
-   * Commit id of `refs/remotes/upstream/<upstreamDefaultBranch>`. The gate,
-   * the rebuild and the preview all use this id: a local branch or tag
-   * named `upstream/<default>` would shadow the short name.
+   * The upstream branch stage rebuilds on and the upstream PR targets:
+   * `--base`, or upstream's default branch.
+   */
+  upstreamBase: string;
+  /**
+   * Commit id of `refs/remotes/upstream/<upstreamBase>`. The gate, the
+   * rebuild and the preview all use this id: a local branch or tag named
+   * `upstream/<base>` would shadow the short name.
    */
   upstreamTip: string;
   /** Mirror-only paths from the preserve allowlist. */
   preserve: string[];
+  /** The mirror's `denyTerms`. */
+  customDeny: CustomDenyRules;
   /** True when the head and base of the upstream PR live in the same repo (no-public mode). */
   noPublic: boolean;
   /** Upstream and public fork URLs from the config and the remotes. */
@@ -352,6 +368,8 @@ async function planStaging(
     prompt?: PromptContext;
     internalPrNumber?: number;
     force?: boolean;
+    /** `--base`: the upstream branch to rebuild on and open the PR into. */
+    base?: string;
   },
   source?: { sha: string }
 ): Promise<StagingPlan> {
@@ -368,6 +386,8 @@ async function planStaging(
 
   const config = await readVenforkConfigFromRepo(cwd);
   assertNoInvalidPreserve(config);
+  const customDeny = customDenyRules(config);
+  assertNoDeniedTerm(branch, 'the branch name', customDeny);
   const level = approvalOf(config);
   const noPublic = config?.mode === 'no-public';
 
@@ -448,18 +468,27 @@ async function planStaging(
     }
   }
   const upstreamDefaultBranch = await getDefaultBranch('upstream', cwd);
+  const upstreamBase = consent.base ?? upstreamDefaultBranch;
+  await netFetchBranch('upstream', upstreamBase, cwd);
   const upstreamTip = await resolveCommit(
-    `refs/remotes/upstream/${upstreamDefaultBranch}`,
+    `refs/remotes/upstream/${upstreamBase}`,
     cwd
   );
   if (!upstreamTip) {
     throw new PreconditionError(
-      `upstream/${upstreamDefaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
+      consent.base === undefined
+        ? `upstream/${upstreamDefaultBranch} not found after fetch. Check the upstream remote and the default branch name.`
+        : `upstream/${upstreamBase} not found after fetch. Check that upstream has a branch named '${upstreamBase}' (--base).`
     );
   }
   if (branch === upstreamDefaultBranch) {
     throw new PreconditionError(
       `Refusing to stage '${branch}': it is upstream's default branch, and staging it would overwrite ${branch} on ${noPublic ? 'upstream' : 'the public fork'}. Stage a feature branch instead.`
+    );
+  }
+  if (branch === upstreamBase) {
+    throw new PreconditionError(
+      `Refusing to stage '${branch}': it is the --base branch, and staging it would overwrite ${branch} on ${noPublic ? 'upstream' : 'the public fork'}. Stage a feature branch instead.`
     );
   }
   await assertPreserveEntriesAreNotDirectories(
@@ -476,14 +505,40 @@ async function planStaging(
   })`git merge-base ${upstreamTip} ${sourceRef}`;
   if (mergeBase.exitCode === 1) {
     throw new PreconditionError(
-      `Refusing to stage '${branch}': it has no history in common with upstream/${upstreamDefaultBranch}.`
+      `Refusing to stage '${branch}': it has no history in common with upstream/${upstreamBase}.`
     );
   }
   if (mergeBase.exitCode !== 0) {
     throw new GitError(
-      `Cannot find where '${branch}' meets upstream/${upstreamDefaultBranch}: ${mergeBase.stderr.trim()}`,
+      `Cannot find where '${branch}' meets upstream/${upstreamBase}: ${mergeBase.stderr.trim()}`,
       'git merge-base'
     );
+  }
+  if (approval?.ok && upstreamBase !== upstreamDefaultBranch) {
+    await netFetchBranch('origin', upstreamBase, cwd);
+    const uncovered = await unreviewedBaseCommits(
+      upstreamBase,
+      upstreamTip,
+      sourceRef,
+      cwd
+    );
+    if (uncovered > 0) {
+      const error = new ApprovalError(
+        'wrong-base',
+        `Not staged: origin/${upstreamBase} has ${uncovered} commit(s) in '${branch}' that upstream/${upstreamBase} does not, so the approval on ${approval.prUrl} does not cover every commit stage would publish.`,
+        `Bring origin/${upstreamBase} back in line with upstream/${upstreamBase}, rebase '${branch}' and get it approved again.`,
+        { level, prUrl: approval.prUrl, base: upstreamBase }
+      );
+      if (!consent.dryRun) throw error;
+      approval = {
+        level: approval.level,
+        ok: false,
+        reason: 'wrong-base',
+        message: errorLine(error),
+        ...(approval.prUrl ? { prUrl: approval.prUrl } : {}),
+      };
+      approvedPrNumber = null;
+    }
   }
 
   return {
@@ -495,8 +550,10 @@ async function planStaging(
     upstreamUrl,
     upstreamRepoPath,
     upstreamDefaultBranch,
+    upstreamBase,
     upstreamTip,
     preserve: config?.preserve ?? [],
+    customDeny,
     noPublic,
     recordedUrls: [
       ...new Set(
@@ -515,6 +572,56 @@ async function planStaging(
     approvalLevel: level,
     weakening,
   };
+}
+
+/**
+ * The number of non-merge commits that `sourceRef` shares with the mirror's
+ * `origin/<base>` but that `upstream/<base>` (`upstreamTip`) lacks. A
+ * mirror PR into `<base>` is reviewed against `origin/<base>`, so stage
+ * would publish those commits without the review covering them. Every best
+ * common ancestor contributes: criss-cross merges can have more than one.
+ * Missing refs and failed Git reads refuse instead of implying coverage.
+ */
+async function unreviewedBaseCommits(
+  base: string,
+  upstreamTip: string,
+  sourceRef: string,
+  cwd: string
+): Promise<number> {
+  const mirrorBase = await resolveCommit(`refs/remotes/origin/${base}`, cwd);
+  if (!mirrorBase) {
+    throw new PreconditionError(
+      `Cannot establish approval coverage: origin/${base} was not found after fetch.`
+    );
+  }
+  const shared = await $({
+    cwd,
+    reject: false,
+  })`git merge-base --all ${mirrorBase} ${sourceRef}`;
+  if (shared.exitCode === 1) {
+    throw new PreconditionError(
+      `Cannot establish approval coverage: origin/${base} and the approved branch have no common history.`
+    );
+  }
+  if (shared.exitCode !== 0 || !shared.stdout.trim()) {
+    throw new GitError(
+      `Cannot establish approval coverage: ${shared.stderr.trim() || 'git merge-base returned no commits'}`,
+      'git merge-base --all'
+    );
+  }
+  const ancestors = shared.stdout.trim().split('\n');
+  const count = await $({
+    cwd,
+  })`git rev-list --count --no-merges ${ancestors} --not ${upstreamTip}`;
+  const raw = count.stdout.trim();
+  const uncovered = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(uncovered)) {
+    throw new GitError(
+      'Cannot establish approval coverage: invalid commit count',
+      'git rev-list'
+    );
+  }
+  return uncovered;
 }
 
 function weakenedError(
@@ -567,7 +674,12 @@ async function approvalGate(
   branch: string,
   sourceHead: string,
   cwd: string,
-  consent: { dryRun?: boolean; internalPrNumber?: number; force?: boolean }
+  consent: {
+    dryRun?: boolean;
+    internalPrNumber?: number;
+    force?: boolean;
+    base?: string;
+  }
 ): Promise<{ report: ApprovalReport; prNumber?: number }> {
   try {
     const pass = await checkApprovalGate({
@@ -576,6 +688,7 @@ async function approvalGate(
       branch,
       cwd,
       pinnedPr: consent.internalPrNumber,
+      ...(consent.base !== undefined ? { base: consent.base } : {}),
     });
     if (pass.headSha !== sourceHead) {
       throw branchMovedError(level, branch, sourceHead, pass);
@@ -822,11 +935,13 @@ async function pinnedSource(
 /** A gated linear head ready to push, with what it publishes. */
 interface PreparedStage {
   head: string;
-  /** Subjects of the commits in `upstream/<default>..head`, oldest first. */
+  /** Subjects of the commits in `upstream/<base>..head`, oldest first. */
   subjects: string[];
   /** Output of `mirrorDenyList`, reused for the PR title and body. */
   denyList: string[];
-  /** Paths some commit in `upstream/<default>..head` adds, modifies or retypes. */
+  /** The mirror's `denyTerms`, reused for the PR title and body. */
+  customDeny: CustomDenyRules;
+  /** Paths some commit in `upstream/<base>..head` adds, modifies or retypes. */
   files: string[];
   /** Paths in `files` that are absent at `head` but still in its history. */
   removedLater: string[];
@@ -837,7 +952,7 @@ interface PreparedStage {
 }
 
 /**
- * Rebuilds the branch as a linear head on `upstream/<default>` and runs
+ * Rebuilds the branch as a linear head on `upstream/<base>` and runs
  * the per-commit gate over it. Nothing is pushed.
  */
 async function prepareStage(
@@ -849,7 +964,7 @@ async function prepareStage(
     plan.branch,
     plan.sourceRef,
     base,
-    plan.upstreamDefaultBranch,
+    plan.upstreamBase,
     plan.preserve,
     cwd
   );
@@ -872,6 +987,7 @@ async function prepareStage(
     mirrorBlobs,
     mirrorTexts,
     denyList,
+    customDeny: plan.customDeny,
     recordedUrls: plan.recordedUrls,
     originalOf: rebuilt.originalOf,
     cwd,
@@ -904,6 +1020,7 @@ async function prepareStage(
     head: rebuilt.head,
     subjects: log.stdout.split('\n').filter(Boolean),
     denyList,
+    customDeny: plan.customDeny,
     files,
     removedLater: files.filter((file) => !present.has(file)),
     issueRefCommits: commits.filter((commit) =>
@@ -988,7 +1105,7 @@ export interface StageOptions {
   draft?: boolean;
   /** Override the upstream PR title; default is the internal PR title. */
   title?: string;
-  /** Override the upstream base branch; default is upstream's default branch. */
+  /** Upstream branch to rebuild on and open the PR into; default is upstream's default branch. */
   base?: string;
   /**
    * Pin the internal review PR by number instead of letting `findInternalPr`
@@ -1153,6 +1270,8 @@ function buildUpstreamPrPayload(
   );
   assertNoMirrorReference(title, 'the upstream PR title', prepared.denyList);
   assertNoMirrorReference(body, 'the upstream PR body', prepared.denyList);
+  assertNoDeniedTerm(title, 'the upstream PR title', prepared.customDeny);
+  assertNoDeniedTerm(body, 'the upstream PR body', prepared.customDeny);
   return { title, body };
 }
 
@@ -1172,6 +1291,9 @@ export async function stageCommand(
   if (!branch) {
     throw new UsageError(`Missing branch name. Usage: ${STAGE_USAGE}`);
   }
+  if (options.base !== undefined && !isLiteralBranchName(options.base)) {
+    throw new UsageError('--base requires a literal branch name');
+  }
 
   p.intro('📤 Venfork Stage');
 
@@ -1190,6 +1312,7 @@ export async function stageCommand(
         prompt: options.prompt,
         internalPrNumber: options.internalPrNumber,
         force: options.force,
+        base: options.base,
       },
       options.source
     );
@@ -1220,7 +1343,7 @@ export async function stageCommand(
     const prepared = await prepareStage(plan, repoDir);
     if (prepared.subjects.length === 0) {
       throw new PreconditionError(
-        `Nothing to stage: '${plan.branch}' has no commits to publish beyond upstream/${plan.upstreamDefaultBranch} (merge commits and venfork-managed commits are dropped).`,
+        `Nothing to stage: '${plan.branch}' has no commits to publish beyond upstream/${plan.upstreamBase} (merge commits and venfork-managed commits are dropped).`,
         { hint: 'Commit your work on the branch first.' }
       );
     }
@@ -1231,7 +1354,7 @@ export async function stageCommand(
     let internalPr: InternalPrInfo | null = null;
     let translatedBody = '';
     let prTitle = '';
-    const baseBranch = options.base ?? plan.upstreamDefaultBranch;
+    const baseBranch = plan.upstreamBase;
     if (createPr) {
       s.start('Looking up internal review PR');
       const mirrorRepoPath = await findMirrorRepoPath(repoDir);
@@ -1277,7 +1400,7 @@ export async function stageCommand(
         ];
     detailLines.push(
       '',
-      `  Commits (${prepared.subjects.length}), rebuilt on upstream/${plan.upstreamDefaultBranch}:`,
+      `  Commits (${prepared.subjects.length}), rebuilt on upstream/${plan.upstreamBase}:`,
       ...prepared.subjects.map((subject) => `    - ${subject}`),
       '',
       `  Files (${prepared.files.length}) published in history:`,

@@ -101,6 +101,7 @@ import {
   readVenforkConfigFromRepo,
   scheduleAuthOf,
   approvalOf,
+  trackedBranchesOf,
   updateVenforkConfig,
 } from '../../src/config.js';
 import { ConfigError } from '../../src/errors.js';
@@ -807,6 +808,57 @@ describe('approval', () => {
     for (const approval of ['off', null] as const) {
       const updated = await updateVenforkConfig('/tmp/repo', { approval });
       expect(updated).not.toHaveProperty('approval');
+    }
+  });
+});
+
+describe('trackedBranches', () => {
+  test('absent means none', () => {
+    expect(trackedBranchesOf(null)).toEqual([]);
+    expect(trackedBranchesOf({})).toEqual([]);
+  });
+
+  test('reads names and objects, keeping allowRewrite explicit', () => {
+    expect(
+      trackedBranchesOf({
+        trackedBranches: [
+          'release/1.x',
+          { name: 'ga', allowRewrite: 'explicit' },
+          { name: 'next' },
+        ],
+      })
+    ).toEqual([
+      { name: 'release/1.x' },
+      { name: 'ga', allowRewrite: 'explicit' },
+      { name: 'next' },
+    ]);
+  });
+
+  test('HEAD is reserved, while head and nested HEAD names remain literal branches', () => {
+    for (const entry of ['HEAD', { name: 'HEAD', allowRewrite: 'explicit' }]) {
+      expect(() => trackedBranchesOf({ trackedBranches: [entry] })).toThrow(
+        'cannot name HEAD'
+      );
+    }
+    expect(
+      trackedBranchesOf({ trackedBranches: ['head', 'release/HEAD'] })
+    ).toEqual([{ name: 'head' }, { name: 'release/HEAD' }]);
+  });
+
+  test('refuses bad names, venfork-config, duplicates and unknown rewrite modes', () => {
+    for (const trackedBranches of [
+      'ga',
+      [''],
+      ['-ga'],
+      ['a..b'],
+      ['ga.lock'],
+      ['with space'],
+      [{ allowRewrite: 'explicit' }],
+      ['venfork-config'],
+      ['ga', { name: 'ga' }],
+      [{ name: 'ga', allowRewrite: 'always' }],
+    ]) {
+      expect(() => trackedBranchesOf({ trackedBranches })).toThrow(ConfigError);
     }
   });
 });

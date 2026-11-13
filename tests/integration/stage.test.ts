@@ -7,13 +7,17 @@ import { ON_STDERR, quietPrompts } from '../harness/prompts.js';
 
 mock.module('@clack/prompts', quietPrompts);
 
-import { stageCommand, syncCommand } from '../../src/commands.js';
+import {
+  runDoctorChecks,
+  stageCommand,
+  syncCommand,
+} from '../../src/commands.js';
 import { CommandExitError } from '../../src/errors.js';
+import { githubMirror, MIRROR_REPO } from '../harness/gh-mirror.js';
 import {
   createMirrorFixture,
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
-import { githubMirror, MIRROR_REPO } from '../harness/gh-mirror.js';
 import { seedPreserve } from '../harness/preserve.js';
 
 const CALLER = '.github/workflows/caller.yml';
@@ -236,6 +240,178 @@ describe('stage refuses branches that are not upstream work', () => {
       ON_STDERR
     );
     expect(await refExists(pushTarget(), 'refs/heads/lonely')).toBe(false);
+  });
+});
+
+describe('stage --base', () => {
+  async function cutFromUpstreamGa(): Promise<string> {
+    await fx.commitOnUpstreamBranch(
+      'ga',
+      { 'src/ga.txt': 'ga only\n' },
+      'feat: ga only'
+    );
+    await fx.commitOnUpstream({ 'src/main-later.txt': 'main only\n' });
+    await fx.git(fx.work, 'fetch', '--quiet', 'upstream');
+    return cutFeatureBranch('upstream/ga');
+  }
+
+  test('rebuilds the branch on upstream/<base>, not the default branch', async () => {
+    await cutFromUpstreamGa();
+
+    await stageCommand('feature', { base: 'ga' });
+
+    const publicFork = fx.publicFork ?? '';
+    expect(await fx.sha(publicFork, 'feature~1')).toBe(
+      await fx.sha(fx.upstream, 'ga')
+    );
+    expect(await fx.fileAt(publicFork, 'feature', 'src/ga.txt')).toBe(
+      'ga only\n'
+    );
+    expect(
+      await fx.fileAt(publicFork, 'feature', 'src/main-later.txt')
+    ).toBeNull();
+  });
+
+  test('a dry run reports the base and only the commits beyond it', async () => {
+    await cutFromUpstreamGa();
+
+    const result = await stageCommand('feature', { base: 'ga', dryRun: true });
+
+    expect(result).toMatchObject({
+      dryRun: true,
+      base: 'ga',
+      commits: ['feat: feature work'],
+      files: ['src/feature.txt'],
+    });
+  });
+
+  test('a branch with nothing beyond upstream/<base> is "Nothing to stage"', async () => {
+    await cutFromUpstreamGa();
+    await fx.git(fx.work, 'reset', '--quiet', '--hard', 'upstream/ga');
+
+    await expect(stageCommand('feature', { base: 'ga' })).rejects.toThrow(
+      new CommandExitError(1)
+    );
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining('beyond upstream/ga'),
+      ON_STDERR
+    );
+    expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(false);
+  });
+
+  test('a base upstream does not have is refused', async () => {
+    await cutFeatureBranch('upstream/main');
+
+    await expect(stageCommand('feature', { base: 'nope' })).rejects.toThrow(
+      new CommandExitError(1)
+    );
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining('upstream/nope not found after fetch'),
+      ON_STDERR
+    );
+    expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(false);
+  });
+
+  describe.each(['standard', 'no-public'] as const)(
+    'authoritative base (%s)',
+    (mode) => {
+      beforeEach(async () => {
+        await useMode(mode);
+      });
+
+      test.each(['stale', 'missing'])(
+        'refreshes a %s base excluded by the fetch refspec',
+        async (state) => {
+          await cutFromUpstreamGa();
+          await fx.git(
+            fx.work,
+            'config',
+            'remote.upstream.fetch',
+            '+refs/heads/main:refs/remotes/upstream/main'
+          );
+          const tip = await fx.commitOnUpstreamBranch('ga', {
+            'src/ga.txt': 'ga updated\n',
+          });
+          if (state === 'missing')
+            await fx.git(
+              fx.work,
+              'update-ref',
+              '-d',
+              'refs/remotes/upstream/ga'
+            );
+
+          await stageCommand('feature', { base: 'ga' });
+
+          expect(await fx.sha(pushTarget(), 'feature~1')).toBe(tip);
+          expect(await fx.fileAt(pushTarget(), 'feature', 'src/ga.txt')).toBe(
+            'ga updated\n'
+          );
+          expect(await fx.sha(fx.upstream, 'ga')).toBe(tip);
+        }
+      );
+
+      test('refuses a deleted upstream base before publishing or previewing', async () => {
+        await cutFromUpstreamGa();
+        await fx.git(fx.upstream, 'update-ref', '-d', 'refs/heads/ga');
+
+        for (const dryRun of [false, true]) {
+          await expect(
+            stageCommand('feature', { base: 'ga', dryRun })
+          ).rejects.toThrow(new CommandExitError(1));
+          expect(prompts.log.error).toHaveBeenCalledWith(
+            expect.stringContaining('upstream/ga not found after fetch'),
+            ON_STDERR
+          );
+          expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(
+            false
+          );
+        }
+        expect(await refExists(fx.work, 'refs/remotes/upstream/ga')).toBe(
+          false
+        );
+      });
+    }
+  );
+
+  test('the --base branch itself is refused', async () => {
+    await cutFromUpstreamGa();
+    await fx.git(fx.work, 'branch', '--quiet', 'ga', 'feature');
+
+    await expect(stageCommand('ga', { base: 'ga' })).rejects.toThrow(
+      new CommandExitError(1)
+    );
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining('it is the --base branch'),
+      ON_STDERR
+    );
+    expect(await refExists(pushTarget(), 'refs/heads/ga')).toBe(false);
+  });
+
+  test('a revision expression as --base is rejected before upstream can move', async () => {
+    const original = await fx.commitOnUpstreamBranch(
+      'ga',
+      { 'release.txt': 'release\n' },
+      'release'
+    );
+    await fx.git(fx.work, 'fetch', '--quiet', 'upstream');
+    await fx.git(fx.work, 'checkout', '--quiet', '-b', 'ga', 'upstream/ga');
+    await Bun.write(`${fx.work}/feature.txt`, 'unreviewed feature\n');
+    await fx.git(fx.work, 'add', 'feature.txt');
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'feature');
+
+    await expect(
+      stageCommand('ga', {
+        base: 'ga~1',
+        createPr: false,
+        prompt: { yes: true, noInput: true },
+      })
+    ).rejects.toThrow('--base requires a literal branch name');
+
+    expect(await fx.sha(fx.upstream, 'refs/heads/ga')).toBe(original);
+    expect(await fx.fileAt(fx.upstream, 'ga', 'feature.txt')).toBeNull();
   });
 });
 
@@ -523,5 +699,299 @@ describe('stage lists AI attribution in commit messages', () => {
     expect(
       await fx.git(fx.publicFork ?? '', 'log', '-1', '--format=%B', 'feature')
     ).toBe(MESSAGE);
+  });
+});
+
+describe('stage refuses the mirror deny list (denyTerms)', () => {
+  async function denyList(denyTerms: unknown[]) {
+    const config = await fx.readRawConfig();
+    await fx.writeRawConfig(JSON.stringify({ ...config, denyTerms }));
+  }
+
+  async function commitFeature(
+    files: Record<string, string>,
+    message = 'feat: feature work',
+    branch = 'feature'
+  ): Promise<void> {
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+    await fx.git(fx.work, 'checkout', '--quiet', '-b', branch, 'origin/main');
+    for (const [file, content] of Object.entries(files)) {
+      await mkdir(path.dirname(path.join(fx.work, file)), { recursive: true });
+      await Bun.write(path.join(fx.work, file), content);
+      await fx.git(fx.work, 'add', file);
+    }
+    await fx.git(fx.work, 'commit', '--quiet', '-m', message);
+  }
+
+  async function expectRefused(
+    branch: string,
+    where: string,
+    matched: string
+  ): Promise<void> {
+    const error = await stageCommand(branch).catch((err: unknown) => err);
+    expect(error).toMatchObject({
+      cause: {
+        code: 'mirror-reference',
+        details: { matched, list: 'custom' },
+      },
+    });
+    expect(
+      (error as { cause: { details: { where: string } } }).cause.details.where
+    ).toContain(where);
+    expect(await refExists(pushTarget(), `refs/heads/${branch}`)).toBe(false);
+  }
+
+  test('an added line with a deny term is refused, ignoring case', async () => {
+    await denyList(['Globex']);
+    await commitFeature({ 'src/feature.txt': 'thanks GLOBEX team\n' });
+
+    await expectRefused('feature', 'file src/feature.txt', 'Globex');
+  });
+
+  test('custom deny terms outside cwd are scanned with diff.relative enabled', async () => {
+    await denyList(['Globex']);
+    await commitFeature({ 'customer.txt': 'Globex\n' });
+    await fx.git(fx.work, 'config', 'diff.relative', 'true');
+    process.chdir(path.join(fx.work, 'src'));
+
+    await expectRefused('feature', 'file customer.txt', 'Globex');
+  });
+
+  test('repository-wide custom scanning still ignores unchanged upstream lines', async () => {
+    await fx.commitOnUpstream({ 'notes.txt': 'Globex\nkeep\n' });
+    await denyList(['Globex']);
+    await fx.git(fx.work, 'fetch', '--quiet', 'upstream');
+    await cutFeatureBranch('refs/remotes/upstream/main');
+    await commitMore(
+      { 'notes.txt': 'Globex\nkeep\nmore\n' },
+      'feat: more notes'
+    );
+    await fx.git(fx.work, 'config', 'diff.relative', 'true');
+    process.chdir(path.join(fx.work, 'src'));
+
+    await stageCommand('feature');
+
+    expect(await fx.fileAt(pushTarget(), 'feature', 'notes.txt')).toBe(
+      'Globex\nkeep\nmore\n'
+    );
+  });
+
+  test('built-in mirror references outside cwd remain blocked with diff.relative', async () => {
+    await githubMirror(fx);
+    await commitFeature({
+      'customer.txt': 'https://github.com/acme/project-private/issues/1\n',
+    });
+    await fx.git(fx.work, 'config', 'diff.relative', 'true');
+    process.chdir(path.join(fx.work, 'src'));
+
+    await expect(stageCommand('feature')).rejects.toMatchObject({
+      cause: {
+        code: 'mirror-reference',
+        details: { matched: 'acme/project-private' },
+      },
+    });
+    expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(false);
+  });
+
+  test('an added line that looks like a diff header is still checked', async () => {
+    await denyList(['Globex']);
+    await commitFeature({
+      'docs/a.md': 'intro\n++ Globex here\n',
+    });
+
+    await expectRefused('feature', 'file docs/a.md', 'Globex');
+  });
+
+  test('a line after an added "+++ b/<path>" line keeps its own file name', async () => {
+    await denyList(['Globex']);
+    await commitFeature({
+      'docs/a.md': '++ b/other.txt\nGlobex\n',
+    });
+
+    await expectRefused('feature', 'file docs/a.md', 'Globex');
+  });
+
+  async function commitMore(
+    files: Record<string, string | null>,
+    message: string
+  ): Promise<void> {
+    for (const [file, content] of Object.entries(files)) {
+      if (content === null) {
+        await fx.git(fx.work, 'rm', '--quiet', file);
+      } else {
+        await Bun.write(path.join(fx.work, file), content);
+        await fx.git(fx.work, 'add', file);
+      }
+    }
+    await fx.git(fx.work, 'commit', '--quiet', '-m', message);
+  }
+
+  test('a term added in one commit and removed in the next is still refused', async () => {
+    await denyList(['Globex']);
+    await commitFeature({ 'src/feature.txt': 'hello Globex\n' });
+    await commitMore({ 'src/feature.txt': 'hello\n' }, 'fix: drop the name');
+
+    await expectRefused('feature', 'file src/feature.txt', 'Globex');
+  });
+
+  test('a term only in an intermediate commit among several is refused', async () => {
+    await denyList(['Globex']);
+    await commitFeature({ 'src/a.txt': 'one\n' });
+    await commitMore({ 'src/b.txt': 'two Globex\n' }, 'feat: two');
+    await commitMore({ 'src/b.txt': 'two\n' }, 'feat: three');
+    await commitMore({ 'src/c.txt': 'four\n' }, 'feat: four');
+
+    await expectRefused('feature', 'file src/b.txt', 'Globex');
+  });
+
+  test('a file whose name has a term, added then deleted, is still refused', async () => {
+    await denyList(['Globex']);
+    await commitFeature({ 'docs/globex-notes.md': 'notes\n' });
+    await commitMore({ 'docs/globex-notes.md': null }, 'chore: remove notes');
+
+    await expectRefused('feature', 'file name docs/globex-notes.md', 'Globex');
+  });
+
+  test('a term that only an upstream line already has is not refused', async () => {
+    await fx.commitOnUpstream({ 'src/notes.txt': 'globex\nkeep\n' });
+    await denyList(['globex']);
+    await fx.git(fx.work, 'fetch', '--quiet', 'upstream');
+    await fx.git(
+      fx.work,
+      'checkout',
+      '--quiet',
+      '-b',
+      'feature',
+      'upstream/main'
+    );
+    await Bun.write(`${fx.work}/src/notes.txt`, 'globex\nkeep\nmore\n');
+    await fx.git(fx.work, 'add', 'src/notes.txt');
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: more notes');
+
+    await stageCommand('feature');
+
+    expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(true);
+  });
+
+  test('a deny term in the commit message is refused', async () => {
+    await denyList(['GLX-42']);
+    await commitFeature(
+      { 'src/feature.txt': 'feature\n' },
+      'feat: feature work\n\nRefs glx-42'
+    );
+
+    await expectRefused('feature', 'message', 'GLX-42');
+  });
+
+  test('a text file marked -diff in .gitattributes is still scanned', async () => {
+    await denyList(['Globex']);
+    await commitFeature({
+      '.gitattributes': 'gen.txt -diff\n',
+      'gen.txt': 'generated\nGlobex inside\n',
+    });
+
+    await expectRefused('feature', 'file gen.txt', 'Globex');
+  });
+
+  test('a binary file is scanned as text, so a term in its bytes is refused', async () => {
+    await denyList(['Globex']);
+    await fx.git(fx.work, 'fetch', '--quiet', 'origin');
+    await fx.git(
+      fx.work,
+      'checkout',
+      '--quiet',
+      '-b',
+      'feature',
+      'origin/main'
+    );
+    await Bun.write(
+      path.join(fx.work, 'assets/blob.bin'),
+      new Uint8Array([0, 1, 2, ...new TextEncoder().encode('Globex'), 0, 255])
+    );
+    await fx.git(fx.work, 'add', 'assets/blob.bin');
+    await fx.git(fx.work, 'commit', '--quiet', '-m', 'feat: add blob');
+
+    await expectRefused('feature', 'file assets/blob.bin', 'Globex');
+  });
+
+  test('a deny term in a file name or the branch name is refused', async () => {
+    await denyList(['globex']);
+    await commitFeature({ 'docs/globex-notes.md': 'notes\n' });
+
+    await expectRefused('feature', 'file name docs/globex-notes.md', 'globex');
+
+    await fx.git(fx.work, 'checkout', '--quiet', 'main');
+    await commitFeature(
+      { 'src/feature.txt': 'feature\n' },
+      'feat: feature work',
+      'globex-fix'
+    );
+    await expectRefused('globex-fix', 'the branch name', 'globex');
+  });
+
+  test('the PR title is refused before anything is pushed', async () => {
+    await denyList(['globex']);
+    await cutFeatureBranch('origin/main');
+    await mkdir(path.join(fx.work, 'acme'));
+    for (const [name, target] of [
+      ['upstream', fx.upstream],
+      ['public', fx.publicFork ?? ''],
+    ] as const) {
+      await symlink(target, path.join(fx.work, 'acme', name));
+      await fx.git(fx.work, 'remote', 'set-url', name, `acme/${name}`);
+    }
+    await appendFile(path.join(fx.work, '.git', 'info', 'exclude'), 'acme/\n');
+    const gh = await githubMirror(fx);
+    await gh.setRoutes([
+      {
+        match: `pr list --repo ${MIRROR_REPO} --head feature --state open`,
+        stdout: JSON.stringify([]),
+      },
+    ]);
+
+    const error = await stageCommand('feature', {
+      dryRun: true,
+      createPr: true,
+      title: 'feat: Globex feature',
+    }).catch((err: unknown) => err);
+
+    expect(error).toMatchObject({
+      cause: {
+        code: 'mirror-reference',
+        details: { where: 'the upstream PR title', matched: 'globex' },
+      },
+    });
+  });
+
+  test('an invalid denyTerms entry refuses stage', async () => {
+    await denyList(['ok', '']);
+    await commitFeature({ 'src/feature.txt': 'feature\n' });
+
+    await expect(stageCommand('feature')).rejects.toMatchObject({
+      cause: { code: 'config' },
+    });
+    const checks = await runDoctorChecks({ cwd: fx.work });
+    expect(checks.find((check) => check.id === 'repo')).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining('denyTerms must be a list'),
+    });
+  });
+
+  test('a multiline deny term is rejected as invalid config before publication', async () => {
+    const secret = 'Globex\nConfidential';
+    await denyList([secret]);
+    await commitFeature({ 'src/feature.txt': `${secret}\n` });
+
+    await expect(stageCommand('feature')).rejects.toThrow(
+      new CommandExitError(1)
+    );
+
+    expect(prompts.log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'denyTerms must be a list of non-empty single-line strings'
+      ),
+      ON_STDERR
+    );
+    expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(false);
   });
 });

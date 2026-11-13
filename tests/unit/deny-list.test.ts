@@ -1,10 +1,19 @@
 import { describe, expect, test } from 'bun:test';
-import { MirrorReferenceError } from '../../src/errors.js';
+import { applyPatchAndNormalize } from '../../src/config.js';
 import {
+  ConfigError,
+  DeniedTermError,
+  MirrorReferenceError,
+} from '../../src/errors.js';
+import {
+  assertNoDeniedTerm,
   assertNoMirrorReference,
   canonicalText,
+  customDenyRules,
+  findCustomDenied,
   findDeniedText,
 } from '../../src/shared/deny-list.js';
+import { parseAddedLines } from '../../src/shared/stage-gate.js';
 
 const TERMS = [
   'git@github.com:acme/widget-private.git',
@@ -252,5 +261,116 @@ describe('canonicalText', () => {
     ['a Hangul filler', 'venㅤfork'],
   ])('sees through %s', (_label, text) => {
     expect(canonicalText(text)).toBe('venfork');
+  });
+});
+
+describe('customDenyRules and findCustomDenied', () => {
+  test('no denyTerms matches nothing', () => {
+    const rules = customDenyRules({});
+    expect(rules).toEqual({ terms: [] });
+    expect(findCustomDenied('anything at all', rules)).toBeNull();
+  });
+
+  test('a term matches anywhere, ignoring case, %XX escapes and invisible characters', () => {
+    const rules = customDenyRules({ denyTerms: [' Globex '] });
+    for (const text of [
+      'globex',
+      'see GLOBEX-ci',
+      'glo%62ex',
+      'glo\u200bbex',
+    ]) {
+      expect(findCustomDenied(text, rules)).toBe('Globex');
+    }
+    expect(findCustomDenied('glo bex', rules)).toBeNull();
+  });
+
+  test('refuses a list that is not strings or holds an empty term', () => {
+    for (const config of [
+      { denyTerms: 'globex' },
+      { denyTerms: [''] },
+      { denyTerms: [42] },
+      { denyTerms: ['ok', '  '] },
+      { denyTerms: ['Globex\nConfidential'] },
+      { denyTerms: ['Globex\rConfidential'] },
+    ]) {
+      expect(() => customDenyRules(config)).toThrow(ConfigError);
+    }
+  });
+
+  test('assertNoDeniedTerm throws a mirror-reference DeniedTermError naming the place', () => {
+    const rules = customDenyRules({ denyTerms: ['globex'] });
+    expect(() =>
+      assertNoDeniedTerm('Globex PR', 'the upstream PR title', rules)
+    ).toThrow(DeniedTermError);
+    try {
+      assertNoDeniedTerm('Globex PR', 'the upstream PR title', rules);
+    } catch (err) {
+      expect(err).toMatchObject({
+        code: 'mirror-reference',
+        details: {
+          where: 'the upstream PR title',
+          matched: 'globex',
+          list: 'custom',
+        },
+      });
+    }
+  });
+});
+
+describe('denyTerms at config load', () => {
+  test('an invalid deny list is refused whenever the config is read', () => {
+    const current = {
+      version: '1',
+      upstreamUrl: 'git@github.com:acme/widget.git',
+      publicForkUrl: 'git@github.com:me/widget.git',
+    };
+    expect(() => applyPatchAndNormalize(current, { denyTerms: [''] })).toThrow(
+      ConfigError
+    );
+    expect(
+      applyPatchAndNormalize(current, { denyTerms: ['globex'] })
+    ).toMatchObject({ denyTerms: ['globex'] });
+  });
+});
+
+describe('parseAddedLines', () => {
+  test('header-like added lines are content; headers count only before the first hunk', () => {
+    const patch = [
+      'diff --git a/a.md b/a.md',
+      'index 1111111..2222222 100644',
+      '--- a/a.md',
+      '+++ b/a.md',
+      '@@ -1,0 +1,4 @@',
+      '+++ Globex',
+      '+++ b/fake.txt',
+      '+-- Globex',
+      '+--- dashes',
+      '-removed',
+      'diff --git a/b.bin b/b.bin',
+      'new file mode 100644',
+      'Binary files /dev/null and b/b.bin differ',
+      'diff --git a/old.txt b/new.txt',
+      'similarity index 90%',
+      'rename from old.txt',
+      'rename to new.txt',
+      '--- a/old.txt',
+      '+++ b/new.txt',
+      '@@ -2,0 +3 @@',
+      '+renamed line',
+      'diff --git a/gone.txt b/gone.txt',
+      'deleted file mode 100644',
+      '--- a/gone.txt',
+      '+++ /dev/null',
+      '@@ -1 +0,0 @@',
+      '-bye',
+    ].join('\n');
+
+    expect(parseAddedLines(patch)).toEqual([
+      { file: 'a.md', line: '++ Globex' },
+      { file: 'a.md', line: '++ b/fake.txt' },
+      { file: 'a.md', line: '-- Globex' },
+      { file: 'a.md', line: '--- dashes' },
+      { file: 'new.txt', line: 'renamed line' },
+    ]);
   });
 });

@@ -139,3 +139,19 @@ When two venfork commands race the config update, the losing one's push is rejec
 `schedule set`, `schedule disable` and a `keep remove` of a file that the managed commit carries are the exception: they also push a new mirror tip, so they do not retry. A lost lease there fails the command, and you run it again.
 
 That means concurrent runs are normally invisible to the user: both updates land. Only after sustained contention (3 lease failures in a row) does venfork surface the error and ask you to re-run the command. Don't `--force` the config branch by hand to "fix" a transient lease failure; that's exactly the data-loss path the lease prevents.
+
+### Which commands rewrite shared branches
+
+Every push below has an explicit `--force-with-lease` on the tip the command read, so it fails instead of overwriting a change it did not see.
+
+- **`venfork-config`** is replaced, not appended to: each write pushes a new single-commit orphan branch. A long-lived clone or a tool that keeps a local copy must fetch it with a `+` refspec (`git fetch origin +venfork-config:venfork-config`) or `git fetch --force`; a plain fetch is rejected as non-fast-forward and leaves the old config in place. Every command in [Concurrency](#concurrency) does this.
+- **`origin/<default>`** is rewritten by:
+  - `venfork sync`, when the managed commit changes (new upstream tip, kept files, workflow lists or schedule).
+  - `venfork schedule set` and `schedule disable`, in the same step as the config write.
+  - `venfork keep remove` and `keep clear`, in the same step, when the managed commit at origin's tip carries a dropped file. When user commits sit on top of that managed commit, they write only the config and warn.
+
+  Before rewriting, each runs the divergence check with the list as it will be after the change: a commit on `origin/<default>` that only a removed keep entry allowed counts as divergence, and the command stops and pushes nothing. Feature branches cut from an older tip still stage, because stage drops managed commits.
+- **`venfork keep add`** and **`venfork workflows allow|block|unallow|unblock|clear`** write only `venfork-config`. `origin/<default>` changes on the next `venfork sync`, which runs the same divergence check first.
+- **`public/<default>`** is set to `upstream/<default>` by `venfork sync`.
+- **Tracked branches** (`trackedBranches`, see [`venfork sync`](commands.md#venfork-sync---report-issues---accept-rewrite-brancholdnew---yes---no-input---json)) are only created or fast-forwarded by `venfork sync`. A diverged one is left as it is and reported, and is rewritten only with `--accept-rewrite <branch>=<old>..<new>` and `"allowRewrite": "explicit"`.
+- **`public/<branch>`** (or `upstream/<branch>` with `--own-upstream`) is replaced by `venfork stage <branch>` with the rebuilt branch.

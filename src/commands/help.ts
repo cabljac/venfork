@@ -68,10 +68,12 @@ const COMMAND_HELP: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'sync',
-    `venfork sync [--report-issues] [--yes] [--no-input] [--json]
+    `venfork sync [--report-issues] [--accept-rewrite <branch>=<old>..<new>] [--yes] [--no-input] [--json]
   Update the default branches of origin (and public, unless the mirror has no public fork) to match upstream
   --report-issues (used by the scheduled workflow) opens a venfork-sync-blocked
     issue on the mirror when sync is blocked and closes it after a successful sync
+  Fast-forwards origin's copy of each trackedBranches entry to upstream's;
+    --accept-rewrite replaces one upstream rewrote (needs allowRewrite explicit)
   Keeps the private default branch at upstream plus one sync commit from venfork
     when the mirror has a schedule or kept files
   Applies the workflow allow and block lists (see venfork workflows)
@@ -108,6 +110,8 @@ venfork stage approval [on|reviewed|two-person|off] [--yes] [--no-input] [--json
   • --no-pr                Push the branch only; --draft, --title, --internal-pr and
                            --no-update-existing need the PR and are refused with it
   • --draft                Open the upstream PR as a draft
+  • --base <branch>        Rebuild on upstream/<branch> and open the PR into it
+                           (default: upstream's default branch)
   • --dry-run              Show the commits, files, PR text and AI attribution lines
                            that would be published; push nothing. Needs no --yes; with
                            --no-pr it uses no GitHub API beyond the fetch

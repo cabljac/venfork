@@ -122,7 +122,7 @@ venfork clone git@github.com:acme-corp/awesome-project-private.git
 - An empty answer is rejected and the prompt asks again; cancelling a prompt (Ctrl-C) exits 130
 - Without a terminal (see [Non-interactive use](headless.md#non-interactive-use)) these prompts exit 2 instead and name the flag: `--public-fork <url>` for the public fork, `--upstream <url>` for upstream. Use `--own-upstream --upstream <url>` when the mirror has no public fork
 
-### `venfork sync [--report-issues] [--yes] [--no-input] [--json]`
+### `venfork sync [--report-issues] [--accept-rewrite <branch>=<old>..<new>] [--yes] [--no-input] [--json]`
 
 With `--json`, sync prints one JSON envelope on stdout (see [JSON output](json.md#json-output)).
 
@@ -133,15 +133,35 @@ Update default branches from upstream. With scheduled sync or a preserve list en
 
 Normally you run this from your private mirror directory (or any subfolder of that repo). The same behavior is also used internally when **`venfork setup`** completes in recovery mode (existing GitHub repos), using the new clone’s path automatically.
 
-Sync takes no branch: it always syncs upstream's default branch (auto-detected, usually `main` or `master`). `venfork sync <branch>` is a usage error (exit 2); to refresh a pulled upstream PR, run `venfork pull pr <n>` again.
+Sync takes no branch: it always syncs upstream's default branch (auto-detected, usually `main` or `master`), plus any `trackedBranches` (below). `venfork sync <branch>` is a usage error (exit 2); to refresh a pulled upstream PR, run `venfork pull pr <n>` again.
+
+**Tracked branches:** to keep a long-lived non-default upstream branch (for example a release branch that `venfork stage --base` targets) on the mirror, list it in `trackedBranches` in `.venfork/config.json` on the `venfork-config` branch. An entry is a branch name, or an object with `allowRewrite`:
+
+```json
+{
+  "trackedBranches": ["release/1.x", { "name": "ga", "allowRewrite": "explicit" }]
+}
+```
+
+There is no command that edits the list yet: edit the file on the `venfork-config` branch and push it (see [Concurrency](headless.md#concurrency) for how venfork replaces that branch). For each tracked branch, sync makes `origin/<branch>` equal to `upstream/<branch>`, with no managed commit and no kept files:
+- A missing `origin/<branch>` is created, and one that is behind is fast-forwarded. Every push has an explicit lease on the tip sync read.
+- Before planning, sync refreshes each tracked branch from both remotes, so deleted branches are detected even when a clone has stale remote-tracking refs or a narrow fetch refspec. When `origin/<branch>` is not an ancestor of `upstream/<branch>` (upstream rewrote the branch, or someone committed to the mirror's copy), or upstream has no such branch, sync leaves `origin/<branch>` as it is, prints a warning and still syncs the default branch and the other tracked branches. The run exits 0; `result.trackedBranches` reports the branch as `diverged` (with `upstreamTip`, `hint` and, with `allowRewrite`, `command`) or `no-upstream`, and `venfork doctor` fails its `tracked` row until it is resolved. A scheduled sync therefore keeps the default branch current while a person decides about the rewrite.
+- With `"allowRewrite": "explicit"`, a rewrite is replaced only when you pass `--accept-rewrite <branch>=<old>..<new>` with the full commit ids of `origin/<branch>` and `upstream/<branch>` as sync sees them; the warning and `command` print that flag. Sync then pushes `upstream/<branch>` with a lease on `<old>`. Without `allowRewrite`, sync never rewrites the branch.
+- An `--accept-rewrite` that names an untracked branch, a branch without `"allowRewrite": "explicit"`, a branch that has not diverged, or tips that no longer match is refused (`precondition`) before anything is pushed.
+- The tracked pushes run after the default-branch pushes. When one fails (for example its lease, because someone pushed to `origin/<branch>` meanwhile), sync exits 1 with the default branch already synced; run it again.
+- The public fork's copy is not touched. The default branch, reserved `HEAD`, `venfork-config`, a duplicate or an `allowRewrite` other than `"explicit"` in the list is refused (`config`).
+- `--report-issues` does not open a `venfork-sync-blocked` issue for a tracked branch left as it is; `venfork doctor` shows it in the `tracked` row.
+- An older venfork ignores `trackedBranches`: it neither syncs nor checks those branches.
 
 **Flags:**
 - `--report-issues` - Open or refresh a `venfork-sync-blocked` issue on the mirror when sync is blocked, and close it after a successful sync. The scheduled workflow passes this flag (see "When a scheduled sync fails" in [`venfork schedule`](scheduled-sync.md#venfork-schedule-statusset-cron---app--tokendisable---yes---no-input---json))
+- `--accept-rewrite <branch>=<old>..<new>` - Accept that upstream rewrote the tracked branch `<branch>` from `<old>` to `<new>` (full commit ids), so sync replaces `origin/<branch>`. Needs `"allowRewrite": "explicit"` on the branch's `trackedBranches` entry. Repeat it for several branches. The branch must be literal: reserved `HEAD` and revision expressions are usage errors before I/O.
 - `--no-input` - Never prompt. `sync` asks nothing, so it changes nothing; it is accepted so a wrapper can pass one fixed flag set. See [Non-interactive use](headless.md#non-interactive-use).
 
 **Examples:**
 ```bash
-venfork sync           # Sync default branches with upstream
+venfork sync           # Sync default branches (and tracked branches) with upstream
+venfork sync --accept-rewrite ga=<old sha>..<new sha>   # Accept a rewritten tracked branch
 ```
 
 **What it does:**
@@ -179,9 +199,9 @@ Push a branch to the public fork, making it visible and ready for PR to upstream
 - `--draft` - Open the upstream PR as a draft.
 - `--dry-run` - Run every check, rebuild the branch and build the upstream PR title and body after redaction, print them, and stop. Nothing is pushed, no PR is opened or edited, and nothing is recorded. It needs no `--yes`. With the default PR it still reads the internal review PR through gh, and it looks for an open upstream PR for the branch: when one is open, the preview shows that a real stage keeps its title and replaces only its body (or, with `--no-update-existing`, leaves it unchanged). `--dry-run --no-pr` does not use GitHub beyond the fetch.
 - When the mirror's approval level is not `off`, stage first checks for an approving review on the branch's mirror PR and publishes exactly the approved head (see [`venfork stage approval`](#venfork-stage-approval-onreviewedtwo-personoff---yes---no-input---json)).
-- A branch with no commits to publish beyond upstream's default branch is refused (`precondition`, "Nothing to stage"). Merge commits and venfork-managed commits do not count: stage drops them.
+- A branch with no commits to publish beyond upstream's default branch (or `--base`) is refused (`precondition`, "Nothing to stage"). Merge commits and venfork-managed commits do not count: stage drops them.
 - `--title <text>` - Override the upstream PR title (default: the internal PR title, or the branch name if no internal PR was found).
-- `--base <branch>` - Override the upstream base branch (default: upstream's default branch).
+- `--base <branch>` - The upstream branch to rebuild the branch on and open the PR into (default: upstream's default branch). Must be a literal branch name; reserved `HEAD` and revision expressions such as `ga~1` are usage errors before I/O. Slash-separated names are allowed. Stage explicitly refreshes the selected upstream branch even with a narrow fetch refspec, and refuses a deleted or missing branch before publication. It rebuilds onto `upstream/<branch>`, checks history in common and "Nothing to stage" against it, and refuses to stage a branch named `<branch>`. Use it for a long-lived non-default upstream branch, such as a release branch.
 - `--internal-pr <n>` - Pin a specific internal-review PR number (skips the most-recent-open lookup). Useful when multiple PRs target the same branch.
 - `--no-update-existing` - Do not update an already-open upstream PR body when staging.
 - `--force` - Stage past an approval gate refusal (see [`venfork stage approval`](#venfork-stage-approval-onreviewedtwo-personoff---yes---no-input---json)). A person must confirm the bypass at a terminal; `--yes` does not answer that confirm. Not with `--dry-run`. By default, if an upstream PR for the branch already exists, `venfork stage` refreshes its body with the latest translated content.
@@ -211,8 +231,8 @@ venfork stage feature-auth --yes
 ```
 
 **What it does (with `--no-pr`, and before the PR):**
-1. Refuses branches that are not upstream work: upstream's default branch, anything that is not a local branch (tags, remote-tracking refs), `venfork-config`, and a branch with no history in common with upstream. Like sync, it also refuses while the preserve list holds entries venfork no longer accepts, and names the `venfork keep remove` command for each.
-2. Fetches upstream and origin, then rebuilds the branch as a linear history on `upstream/<default>`: every non-merge commit is cherry-picked in order and venfork-managed commits are dropped. Merge commits never ship (a merge with a manual conflict resolution is refused, since dropping it would lose work). The rebuilt commits get new SHAs even when the branch was already based on upstream.
+1. Refuses branches that are not upstream work: upstream's default branch, the `--base` branch, anything that is not a local branch (tags, remote-tracking refs), `venfork-config`, and a branch with no history in common with upstream. Like sync, it also refuses while the preserve list holds entries venfork no longer accepts, and names the `venfork keep remove` command for each.
+2. Fetches upstream and origin, then rebuilds the branch as a linear history on `upstream/<default>` (or `upstream/<base>` with `--base`): every non-merge commit is cherry-picked in order and venfork-managed commits are dropped. Merge commits never ship (a merge with a manual conflict resolution is refused, since dropping it would lose work). The rebuilt commits get new SHAs even when the branch was already based on upstream.
 3. Checks every rebuilt commit before anything is pushed and refuses the branch when a commit:
    - adds or changes `.github/workflows/venfork-sync.yml`, anything under `.venfork/`, or a preserved path (unless the result is exactly upstream's file at that path). Deleting a preserved file is allowed.
    - adds a file whose content is identical to a preserved file on the mirror, at any path (catches renames and copies). The check covers every earlier version of a preserved file that the clone still knows and every earlier version of the venfork config: the mirror refs, their reflog entries and the history of both that upstream does not contain (up to 20000 commits and 20000 reflog entries per ref). A version that upstream itself has published at the same path is not mirror content. When a ref has more than 20000 reflog entries, or that history holds more than 20000 commits, stage refuses, because the older mirror-only history cannot be checked: stage from a clone whose reflog is shorter (a fresh clone has almost none), or, after confirming no mirror-only history older than that is needed, drop old entries with `git reflog expire --expire=<date> --all`. There is no override.
@@ -221,6 +241,8 @@ venfork stage feature-auth --yes
    - was authored or committed by the venfork bot.
    - has an author, committer or message that contains origin's URL, origin's `owner/name`, origin's GitHub Pages address (`<owner>.github.io/<name>`), origin's repo name as a whole word (when it has at least six characters and differs from upstream's; `<name>-public`, `my-<name>` and `<name>.ts` pass, but a plain `<name>` or `<name>#12` does not) or the word `venfork`. Text is percent-decoded before matching, so `acme%2Fwidget-private` is found. For an origin on another host, such as GitHub Enterprise, `owner/name` is read from any `host[:/]owner/name` URL. The same terms apply to the branch name and, unless `--no-pr`, to the PR title and body (this includes `<!-- venfork:internal -->` markers).
 
+   - contains a term from the mirror's own deny list (below) in a file name, a line it adds, its author, committer or message.
+
    Path matching ignores case. A preserve entry that is a directory on origin's default branch, on your local default branch or anywhere in the mirror history the check reads (possible in an old config) is refused as an invalid entry, with the `venfork keep remove '<entry>'` command to run. The branch name goes through the same term check before anything is fetched.
 4. Shows the target, the branch, every commit subject and every file that any published commit adds or changes, then asks for confirmation. A file that a later commit deletes is listed as "removed later in the branch, still in history", because the public history still holds it. When commit messages, or (unless `--no-pr`) the upstream PR title or body, contain `#N`, it warns that those numbers will resolve against upstream. It also lists every published line that credits an AI tool and warns that those lines are published as they are. It reads the commit authors and committers, the trailers in the last paragraph of each commit message (such as `Co-authored-by: Claude <noreply@anthropic.com>`, `Assisted-by: Copilot` or `Generated-by: ...`), and "Generated with ..." lines that name a tool. Unless `--no-pr`, it reads the PR title and body that stage publishes in the same way. A trailer counts when its key names a tool or its name or email is a known tool identity, so `Co-authored-by: Claude Monet <monet@example.com>` does not. Stage never rewrites these lines; change the commits or the PR text first if upstream should not see them.
 5. Pushes the rebuilt head with `--force-with-lease` and `--no-follow-tags`, so no local tag goes with it.
@@ -228,13 +250,23 @@ venfork stage feature-auth --yes
 
 Commit messages, author names and author emails are published as they are. Keep them free of anything that points at the private mirror; when stage refuses a commit, rewrite the branch (for example with `git rebase -i`) and stage again. A `#42` reference in a commit message is your own content and is published unchanged; the preview warns about it.
 
+**Your own deny list:** to refuse more than the mirror's own names (for example a client codename, an internal ticket prefix or a team name), add `denyTerms` to `.venfork/config.json` on the `venfork-config` branch:
+
+```json
+{
+  "denyTerms": ["Globex", "GLX-"]
+}
+```
+
+Each term is a literal single-line string; leading and trailing spaces are trimmed. Carriage returns and newlines make the config invalid. It matches anywhere, ignoring case, after the same `%XX` decoding and invisible-character folding as the built-in terms. Stage refuses (`mirror-reference`, `details.list: "custom"`) when a term is in the branch name, a published file name, a line a published commit adds, a commit author, committer or message, or (unless `--no-pr`) the upstream PR title or body. The scan covers the entire repository even from a subdirectory with `diff.relative` enabled. Only added lines are read, so a term on another line of upstream's own file does not block a change next to it; a change anywhere in a long one-line file (minified code, most binaries) re-adds that whole line. Every file is diffed as text, including binary files and text files marked `-diff` or `binary` in `.gitattributes`, so a term stored as plain ASCII or UTF-8 bytes in a binary file is refused too. UTF-16 and compressed content is not decoded for these terms. A `denyTerms` value that is not a list of non-empty single-line strings makes the config invalid (`config`): every venfork command refuses to run, and `venfork doctor` names it in the `repo` row, until you fix it. The error names the matched term, so it shows up in your terminal and in CI logs on the mirror. There is no command that edits the list yet; edit the file on the `venfork-config` branch. `venfork stage issue` does not read it, and an older venfork ignores the field, so upgrade every clone and the scheduled workflow before you rely on it.
+
 To use venfork on a project whose upstream legitimately mentions venfork, set `VENFORK_ALLOW_SELF_REFERENCE=1`. It relaxes only the bare word `venfork`. URL, owner and repo name terms still apply, and text shaped like a marker (`venfork:internal` in any wrapper, such as `[venfork:internal]`) is still refused in PR titles and bodies. An HTML comment that only mentions the tool (`<!-- uses venfork -->`) passes, but one that reads like a broken marker (`<!-- venfork:intenral -->`, `<!-- venfork internal -->`) is refused.
 
 **What the PR step adds:**
 1. Looks up the most recent PR on the private mirror with `--head <branch>` (open first, then most recent of any state). When the approval gate passed, it uses the approved mirror PR instead.
 2. Renders the upstream PR body by stripping any `<!-- venfork:internal -->...<!-- /venfork:internal -->` blocks. With no internal PR, the body lists the published commit subjects with standalone `#N` references and `(#N)` groups removed (`#N` inside a word or URL is kept). The title and body are then refused if they still contain `venfork`, origin's URL or origin's `owner/name`. The private mirror stays invisible to upstream: no back-link to the internal review and no hint that one exists. The internal PR URL is recorded only in your mirror config (step 5).
 3. Shows you the translated body **before** confirming, so you can catch redaction mistakes before they go public.
-4. Runs `gh pr create --repo <upstream> --base <default> --head <fork-owner>:<branch>` and surfaces the resulting PR URL.
+4. Runs `gh pr create --repo <upstream> --base <default or --base> --head <fork-owner>:<branch>` and surfaces the resulting PR URL.
 5. Records the linkage in `venfork-config.shippedBranches[<branch>]` for later tracking.
 
 **Redacting internal-only context**
@@ -268,7 +300,7 @@ Setting `off` prints a warning. Lowering the level (`two-person` to `reviewed` t
 
 When the level is not `off`, `venfork stage <branch>` (with or without `--no-pr`) checks the mirror PR after it fetches and before it rebuilds anything:
 
-1. It finds the open PR on the mirror whose head is `<branch>` on the mirror and whose base is the mirror default branch. A PR into another branch is refused (`wrong-base`), because the review would not cover the commits of that base branch. When more than one open PR for `<branch>` targets the default branch, stage refuses (`ambiguous-pr`); pass `--internal-pr <n>` to name the PR. `--internal-pr <n>` must name an open PR from `<branch>` on the mirror into the default branch. No open PR is refused.
+1. It finds the open PR on the mirror whose head is `<branch>` on the mirror and whose base is the mirror default branch. A PR into another branch is refused (`wrong-base`), because the review would not cover the commits of that base branch. When more than one open PR for `<branch>` targets the default branch, stage refuses (`ambiguous-pr`); pass `--internal-pr <n>` to name the PR. `--internal-pr <n>` must name an open PR from `<branch>` on the mirror into the default branch. No open PR is refused. With `stage --base <b>`, the PR must target the mirror branch `<b>` instead of the default branch (a PR into the default branch is then `wrong-base`), and stage explicitly fetches `origin/<b>` before checking that every common ancestor of that base and the approved head is already on upstream, including histories with multiple merge bases. Mirror-only descendants absent from the feature are not counted. If that ref cannot be established, stage fails closed. Keep `origin/<b>` equal to `upstream/<b>`. The mirror needs the branch `<b>`, for example through `trackedBranches`.
 2. For each reviewer it takes the latest review that approved, requested changes or was dismissed. Comment-only reviews change nothing. A dismissed latest review neither approves nor blocks. A reviewer whose latest review requests changes blocks the stage.
 3. At least one approval must count: it is on the PR head commit, from a GitHub user account (not a bot, organization or deleted account) that is not the PR author and has write or admin access to the mirror. With `two-person`, the approver must also differ from the gh login running stage. Only `two-person` reads that login, so `reviewed` works with a token that cannot read `/user`, such as a GitHub App token.
 4. Every check run and commit status on the PR head must be complete and passing (`success`, `neutral` or `skipped`). A pending check blocks; run stage again when it finishes.
@@ -382,6 +414,8 @@ Check that a mirror is healthy, then list the links recorded in `venfork-config`
 | `divergence` | No user commits on `origin`/`public` that would make sync abort |
 | `preserve` | Every keep entry is a valid single-file path and exists on `origin/<default>`. The text report labels this row `keep`; the JSON id stays `preserve` |
 | `workflow` | The sync workflow on `origin/<default>` matches what this venfork version would write |
+| `tracked` | Only when `trackedBranches` is set: every tracked branch exists on upstream, and `origin/<branch>` equals `upstream/<branch>` or is behind it (the next sync creates or fast-forwards it). A diverged branch fails, with the `--accept-rewrite` command when `allowRewrite` is `explicit` |
+| `tracked-kept` | Only when `trackedBranches` is set: no `origin/<branch>` holds a kept file, `.github/workflows/venfork-sync.yml` or anything under `.venfork/` with content `upstream/<branch>` does not have. When origin is simply an ancestor of upstream, older upstream-owned content is treated as ordinary lag. Kept files belong on the default branch only, and `venfork stage --base` refuses to publish them |
 | `transport` | git can reach origin: `git ls-remote --exit-code <origin push URL> HEAD` runs the way venfork's other git calls run (your ssh command with BatchMode for SSH, the gh credential helper for HTTPS), capped at 30 seconds. SSH failure fix: `gh config set git_protocol https` and re-clone, or load an SSH key (or accept GitHub's host key when ssh does not know it). HTTPS failure fix: `gh auth login`. With a schedule set, an HTTPS origin also needs a gh token with the `workflow` scope, because the managed commit changes a workflow file; the fix is `gh auth refresh -s workflow`. Skipped when origin is not on GitHub |
 | `token` | When a schedule is enabled, in both modes: `VENFORK_PUSH_TOKEN` is set on the mirror, or with `schedule set --app` both `VENFORK_APP_CLIENT_ID` and `VENFORK_APP_PRIVATE_KEY` are set, and the public fork has the mirror's owner. In app mode a leftover `VENFORK_PUSH_TOKEN` is a note, not a failure: the check passes and its fix is the `gh secret delete` command. Doctor can only see that the secrets exist: the token itself needs the `workflow` scope (classic) or Workflows: write (fine-grained), and doctor cannot check the App key or installation |
 | `last-run` | The last `venfork-sync.yml` run, from any trigger, did not fail |
@@ -410,7 +444,7 @@ venfork workflows clear
 3. `block` adds workflow filenames to the blocklist; `unblock` removes them. Blocking one more file never unblocks the files already on the list
 4. `clear` removes both lists
 5. Precedence: if `enabledWorkflows` is non-empty, it is used and `disabledWorkflows` is ignored
-6. Changes apply to the mirror default branch on next `venfork sync` (a non-empty allow or block list is enough to put the managed commit on the mirror, with or without a schedule or a preserve list)
+6. Changes apply to the mirror default branch on next `venfork sync` (a non-empty allow or block list is enough to put the managed commit on the mirror, with or without a schedule or a preserve list). The command itself writes only `venfork-config`; see [Which commands rewrite shared branches](headless.md#which-commands-rewrite-shared-branches)
 
 ### `venfork keep <list|add|remove|clear> [path ...] [--yes] [--no-input] [--json]`
 
@@ -430,7 +464,7 @@ venfork keep clear
 - Commit the file to `origin/<default>` before you sync. On every sync, venfork copies each preserved file from the previous origin tip into the new managed commit. If a preserved file is missing, sync aborts until you commit it or remove the entry.
 - Upstream wins. When upstream adds a file at a preserved path, sync uses upstream's version. If upstream later deletes that path, sync keeps the last version the mirror carried (upstream's last version), because it is still on the previous mirror tip. Run `venfork keep remove <path>` to let it go. A preserved file also cannot be restored when upstream adds a file at one of its parent directories; sync aborts and names the path.
 - Commits that only touch preserved files do not count as divergence on origin, so sync folds them into the managed commit.
-- `venfork keep remove` and `clear` re-stamp `origin/<default>` in the same step when the managed commit still carries a dropped file.
+- `venfork keep add` writes only `venfork-config`; the next `venfork sync` adds the file to the managed commit. `venfork keep remove` and `clear` re-stamp `origin/<default>` in the same step when the managed commit still carries a dropped file, after a divergence check against the shorter list. See [Which commands rewrite shared branches](headless.md#which-commands-rewrite-shared-branches).
 - The sync workflow and anything under `.venfork/` cannot be preserved: venfork owns them. A commit with the managed trailer that also changes any other file counts as your work, so sync stops on it as divergence.
 - If the `venfork-config` branch is missing while `origin/<default>` still carries a managed commit, sync refuses. Restore the branch. `venfork setup` never overwrites an existing config branch.
 
