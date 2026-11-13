@@ -610,8 +610,6 @@ async function unreviewedBaseCommits(
     );
   }
   const ancestors = shared.stdout.trim().split('\n');
-  // Git counts the union once, excluding everything already on upstream.
-  // Descendants unique to the mirror base are not part of the review gap.
   const count = await $({
     cwd,
   })`git rev-list --count --no-merges ${ancestors} --not ${upstreamTip}`;

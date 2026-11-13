@@ -54,11 +54,10 @@ git remote set-url --push upstream DISABLE
 - Exit code plus `jq '[.result.checks[] | select(.ok == false) | .id]'` on the JSON.
 - `jq '.result.checks | length'` is 11 in every state, and stdout is one line.
 - After a doctor run, `vf_pushes "$VF_ORIGIN"` and `vf_tip "$VF_ORIGIN" venfork-config` are unchanged.
+- With `trackedBranches: ["HEAD"]`, the `tracked` row reports the config as invalid and `tracked-kept` is skipped; origin/main, upstream/main and their symbolic HEAD aliases stay intact.
 
 ## What usually lies
 
 - `tests/unit/doctor.test.ts` string-mocks git and gh for `transport`, `token`, `last-run`, `cron-age`. On the fixture `transport` is `skipped` ("origin is not a GitHub repository"); `tests/integration/doctor.test.ts` drives the ssh path with a fake ssh behind a quoted `GIT_SSH_COMMAND` and a GitHub push URL.
 - A green doctor on the fixture says nothing about GitHub secrets or Actions runs.
 - The text table marks `skipped` with `-`, which is easy to read as a pass. Use `--json`.
-
-With `trackedBranches: ["HEAD"]`, doctor reports an invalid `tracked` row and skips `tracked-kept`; it must not delete origin/main, upstream/main or their symbolic HEAD aliases while refreshing tracked branches.
