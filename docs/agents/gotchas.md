@@ -49,3 +49,9 @@ Set the upstream remote to `acme/widget`, a symlink to `upstream.git` inside the
 
 ## Safety scans must override diff.relative
 `git show` inherits `diff.relative`: from a subdirectory it can omit sibling changes, even when scanning a commit by SHA. Safety scans of added lines must pass `--no-relative`; reading raw tree changes alone does not make a separate patch scan repository-wide. The stage integration tests cover both a denied sibling file and unchanged upstream lines.
+
+## Approval ancestry can have multiple merge bases
+Clean criss-cross merges can have more than one best common ancestor. Approval coverage must use all of them and count their union outside upstream, not one arbitrary `git merge-base` result or all commits on the mirror base.
+
+## A general fetch is not an authoritative branch read
+`git fetch <remote>` follows configured refspecs and may retain deleted refs. Before using a selected branch as a publication base, explicitly refresh its full tracking ref and detect remote deletion through `netFetchBranch`.

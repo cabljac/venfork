@@ -314,6 +314,67 @@ describe('stage --base', () => {
     expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(false);
   });
 
+  describe.each(['standard', 'no-public'] as const)(
+    'authoritative base (%s)',
+    (mode) => {
+      beforeEach(async () => {
+        await useMode(mode);
+      });
+
+      test.each(['stale', 'missing'])(
+        'refreshes a %s base excluded by the fetch refspec',
+        async (state) => {
+          await cutFromUpstreamGa();
+          await fx.git(
+            fx.work,
+            'config',
+            'remote.upstream.fetch',
+            '+refs/heads/main:refs/remotes/upstream/main'
+          );
+          const tip = await fx.commitOnUpstreamBranch('ga', {
+            'src/ga.txt': 'ga updated\n',
+          });
+          if (state === 'missing')
+            await fx.git(
+              fx.work,
+              'update-ref',
+              '-d',
+              'refs/remotes/upstream/ga'
+            );
+
+          await stageCommand('feature', { base: 'ga' });
+
+          expect(await fx.sha(pushTarget(), 'feature~1')).toBe(tip);
+          expect(await fx.fileAt(pushTarget(), 'feature', 'src/ga.txt')).toBe(
+            'ga updated\n'
+          );
+          expect(await fx.sha(fx.upstream, 'ga')).toBe(tip);
+        }
+      );
+
+      test('refuses a deleted upstream base before publishing or previewing', async () => {
+        await cutFromUpstreamGa();
+        await fx.git(fx.upstream, 'update-ref', '-d', 'refs/heads/ga');
+
+        for (const dryRun of [false, true]) {
+          await expect(
+            stageCommand('feature', { base: 'ga', dryRun })
+          ).rejects.toThrow(new CommandExitError(1));
+          expect(prompts.log.error).toHaveBeenCalledWith(
+            expect.stringContaining('upstream/ga not found after fetch'),
+            ON_STDERR
+          );
+          expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(
+            false
+          );
+        }
+        expect(await refExists(fx.work, 'refs/remotes/upstream/ga')).toBe(
+          false
+        );
+      });
+    }
+  );
+
   test('the --base branch itself is refused', async () => {
     await cutFromUpstreamGa();
     await fx.git(fx.work, 'branch', '--quiet', 'ga', 'feature');

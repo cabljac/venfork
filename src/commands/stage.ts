@@ -469,6 +469,7 @@ async function planStaging(
   }
   const upstreamDefaultBranch = await getDefaultBranch('upstream', cwd);
   const upstreamBase = consent.base ?? upstreamDefaultBranch;
+  await netFetchBranch('upstream', upstreamBase, cwd);
   const upstreamTip = await resolveCommit(
     `refs/remotes/upstream/${upstreamBase}`,
     cwd

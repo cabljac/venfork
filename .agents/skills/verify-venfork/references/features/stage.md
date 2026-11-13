@@ -85,3 +85,7 @@ venfork stage feat --no-pr --force --yes </dev/null 2>&1 | grep -o "nothing to b
 ## Approval ancestry regression
 
 Build clean criss-cross merges with two best common ancestors, set upstream/ga to just one and origin/ga to the other merge, and approve a feature on the first merge. `stage --base ga` must refuse with `wrong-base`, report it in a dry run and leave the public feature absent. When upstream contains both common ancestors, unrelated commits present only on origin/ga must not block publication. The `criss-cross` tests in `tests/integration/approval-gate.test.ts` drive both cases; failed merge-base and rev-list reads also refuse before a push.
+
+## Selected upstream base freshness
+
+After cutting a feature from ga, restrict `remote.upstream.fetch` to main and advance ga upstream. `stage feature --base ga --no-pr --yes` must rebuild on the new ga tip, even if `refs/remotes/upstream/ga` is missing locally. Delete ga upstream and repeat: both a real stage and `--dry-run` must refuse before publication and remove the stale tracking ref. Repeat in `--own-upstream` mode; read the actual published parent or the absence of the feature ref in the bare target.

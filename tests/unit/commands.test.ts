@@ -118,6 +118,18 @@ function getMockExecaResponse(
     });
   }
 
+  // A targeted fetch must see the selected branch in the advertisement.
+  const advertisedBranch = command.match(
+    /git ls-remote --heads (upstream|origin) (refs\/heads\/\S+)$/
+  );
+  if (advertisedBranch) {
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: `${advertisedBranch[1]}0tip\t${advertisedBranch[2]}`,
+      stderr: '',
+    });
+  }
+
   // Git auth commands
   if (command.includes('gh auth status')) {
     return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
