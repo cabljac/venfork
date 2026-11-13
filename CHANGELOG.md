@@ -1,5 +1,32 @@
 # venfork
 
+## [0.16.0](https://github.com/cabljac/venfork/compare/v0.15.1...v0.16.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **stage:** with an approval level set, `stage --base <b>` no longer accepts the branch's mirror PR into the mirror default branch. Push `<b>` to the mirror (for example by listing it in `trackedBranches` and running `venfork sync`), retarget the mirror PR to `<b>` and get it approved there.
+* **stage:** `stage --base <b>` now rebuilds the branch on `upstream/<b>` instead of upstream's default branch, and fails before anything is pushed when upstream has no branch `<b>` (it used to fail later, at `gh pr create`).
+
+### Features
+
+* **doctor:** warn when a tracked branch carries kept files ([5f81674](https://github.com/cabljac/venfork/commit/5f81674b00bd4e912577b83b8f333fd7512d6c11))
+* **stage:** let the approval gate accept a mirror PR into --base ([73ebbcc](https://github.com/cabljac/venfork/commit/73ebbcc357e14020774e78708871a887ea855df0))
+* **stage:** rebuild onto upstream/&lt;base&gt; when --base is given ([5482565](https://github.com/cabljac/venfork/commit/5482565ff4040a396c72ad47af575e5330043247))
+* **stage:** refuse the mirror's own denyTerms ([06d899c](https://github.com/cabljac/venfork/commit/06d899c63d700f51efad44f0e17f99e5dba4d486))
+* **sync:** mirror trackedBranches to origin, with --accept-rewrite for upstream rewrites ([06b1d5d](https://github.com/cabljac/venfork/commit/06b1d5d1896708018da24741d5f1e30a24d1cacb))
+
+
+### Bug Fixes
+
+* close review gaps in non-default branch support ([9fbc0b0](https://github.com/cabljac/venfork/commit/9fbc0b04182796f3c5710deb810a3b9e086a4891))
+* **stage:** check approval across all common ancestors ([dc6c2f0](https://github.com/cabljac/venfork/commit/dc6c2f032698f9519815815fd44846bddb87a6c6))
+* **stage:** close non-default branch review gaps ([0cb654a](https://github.com/cabljac/venfork/commit/0cb654acc3c2e714f262607465a7d2afba3e87ee))
+* **stage:** refresh the selected upstream base before publication ([80bdb8b](https://github.com/cabljac/venfork/commit/80bdb8b9103605861b5da093fd9587e41d38df77))
+* **stage:** scan custom deny terms across the repository ([9905cb4](https://github.com/cabljac/venfork/commit/9905cb44b53e499f773b0674d2eb3fabb7e167b8))
+* **sync:** refresh tracked branch state before checks ([bd4da37](https://github.com/cabljac/venfork/commit/bd4da3786261821d829f7abf140b77cc22ee98cf))
+* **sync:** reject reserved HEAD and prune refs without dereferencing ([51d3279](https://github.com/cabljac/venfork/commit/51d327942cb0d3532e871f4c1a9ddab29e02be09))
+
 ## [0.15.1](https://github.com/cabljac/venfork/compare/v0.15.0...v0.15.1) (2026-10-22)
 
 
