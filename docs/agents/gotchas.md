@@ -55,3 +55,6 @@ Clean criss-cross merges can have more than one best common ancestor. Approval c
 
 ## A general fetch is not an authoritative branch read
 `git fetch <remote>` follows configured refspecs and may retain deleted refs. Before using a selected branch as a publication base, explicitly refresh its full tracking ref and detect remote deletion through `netFetchBranch`.
+
+## Tracking refs can be symbolic
+`git update-ref -d` dereferences symbolic refs. Prune with `--no-deref` so deleting one tracking ref cannot delete its target. `HEAD` is not a literal branch name: reject it in config and branch-valued CLI options before refreshing remote refs.

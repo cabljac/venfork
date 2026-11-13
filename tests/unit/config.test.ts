@@ -834,6 +834,17 @@ describe('trackedBranches', () => {
     ]);
   });
 
+  test('HEAD is reserved, while head and nested HEAD names remain literal branches', () => {
+    for (const entry of ['HEAD', { name: 'HEAD', allowRewrite: 'explicit' }]) {
+      expect(() => trackedBranchesOf({ trackedBranches: [entry] })).toThrow(
+        'cannot name HEAD'
+      );
+    }
+    expect(
+      trackedBranchesOf({ trackedBranches: ['head', 'release/HEAD'] })
+    ).toEqual([{ name: 'head' }, { name: 'release/HEAD' }]);
+  });
+
   test('refuses bad names, venfork-config, duplicates and unknown rewrite modes', () => {
     for (const trackedBranches of [
       'ga',

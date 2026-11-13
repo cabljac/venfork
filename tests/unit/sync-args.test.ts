@@ -67,6 +67,18 @@ describe('parseSyncCliArgs --accept-rewrite', () => {
     ]);
   });
 
+  test('rewrite acceptance rejects reserved HEAD and revision expressions', () => {
+    for (const branch of ['HEAD', 'ga~1', 'ga^', 'a..b']) {
+      expect(() =>
+        parseSyncCliArgs(['--accept-rewrite', `${branch}=${OLD}..${NEW}`])
+      ).toThrow('literal branch name');
+    }
+    expect(
+      parseSyncCliArgs(['--accept-rewrite', `release/HEAD=${OLD}..${NEW}`])
+        .acceptRewrites[0].branch
+    ).toBe('release/HEAD');
+  });
+
   test('refuses abbreviated ids, a missing range and a missing branch', () => {
     for (const value of [
       `ga=${OLD.slice(0, 12)}..${NEW}`,

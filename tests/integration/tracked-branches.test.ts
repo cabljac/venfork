@@ -20,6 +20,7 @@ import {
   type MirrorFixture,
 } from '../harness/mirror-fixture.js';
 import { seedPreserve } from '../harness/preserve.js';
+import { netFetchBranch } from '../../src/shared/net.js';
 
 let fx: MirrorFixture;
 let active: MirrorFixture | undefined;
@@ -379,4 +380,53 @@ describe('doctor tracked-kept', () => {
 
     expect(await keptRow()).toMatchObject({ ok: true });
   });
+});
+
+describe('tracking refs and symbolic HEAD', () => {
+  test('HEAD config refuses sync and doctor without deleting default tracking refs', async () => {
+    await fx.git(
+      fx.work,
+      'symbolic-ref',
+      'refs/remotes/upstream/HEAD',
+      'refs/remotes/upstream/main'
+    );
+    await track(['HEAD']);
+    const tip = await fx.sha(fx.upstream, 'main');
+
+    await expect(sync()).rejects.toMatchObject({ code: 'config' });
+    const checks = await runDoctorChecks({ cwd: fx.work });
+    expect(checks.find((check) => check.id === 'tracked')).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining('cannot name HEAD'),
+    });
+    for (const remote of ['origin', 'upstream']) {
+      expect(await fx.sha(fx.work, `refs/remotes/${remote}/main`)).toBe(tip);
+      expect(
+        await fx.git(fx.work, 'symbolic-ref', `refs/remotes/${remote}/HEAD`)
+      ).toBe(`refs/remotes/${remote}/main`);
+    }
+    expect(await fx.sha(fx.origin, 'main')).toBe(tip);
+    expect(await fx.sha(fx.upstream, 'main')).toBe(tip);
+  });
+
+  test.each(['origin', 'upstream'])(
+    'pruning a symbolic %s tracking ref leaves its target intact',
+    async (remote) => {
+      const destination = `refs/remotes/${remote}/gone`;
+      const target = `refs/remotes/${remote}/main`;
+      const tip = await fx.sha(fx.work, target);
+      await fx.git(fx.work, 'symbolic-ref', destination, target);
+
+      await netFetchBranch(remote, 'gone', fx.work);
+
+      expect(
+        await fx
+          .git(fx.work, 'symbolic-ref', '-q', destination)
+          .catch(() => null)
+      ).toBeNull();
+      expect(await fx.sha(fx.work, target)).toBe(tip);
+      expect(await fx.sha(fx.origin, 'main')).toBe(tip);
+      expect(await fx.sha(fx.upstream, 'main')).toBe(tip);
+    }
+  );
 });

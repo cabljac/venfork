@@ -180,7 +180,10 @@ export async function netFetchBranch(
     .split('\n')
     .some((line) => line.endsWith(`\t${source}`));
   if (!hasBranch) {
-    await $({ ...(cwd ? { cwd } : {}) })`git update-ref -d ${destination}`;
+    // A tracking ref may be symbolic; prune only the named ref, never its target.
+    await $({
+      ...(cwd ? { cwd } : {}),
+    })`git update-ref --no-deref -d ${destination}`;
     return;
   }
   const refspec = `+${source}:${destination}`;

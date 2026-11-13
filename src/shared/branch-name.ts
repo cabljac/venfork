@@ -3,6 +3,7 @@ export function isLiteralBranchName(name: string): boolean {
   if (
     name.length === 0 ||
     name === '@' ||
+    name === 'HEAD' ||
     name.startsWith('-') ||
     name.startsWith('/') ||
     name.endsWith('/') ||

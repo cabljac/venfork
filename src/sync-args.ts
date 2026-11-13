@@ -1,4 +1,5 @@
 import { UsageError } from './errors.js';
+import { isLiteralBranchName } from './shared/branch-name.js';
 import { consumeValue, isPromptFlag, scanArgs } from './shared/args.js';
 import { JSON_FLAG } from './shared/json-output.js';
 import type { AcceptedRewrite } from './shared/tracked-branches.js';
@@ -33,6 +34,9 @@ export function parseAcceptRewrite(value: string): AcceptedRewrite {
     throw new UsageError(
       `${ACCEPT_REWRITE} takes <branch>=<old>..<new> with full lowercase commit ids ('${value}'). Usage: ${SYNC_USAGE}`
     );
+  }
+  if (!isLiteralBranchName(match[1])) {
+    throw new UsageError(`${ACCEPT_REWRITE} requires a literal branch name`);
   }
   return { branch: match[1], from: match[2], to: match[3] };
 }

@@ -132,6 +132,28 @@ print('EXIT=%s' % code)
 `;
 
 describe('built CLI entry point', () => {
+  test('reserved HEAD fails before auth and repository checks', async () => {
+    for (const args of [
+      ['stage', 'feature', '--base', 'HEAD', '--json'],
+      [
+        'sync',
+        '--accept-rewrite',
+        `HEAD=${'a'.repeat(40)}..${'b'.repeat(40)}`,
+        '--json',
+      ],
+    ]) {
+      const result = await runCli(...args);
+      expect(result.exitCode).toBe(2);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: 'usage',
+          message: expect.stringContaining('literal branch name'),
+        },
+      });
+    }
+  });
+
   test('--version prints the package version', async () => {
     const pkg = JSON.parse(
       await readFile(path.join(repoRoot, 'package.json'), 'utf8')

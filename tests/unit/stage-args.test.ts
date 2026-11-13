@@ -87,6 +87,15 @@ describe('parseStageCliArgs', () => {
     }
   });
 
+  test('--base rejects reserved HEAD but accepts literal head and release/HEAD', () => {
+    expect(() => parseStageCliArgs(['feat', '--base', 'HEAD'])).toThrow(
+      '--base requires a literal branch name'
+    );
+    for (const base of ['head', 'release/HEAD']) {
+      expect(parseStageCliArgs(['feat', '--base', base]).base).toBe(base);
+    }
+  });
+
   test('flag order does not matter; positional can come last', () => {
     const parsed = parseStageCliArgs(['--pr', '--draft', 'feat/auth']);
     expect(parsed.branch).toBe('feat/auth');

@@ -268,8 +268,8 @@ export function trackedBranchesOf(
         `entry ${JSON.stringify(entry)} has no valid branch name (ASCII letters, digits, ".", "_", "-" and "/"; no "..", no leading "-", "." or "/", no trailing "." or "/", no ".lock" component)`
       );
     }
-    if (name === CONFIG_BRANCH) {
-      throw invalid(`cannot name ${CONFIG_BRANCH}`);
+    if (name === CONFIG_BRANCH || name === 'HEAD') {
+      throw invalid(`cannot name ${name}`);
     }
     if (seen.has(name)) throw invalid(`names '${name}' twice`);
     seen.add(name);

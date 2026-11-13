@@ -60,3 +60,7 @@ venfork sync --json </dev/null 2>/dev/null | jq -r .error.code; echo "${PIPESTAT
 - The outro "Sync complete!" also prints after a no-op. Read the spinner lines (`step:` / `done:` on stderr).
 - `venfork sync >/dev/null` still shows all progress: sync writes nothing to stdout, and git's output goes to stderr too.
 - Unit tests answer `git rev-parse` and `git push` with strings. They cannot show a lease or a SHA.
+
+## Reserved names and tracking-ref pruning
+
+`trackedBranches: ["HEAD"]` is a config error before targeted refresh; sync must leave origin/main, upstream/main and their symbolic HEAD aliases intact. `--accept-rewrite HEAD=<old>..<new>` is a usage error before I/O. Pruning a deleted remote branch removes only its named local tracking ref, even if it is symbolic; its target remains untouched. The `tracking refs and symbolic HEAD` integration tests prove this with both remotes.
