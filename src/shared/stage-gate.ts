@@ -776,7 +776,8 @@ export function parseAddedLines(
  * The lines commit `commit` adds, by file, against its first parent. With
  * `--text`, a file git would show as binary (real binary content, or text
  * marked `-diff` or `binary` in `.gitattributes`) is diffed as text, so
- * its bytes are scanned too.
+ * its bytes are scanned too. The scan is repository-wide even when called
+ * from a subdirectory with diff.relative enabled.
  */
 async function addedLines(
   commit: string,
@@ -784,7 +785,7 @@ async function addedLines(
 ): Promise<Array<{ file: string; line: string }>> {
   const patch = await $({
     cwd,
-  })`git -c core.quotePath=false show --format= --patch --text --unified=0 --no-color --no-ext-diff --no-textconv --no-renames --first-parent ${commit}`;
+  })`git -c core.quotePath=false show --format= --patch --text --no-relative --unified=0 --no-color --no-ext-diff --no-textconv --no-renames --first-parent ${commit}`;
   return parseAddedLines(patch.stdout);
 }
 

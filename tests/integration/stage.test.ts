@@ -687,6 +687,51 @@ describe('stage refuses the mirror deny list (denyTerms)', () => {
     await expectRefused('feature', 'file src/feature.txt', 'Globex');
   });
 
+  test('custom deny terms outside cwd are scanned with diff.relative enabled', async () => {
+    await denyList(['Globex']);
+    await commitFeature({ 'customer.txt': 'Globex\n' });
+    await fx.git(fx.work, 'config', 'diff.relative', 'true');
+    process.chdir(path.join(fx.work, 'src'));
+
+    await expectRefused('feature', 'file customer.txt', 'Globex');
+  });
+
+  test('repository-wide custom scanning still ignores unchanged upstream lines', async () => {
+    await fx.commitOnUpstream({ 'notes.txt': 'Globex\nkeep\n' });
+    await denyList(['Globex']);
+    await fx.git(fx.work, 'fetch', '--quiet', 'upstream');
+    await cutFeatureBranch('refs/remotes/upstream/main');
+    await commitMore(
+      { 'notes.txt': 'Globex\nkeep\nmore\n' },
+      'feat: more notes'
+    );
+    await fx.git(fx.work, 'config', 'diff.relative', 'true');
+    process.chdir(path.join(fx.work, 'src'));
+
+    await stageCommand('feature');
+
+    expect(await fx.fileAt(pushTarget(), 'feature', 'notes.txt')).toBe(
+      'Globex\nkeep\nmore\n'
+    );
+  });
+
+  test('built-in mirror references outside cwd remain blocked with diff.relative', async () => {
+    await githubMirror(fx);
+    await commitFeature({
+      'customer.txt': 'https://github.com/acme/project-private/issues/1\n',
+    });
+    await fx.git(fx.work, 'config', 'diff.relative', 'true');
+    process.chdir(path.join(fx.work, 'src'));
+
+    await expect(stageCommand('feature')).rejects.toMatchObject({
+      cause: {
+        code: 'mirror-reference',
+        details: { matched: 'acme/project-private' },
+      },
+    });
+    expect(await refExists(pushTarget(), 'refs/heads/feature')).toBe(false);
+  });
+
   test('an added line that looks like a diff header is still checked', async () => {
     await denyList(['Globex']);
     await commitFeature({

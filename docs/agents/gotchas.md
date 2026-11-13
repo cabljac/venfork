@@ -46,3 +46,6 @@ Set the upstream remote to `acme/widget`, a symlink to `upstream.git` inside the
 
 ## The approval memory outlives a fixture drive
 `venfork stage approval on` then `off` without a TTY leaves `<git common dir>/venfork/approval.json` at `two-person`, so every later non-TTY stage in that clone exits 1 with `gate-weakened`. Delete the file, or use a fresh fixture, before other stage drives.
+
+## Safety scans must override diff.relative
+`git show` inherits `diff.relative`: from a subdirectory it can omit sibling changes, even when scanning a commit by SHA. Safety scans of added lines must pass `--no-relative`; reading raw tree changes alone does not make a separate patch scan repository-wide. The stage integration tests cover both a denied sibling file and unchanged upstream lines.
