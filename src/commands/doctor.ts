@@ -38,6 +38,7 @@ import {
   acceptRewriteFlag,
   mirrorOnlyFilesOn,
   readTrackedBranches,
+  refreshTrackedBranchRefs,
   type TrackedBranchPlan,
 } from '../shared/tracked-branches.js';
 import * as p from '../shared/ui.js';
@@ -546,6 +547,20 @@ async function collectChecks(
       })`git fetch --quiet --multiple ${fetchRemotes}`
     : null;
   const fetchFailed = fetched !== null && fetched.exitCode !== 0;
+  let trackedFetchError = '';
+  if (haveBothRemotes && !fetchFailed && config.trackedBranches !== undefined) {
+    try {
+      const tracked = trackedBranchesOf(config);
+      await refreshTrackedBranchRefs('upstream', tracked, cwd);
+      await refreshTrackedBranchRefs('origin', tracked, cwd);
+    } catch (error) {
+      if (!(error instanceof ConfigError)) {
+        trackedFetchError = oneLine(
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
+  }
   if (fetched && fetchFailed) {
     remoteProblems.push(
       `git fetch failed: ${oneLine(netFailureReason(fetched))}`
@@ -870,6 +885,14 @@ async function collectChecks(
       }
     } else if (fetchFailed) {
       for (const id of trackedIds) skip(id, 'needs a successful git fetch');
+    } else if (trackedFetchError) {
+      checks.push({
+        id: 'tracked',
+        ok: false,
+        detail: `tracked branch fetch failed: ${trackedFetchError}`,
+        fix: 'Check the origin and upstream URLs and your GitHub credentials, then retry `venfork doctor`.',
+      });
+      skip('tracked-kept', 'needs a successful tracked branch fetch');
     } else if (defaultBranchError) {
       for (const id of trackedIds) {
         checks.push({ id, ok: false, detail: defaultBranchError });

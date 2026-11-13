@@ -2,6 +2,18 @@ import { $ } from 'execa';
 import type { TrackedBranch } from '../config.js';
 import { ConfigError, PreconditionError } from '../errors.js';
 import { pushBranchWithLease, resolveCommit } from './mirror-commit.js';
+import { netFetchBranch } from './net.js';
+
+/** Refresh each tracked branch ref from the named remote, including deletions. */
+export async function refreshTrackedBranchRefs(
+  remote: 'origin' | 'upstream',
+  tracked: readonly TrackedBranch[],
+  cwd?: string
+): Promise<void> {
+  for (const branch of tracked) {
+    await netFetchBranch(remote, branch.name, cwd);
+  }
+}
 
 /** One `--accept-rewrite <branch>=<old>..<new>`: the rewrite sync may push. */
 export interface AcceptedRewrite {
@@ -57,7 +69,7 @@ export interface TrackedBranchResult {
 }
 
 /**
- * Reads where each tracked branch stands, from refs already fetched.
+ * Reads where each tracked branch stands, from refs already refreshed.
  *
  * @throws ConfigError when a tracked branch is the default branch.
  */
@@ -129,6 +141,7 @@ export async function mirrorOnlyFilesOn(
   cwd?: string
 ): Promise<string[]> {
   if (!plan.originTip) return [];
+  if (plan.state === 'behind') return [];
   const paths = [...new Set([...preserve, workflowPath, '.venfork'])];
   const onOrigin = await entriesAt(plan.originTip, paths, cwd);
   const onUpstream = plan.upstreamTip

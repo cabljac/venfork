@@ -35,6 +35,7 @@ import {
   leftAsIsWarning,
   pushTrackedBranches,
   readTrackedBranches,
+  refreshTrackedBranchRefs,
   type TrackedBranchResult,
 } from '../shared/tracked-branches.js';
 import * as p from '../shared/ui.js';
@@ -117,6 +118,8 @@ export async function syncCommand(options?: {
     const config = await readVenforkConfigFromRepo(repoDir);
     assertNoInvalidPreserve(config);
     const tracked = trackedBranchesOf(config);
+    await refreshTrackedBranchRefs('upstream', tracked, options?.cwd);
+    await refreshTrackedBranchRefs('origin', tracked, options?.cwd);
     const noPublic = config?.mode === 'no-public';
     if (!noPublic) {
       await netFetch('public', options?.cwd);

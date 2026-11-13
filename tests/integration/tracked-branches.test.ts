@@ -68,6 +68,58 @@ async function trackedRow(): Promise<DoctorCheck | undefined> {
 }
 
 describe('sync with trackedBranches', () => {
+  test('a deleted upstream branch is not recreated from a stale tracking ref', async () => {
+    await fx.commitOnUpstreamBranch('ga', { 'src/ga.txt': 'release\n' });
+    await fx.git(fx.work, 'fetch', '--quiet', 'upstream');
+    await track(['ga']);
+    await fx.git(fx.upstream, 'update-ref', '-d', 'refs/heads/ga');
+
+    const result = await sync();
+
+    expect(await originGa()).toBeNull();
+    expect(result).toMatchObject({
+      trackedBranches: [{ name: 'ga', status: 'no-upstream' }],
+    });
+  });
+
+  test('a deleted origin branch is recreated from upstream', async () => {
+    const tip = await fx.commitOnUpstreamBranch('ga', {
+      'src/ga.txt': 'release\n',
+    });
+    await track(['ga']);
+    await sync();
+    await fx.git(fx.origin, 'update-ref', '-d', 'refs/heads/ga');
+
+    const result = await sync();
+
+    expect(await originGa()).toBe(tip);
+    expect(result).toMatchObject({
+      trackedBranches: [{ name: 'ga', status: 'created', tip }],
+    });
+    expect(await trackedRow()).toMatchObject({ id: 'tracked', ok: true });
+  });
+
+  test('upstream changes to a preserved file are not called mirror-only while origin lags', async () => {
+    await fx.commitOnUpstream({ 'NOTES.md': 'upstream v1\n' });
+    await updateVenforkConfig(fx.work, {
+      preserve: ['NOTES.md'],
+      trackedBranches: ['ga'],
+    });
+    await fx.commitOnUpstreamBranch('ga', { 'src/ga.txt': 'release\n' });
+    await sync();
+    await fx.commitOnUpstreamBranch('ga', { 'NOTES.md': 'upstream v2\n' });
+
+    const checks = await runDoctorChecks({ cwd: fx.work });
+
+    expect(checks.find((check) => check.id === 'tracked')).toMatchObject({
+      ok: true,
+      detail: 'ga behind upstream; the next sync fast-forwards it',
+    });
+    expect(checks.find((check) => check.id === 'tracked-kept')).toMatchObject({
+      ok: true,
+    });
+  });
+
   test('without trackedBranches, sync reports none and doctor has no tracked row', async () => {
     await fx.commitOnUpstreamBranch('ga', { 'src/ga.txt': 'ga\n' });
 

@@ -150,6 +150,57 @@ export async function netFetch(remote: string, cwd?: string): Promise<void> {
 }
 
 /**
+ * Refresh one remote branch into its fully-qualified tracking ref, pruning
+ * that ref when the remote branch was deleted. This is used where an
+ * authoritative branch state matters; the configured fetch refspec may be
+ * intentionally narrower or may retain deleted refs.
+ */
+export async function netFetchBranch(
+  remote: string,
+  branch: string,
+  cwd?: string
+): Promise<void> {
+  const destination = `refs/remotes/${remote}/${branch}`;
+  const source = `refs/heads/${branch}`;
+  const advertised = await netExec(cwd, {
+    bufferOutput: true,
+  })`git ls-remote --heads ${remote} ${source}`;
+  if (advertised.exitCode !== 0) {
+    const configured = await $({
+      ...(cwd ? { cwd } : {}),
+      reject: false,
+    })`git remote get-url ${remote}`;
+    if (configured.exitCode !== 0) throw new RemoteNotFoundError(remote);
+    throw new GitError(
+      `git ls-remote ${remote} ${branch} failed: ${netFailureReason(advertised)}`,
+      `git ls-remote ${remote} ${branch}`
+    );
+  }
+  const hasBranch = (advertised.stdout ?? '')
+    .split('\n')
+    .some((line) => line.endsWith(`\t${source}`));
+  if (!hasBranch) {
+    await $({ ...(cwd ? { cwd } : {}) })`git update-ref -d ${destination}`;
+    return;
+  }
+  const refspec = `+${source}:${destination}`;
+  const result = await netExec(cwd, {
+    bufferOutput: true,
+  })`git fetch --prune ${remote} ${refspec}`;
+  if (result.exitCode !== 0) {
+    const configured = await $({
+      ...(cwd ? { cwd } : {}),
+      reject: false,
+    })`git remote get-url ${remote}`;
+    if (configured.exitCode !== 0) throw new RemoteNotFoundError(remote);
+    throw new GitError(
+      `git fetch ${remote} ${branch} failed: ${netFailureReason(result)}`,
+      `git fetch ${remote} ${branch}`
+    );
+  }
+}
+
+/**
  * Run a long-running network operation (built with {@link netExec}) with a
  * start/stop message and a clear, fast failure when it times out.
  *
